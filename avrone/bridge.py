@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import math
+import contextlib
 import os
 import re
 import threading
@@ -199,28 +200,52 @@ class Bridge:
         rec["text"] = _clip(rec["text"])
         return rec
 
+    @contextlib.contextmanager
+    def _file_lock(self):
+        """Serialize append/compaction across processes, not just threads.
+
+        The sidecar inode remains stable when the JSONL file is atomically replaced.
+        This matters on multi-worker deployments where each process owns a Bridge.
+        """
+        if self.path is None:
+            yield
+            return
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        with lock_path.open("a+b") as lock_file:
+            try:
+                import fcntl  # POSIX: Linux and macOS
+            except ImportError:  # pragma: no cover - non-POSIX fallback
+                yield
+                return
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
     def _write(self, recs: list[dict[str, Any]]) -> None:
         if self.path is None or not recs:
             return
         try:
-            with self.path.open("a+b") as f:
-                f.seek(0, os.SEEK_END)
-                lead = b""
-                if f.tell() > 0:  # a torn last line (crash mid-write) must not swallow this post
-                    f.seek(-1, os.SEEK_END)
-                    if f.read(1) != b"\n":
-                        lead = b"\n"
-                f.seek(0, os.SEEK_END)
-                f.write(lead + "".join(json.dumps(r, default=str) + "\n" for r in recs).encode("utf-8"))
-            self._lines += len(recs)
-            if self._lines > 2 * self.limit:  # compact from the FILE, so other instances' posts survive
-                self._replay(self.path.read_text(encoding="utf-8", errors="replace"))
-                tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-                head = json.dumps({"tombstones": list(self._evicted)}) + "\n" if self._evicted else ""
-                with tmp.open("w", encoding="utf-8") as f:
-                    f.write(head + "".join(json.dumps(r, default=str) + "\n" for r in self._posts.values()))
-                os.replace(tmp, self.path)
-                self._lines = len(self._posts)
+            with self._file_lock():
+                with self.path.open("a+b") as f:
+                    f.seek(0, os.SEEK_END)
+                    lead = b""
+                    if f.tell() > 0:  # a torn last line (crash mid-write) must not swallow this post
+                        f.seek(-1, os.SEEK_END)
+                        if f.read(1) != b"\n":
+                            lead = b"\n"
+                    f.seek(0, os.SEEK_END)
+                    f.write(lead + "".join(json.dumps(r, default=str) + "\n" for r in recs).encode("utf-8"))
+                self._lines += len(recs)
+                if self._lines > 2 * self.limit:  # replay under process lock before atomic compaction
+                    self._replay(self.path.read_text(encoding="utf-8", errors="replace"))
+                    tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                    head = json.dumps({"tombstones": list(self._evicted)}) + "\n" if self._evicted else ""
+                    with tmp.open("w", encoding="utf-8") as f:
+                        f.write(head + "".join(json.dumps(r, default=str) + "\n" for r in self._posts.values()))
+                    os.replace(tmp, self.path)
+                    self._lines = len(self._posts)
         except OSError:
             pass  # the in-memory bridge still works; persistence is best effort
 

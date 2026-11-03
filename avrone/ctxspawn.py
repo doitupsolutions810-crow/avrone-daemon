@@ -272,4 +272,13 @@ async def spawn(ctx: "AgentContext", args: dict[str, Any]) -> str:
         run_id=ctx.run_id, role=role, task=task, focus=focus, parent=ctx.name, depth=ctx.depth + 1,
         agent_id=child_agent_id(ctx, role), lineage=lineage_of(ctx),
         run_task=getattr(ctx, "run_task", None) or task, context_pack=pack_text,
-        context_mode=mode, parent_dir=parent_dir)
+        context_mode=mode, parent_dir=parent_dir, **_cap_kw(ctx))
+
+
+def _cap_kw(ctx: Any) -> dict[str, Any]:
+    """capgate: hand the child an attenuation of this agent's capability (nothing when off), so
+    run_agent stubs that predate the gate keep working."""
+    from . import capgate
+    if capgate.mode() == "off":
+        return {}
+    return {"parent_capability": capgate.capability_for(ctx)}

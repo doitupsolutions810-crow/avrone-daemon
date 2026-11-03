@@ -266,6 +266,8 @@ class AgentContext:
     lineage: list[str] = field(default_factory=list)  # root -> ... -> parent (names)
     parent_dir: Path | None = None       # parent's agent dir, readable via parent/ (share_dir)
     recent_calls: deque = field(default_factory=lambda: deque(maxlen=RECENT_CALLS))  # (tool, args, output)
+    # capgate (AVRONE_CAPGATE): this agent's signed capability; None = minted from policy on first use.
+    capability: dict | None = None
 
 
 _THINK = re.compile(r"<(think|thinking|reasoning)>.*?(?:</\1>|$)", re.S | re.I)
@@ -643,10 +645,17 @@ class TrinityCore:
                         parent: str | None = None, depth: int = 0, system: str | None = None,
                         agent_id: str | None = None, lineage: list[str] | None = None,
                         run_task: str | None = None, context_pack: str = "",
-                        context_mode: str | None = None, parent_dir: Path | None = None) -> str:
+                        context_mode: str | None = None, parent_dir: Path | None = None,
+                        parent_capability: dict | None = None) -> str:
         name = self._name(role)
         ctx = AgentContext(self, run_id, name, depth, role=role, focus=focus, run_task=run_task or task,
                            parent_name=parent, lineage=list(lineage or []))
+        if parent_capability is not None:  # capgate: a child only ever holds a subset of its parent
+            from . import capgate
+            try:
+                ctx.capability = capgate.attenuate_for_child(parent_capability, name, role)
+            except capgate.CapDenied as e:
+                return f"ERROR: could not delegate a capability to {role}: {e}"
         self.run_agents[run_id] = self.run_agents.get(run_id, 0) + 1
         claimed, ctx.memory_namespace = self._claim_identity(run_id, name, agent_id or role)
         self._attach_agent_dir(ctx, claimed)

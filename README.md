@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.35: Round 41-42: seeded fuzz + soak, capgate (capability-scoped tools + receipt chain), Avrone bridge merge. 4,823 tests + 5 integration
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| merge | daemon lacked 9 Avrone commits (Grok Bot bridge contract, bridge chaos + multiprocess tests, cross-process journal compaction lock) | merged `--no-ff`, no conflicts, nothing overwritten | `test_bridge_chaos.py`, `scripts/verify-grok-bridge.sh` |
+| fuzz | example tests can't show the space between examples | `test_round41_fuzz_soak.py`: seeded hostile generators (lone surrogates, NUL, think/harmony wrappers, truncated JSON, 5k-deep nesting, 2 MB finals) against parse/normalize/reply_text/subtasks/clip/compact, fleet HMAC (valid-once, any single tamper refused, junk headers only ever `GatewayRefused`), 4-thread memstore soak + torn tail, checkpoint reload soak. `FUZZ_ITERS` (default 400) scales it | 6,000-iteration soak: 26/26 green after one test-side fix (1-char clip limit keeps tail only) |
+| capgate | every agent held ambient power over every tool | `avrone/capgate.py` (`AVRONE_CAPGATE=off|audit|enforce`, default off): signed expiring capabilities from `AVRONE_CAPGATE_POLICY`, ctxspawn children get an **attenuation** (no amplification, depth cap 16), hash-chained HMAC-signed receipts (digests only), `GET /api/capgate` verifies the chain | `test_capgate.py` (24): forged/edited/expired/wrong-audience caps, malformed policy fails closed, chain detects edit/delete/reorder/forge/torn line, 6-thread writers stay linked |
+| docs | systems evolved separately | `docs/EVOLUTION.md`: what each repo is, what is already merged, ranked merge plan | — |
+
+Full suite also passes under `AVRONE_CAPGATE=audit` except one expected difference: `self_scan`'s
+"read-only" check sees the audit receipt file the gate writes.
+
 ## v0.34: Squad round 20: run-log reads streamed and bounded. 2908 tests, coverage 99%
 
 | Lane | Finding (heat) | Mapping | Verification |

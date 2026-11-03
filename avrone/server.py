@@ -317,6 +317,15 @@ def _ck_key(ck_id: str) -> str:
     return ck_id
 
 
+@app.get("/api/capgate")
+async def capgate_status(x_admin_token: str | None = Header(default=None)):
+    """capgate mode, the root policy, and a full walk of the receipt chain (admin only)."""
+    require_admin(x_admin_token)
+    from . import capgate
+    return {"mode": capgate.mode(), "policy": capgate.policy(), "ttl": capgate.ttl(),
+            "chain": capgate.verify_chain(settings.data_dir)}
+
+
 @app.get("/api/checkpoints")
 async def checkpoints_list(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)

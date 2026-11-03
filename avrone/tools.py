@@ -189,11 +189,34 @@ class ToolRegistry:
         if not isinstance(args, dict):
             return (f"ARG ERROR ({name}): args must be a JSON object, got {type(args).__name__}; "
                     f"expected {tool.args_doc}. The tool did not run.")
+        from . import capgate  # opt-in capability gate (AVRONE_CAPGATE); a no-op when off
+        if capgate.mode() == "off":
+            try:
+                out = await tool.fn(ctx, args)
+            except Exception as e:  # errors go back to the agent
+                return f"ERROR: {type(e).__name__}: {e}"
+            return out if isinstance(out, str) else str(out)
+        allowed, why, cap_id = capgate.gate(ctx, name)
+        ddir = capgate.data_dir_of(ctx)
+        caller = getattr(ctx, "name", "") or "agent"
+        run_id = getattr(ctx, "run_id", "") or ""
+        if not allowed:
+            msg = f"CAP DENIED ({name}): {why}. The tool did not run."
+            if ddir is not None:
+                capgate.record(ddir, caller=caller, tool=name, args=args, outcome="denied",
+                               output=msg, cap_id=cap_id, run_id=run_id)
+            return msg
+        outcome = "ok"
         try:
             out = await tool.fn(ctx, args)
         except Exception as e:  # errors go back to the agent
-            return f"ERROR: {type(e).__name__}: {e}"
-        return out if isinstance(out, str) else str(out)
+            out, outcome = f"ERROR: {type(e).__name__}: {e}", "error"
+        out = out if isinstance(out, str) else str(out)
+        if ddir is not None:
+            capgate.record(ddir, caller=caller, tool=name, args=args,
+                           outcome=outcome if not why else f"{outcome}+audit", output=out,
+                           cap_id=cap_id, run_id=run_id)
+        return out
 
 
 def _safe_path(root: Path, rel: str) -> Path:

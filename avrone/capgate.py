@@ -32,6 +32,7 @@ import secrets
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -197,12 +198,60 @@ def _last_hash(p: Path) -> str:
     return GENESIS
 
 
+@contextmanager
+def _chain_lock(p: Path):
+    """One writer at a time across THREADS and PROCESSES (two uvicorn workers, an MCP server and
+    the HTTP node sharing one data dir). Without the file lock two processes read the same head and
+    fork the chain, which verify_chain then reports as tampering."""
+    with _LOCK:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            try:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except (ImportError, OSError):  # no flock (Windows / odd FS): thread lock only
+                pass
+            yield
+        finally:
+            os.close(fd)  # closing releases the flock
+
+
+def _repair_tail(p: Path) -> str | None:
+    """A crash mid-append leaves a last line with no newline. Appending after it would glue the
+    next receipt onto the torn bytes and break the chain forever, so the torn tail is moved to
+    receipts.jsonl.torn (kept as evidence) and cut off. Returns the reason when it repaired."""
+    try:
+        size = p.stat().st_size
+    except OSError:
+        return None
+    if size == 0:
+        return None
+    with open(p, "rb+") as f:
+        f.seek(size - 1)
+        if f.read(1) == b"\n":
+            return None
+        back = min(size, 1 << 20)
+        f.seek(size - back)
+        chunk = f.read(back)
+        cut = chunk.rfind(b"\n")
+        start = size - back + cut + 1 if cut >= 0 else 0
+        f.seek(start)
+        torn = f.read()
+        with open(str(p) + ".torn", "ab") as t:
+            t.write(torn + b"\n")
+        f.truncate(start)
+        f.flush()
+        os.fsync(f.fileno())
+    return f"torn tail of {len(torn)} bytes set aside"
+
+
 def record(data_dir: str | Path, *, caller: str, tool: str, args: Any, outcome: str,
            output: str = "", cap_id: str | None = None, run_id: str = "") -> dict[str, Any]:
     """Append one receipt to the chain. Stores digests of args/output, never their contents."""
     p = receipts_path(data_dir)
-    with _LOCK:
-        p.parent.mkdir(parents=True, exist_ok=True)
+    with _chain_lock(p):
+        _repair_tail(p)
         rec = {"ts": round(time.time(), 3), "caller": str(caller)[:120], "tool": str(tool)[:120],
                "outcome": str(outcome)[:40], "args_sha": _digest(args), "out_sha": _digest(output),
                "cap": cap_id, "run": str(run_id)[:80], "prev": _last_hash(p)}
@@ -212,7 +261,30 @@ def record(data_dir: str | Path, *, caller: str, tool: str, args: Any, outcome: 
             f.write(json.dumps(rec, separators=(",", ":")) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        _write_head(p, rec["hash"])
     return rec
+
+
+def _head_path(p: Path) -> Path:
+    return p.with_name(p.name + ".head")
+
+
+def _write_head(p: Path, head: str) -> None:
+    """A signed pointer to the newest receipt and how many exist. The chain alone cannot show
+    that its LAST lines were cut off (what remains still links); the signed head can."""
+    hp = _head_path(p)
+    try:
+        old = json.loads(hp.read_text())
+        count = int(old.get("count", 0)) + 1 if old.get("sig") == _mac({k: old[k] for k in ("count", "head")}) else None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        count = None
+    if count is None:  # first receipt, or an unreadable/foreign head: recount from the file
+        with open(p, "rb") as f:
+            count = sum(1 for ln in f if ln.strip())
+    body = {"count": count, "head": head}
+    tmp = hp.with_name(f"{hp.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({**body, "sig": _mac(body)}))
+    os.replace(tmp, hp)
 
 
 def verify_chain(data_dir: str | Path) -> dict[str, Any]:
@@ -235,6 +307,20 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
             except (ValueError, KeyError, TypeError):
                 return {"ok": False, "count": n, "line": i, "error": "unreadable line"}
             prev, n = rec["hash"], n + 1
+    hp = _head_path(p)
+    if hp.exists():
+        try:
+            h = json.loads(hp.read_text())
+            body = {"count": int(h["count"]), "head": str(h["head"])}
+            signed = hmac.compare_digest(_mac(body), str(h.get("sig")))
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            signed, body = False, {}
+        if not signed:
+            return {"ok": False, "count": n, "error": "head pointer unreadable or not signed by this key"}
+        if body["count"] > n:
+            return {"ok": False, "count": n, "error": f"truncated: head says {body['count']} receipts, file has {n}"}
+        if body["count"] == n and body["head"] != prev:
+            return {"ok": False, "count": n, "error": "head mismatch (chain replaced)"}
     return {"ok": True, "count": n, "head": prev}
 
 

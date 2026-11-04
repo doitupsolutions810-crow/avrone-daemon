@@ -445,7 +445,11 @@ def sanitize_messages(messages: Any) -> list[dict[str, Any]]:
         clean: dict[str, Any] = {"role": role, "content": content}
         if role == "tool":
             tcid = m.get("tool_call_id")
-            if isinstance(tcid, str) and tcid.strip():
+            # the id travels on the wire too: a lone surrogate or NUL in it (an id echoed back from a
+            # junk tool call) crashed the request locally just like one in the content. Clean it
+            # BEFORE the emptiness check, or "\x00\n" passes the check and goes out as "\n".
+            tcid = clean_text(tcid)[:256].strip() if isinstance(tcid, str) else ""
+            if tcid:
                 clean["tool_call_id"] = tcid
             else:
                 clean = {"role": "user", "content": content if content.startswith("TOOL RESULT")

@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.36: Round 43: crash, multi-process and hostile-peer edges. 4,843 tests + 5 integration
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| capgate | **two processes sharing a data dir forked the receipt chain** (thread lock only), which `verify_chain` then reported as tampering | `flock` on `receipts.jsonl.lock` across threads and processes | 4 forked processes x 60 receipts: one linked chain of 240 |
+| capgate | **a crash mid-append broke the chain forever**: the next receipt glued onto the torn bytes | torn tail moved to `receipts.jsonl.torn` (kept as evidence) and cut before the next append | torn-tail and torn-only-file tests |
+| capgate | deleting the LAST receipts was invisible (what remains still links) | signed head pointer `receipts.jsonl.head` (count + newest hash); verify reports `truncated`, `head mismatch (chain replaced)`, or an unsigned/forged head; a lost head is recounted | 5 tests |
+| gateway | **a `tool_call_id` with a lone surrogate crashed the request locally**; one like `"\x00\n"` passed the empty check and went out as `"\n"` | id cleaned (surrogates, NUL), capped at 256 and stripped before the emptiness check | seeded `sanitize_messages` contract fuzz (found by the 6,000-iteration soak) |
+| fuzz | — | `test_round43_crash_peer_edges.py`: memstore merge vs hostile peer payloads (stats add up, caps hold, old never beats newest), `extract_choice` raises only what `Gateway.chat` catches, Retry-After/temperature never NaN or negative, 300-line junk stream into the MCP server (strict JSON-RPC replies, still answers the last line) | 20 tests; `FUZZ_ITERS=6000` soak green |
+
 ## v0.35: Round 41-42: seeded fuzz + soak, capgate (capability-scoped tools + receipt chain), Avrone bridge merge. 4,823 tests + 5 integration
 
 | Lane | Finding | Mapping | Verification |

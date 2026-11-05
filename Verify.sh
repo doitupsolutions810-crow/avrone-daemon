@@ -7,18 +7,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-PASS=0
 FAIL=0
-TOTAL=0
 
 log()  { printf '[verify] %s\n' "$*"; }
-pass() { PASS=$?; TOTAL=$?; :; PASS=1; TOTAL=1; log "PASS: $*"; }
-fail() { PASS=0; TOTAL=1; log "FAIL: $*"; }
 
 # --- 1. Environment sanity ---
 log "AVRONE root: $ROOT"
-if [[ ! -f pyproject.toml || ! -d avrone ]]; then
-  log "FAIL: not an AVRONE checkout (missing pyproject.toml or avrone/)"
+if [[ ! -f pyproject.toml || ! -d avrone || ! -d avrone-a12lr/tests ]]; then
+  log "FAIL: not an AVRONE checkout (missing pyproject.toml, avrone/, or avrone-a12lr/tests/)"
   exit 2
 fi
 
@@ -26,9 +22,9 @@ fi
 log "Installing avrone[dev]..."
 python -m pip install -e '.[dev]' -q
 
-# --- 3. Trust gate separation (16 cases) ---
+# --- 3. Trust gate separation (16 cases, canonical module) ---
 log "Running trust gate separation suite..."
-if python -m pytest -q avrone-a12lr/tests/test_xcv_trust_gates.py avrone-a12lr/tests/test_avrone_trust_gate_separation.py 2>&1 | tee /tmp/verify_trust.log; then
+if python -m pytest -q avrone-a12lr/tests/test_xcv_trust_gates.py 2>&1 | tee /tmp/verify_trust.log; then
   log "PASS: trust gate separation"
 else
   log "FAIL: trust gate separation — see /tmp/verify_trust.log"
@@ -36,21 +32,36 @@ else
 fi
 
 # --- 4. Great Scale invariants ---
-log "Checking Great Scale invariants (cone floor, excess non-negativity, residual partition 4+3+1)..."
+# evidence_snapshot(failures, runs, alpha=0.05) -> keys: p, S, psi, coneOk, onConeFloor,
+# orientation, n, lambda, runsFor95. Residual count n = 8 - 4S; partition 4+3+1.
+log "Checking Great Scale invariants (cone floor, orientation, residual count)..."
 if python - <<'PY'
-from avrone.greatscale import evidence_snapshot
+from avrone.greatscale import evidence_snapshot, CONE, RESIDUAL_PARTITION
 import math
 
 phi = (1 + math.sqrt(5)) / 2
 phi_inv2 = 1 / phi**2
+assert abs(CONE - phi_inv2) < 1e-12
 
-snap = evidence_snapshot(orientation_pass=True, n=8, lam=0.5)
-assert snap["on_cone_floor"] is True or snap.get("Psi", 0) >= phi_inv2 - 1e-12, "cone floor violated"
-assert snap.get("excess", 0) >= -1e-12, "negative excess"
-# residual partition 4+3+1 = 8
-resid = snap.get("residual_partition")
-if resid is not None:
-    assert sum(resid) == snap.get("n", 8), "residual partition must sum to n"
+# Deterministic pass: 0 failures / 200 runs -> cone floor, orientation pass
+snap = evidence_snapshot(0, 200)
+assert snap["onConeFloor"] is True, "deterministic pass must sit on cone floor"
+assert snap["orientation"] == "pass"
+assert snap["psi"] >= CONE - 1e-12
+assert snap["n"] == 8.0
+assert RESIDUAL_PARTITION == (4, 3, 1) and sum(RESIDUAL_PARTITION) == 8
+
+# Deterministic fail: 200/200 -> also cone floor but orientation fail (heat is orientation-blind)
+snap_f = evidence_snapshot(200, 200)
+assert snap_f["onConeFloor"] is True
+assert snap_f["orientation"] == "fail"
+assert snap_f["S"] == 0.0
+
+# Flaky mid-range: 100/200 -> peak heat S = 0.25
+snap_m = evidence_snapshot(100, 200)
+assert abs(snap_m["S"] - 0.25) < 1e-12
+assert snap_m["psi"] == CONE + 0.25
+assert snap_m["orientation"] == "mixed"
 print("invariants ok")
 PY
   log "PASS: Great Scale invariants"
@@ -59,18 +70,36 @@ else
   FAIL=1
 fi
 
-# --- 5. Extended edge cases (strings-as-booleans, replay, clock skew, attenuation) ---
-log "Running extended edge-case probes..."
+# --- 5. Extended edge cases: string-booleans must fail semantic authorization ---
+# is_authorized lives in the canonical test module; trust_context string values
+# must be rejected because gate semantics require booleans, not shapes.
+log "Running extended edge-case probes (string-boolean semantic rejection)..."
 if python - <<'PY'
-from avrone.greatscale import evidence_snapshot
+import importlib.util, sys
+sys.path.insert(0, "avrone-a12lr/tests")
+spec = importlib.util.spec_from_file_location(
+    "test_xcv_trust_gates", "avrone-a12lr/tests/test_xcv_trust_gates.py")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
 
-# string booleans must not pass semantic gate
-snap = evidence_snapshot(trust_context={"capability_valid": "true", "receipt_present": "true",
-                          "digest_verified": "true", "signature_verified": "true",
-                          "domain_valid": "true", "residuals_measured": "true"})
-tc = snap.get("trust_context", {})
-for k, v in tc.items():
-    assert not isinstance(v, str), f"gate {k} arrived as string — semantic check must reject"
+snap = mod.make_snapshot()
+# trust_context with string values — shape-valid, semantically invalid
+snap["trust_context"] = {
+    "numerical_gates": "true",
+    "provenance_bound": "true",
+    "capability_scoped": "true",
+    "receipt_chained": "true",
+}
+cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+       "operation": "accept", "signature_valid": True}
+receipt = {"envelope_hash": mod.envelope_hash(snap), "verifier": "trusted-verifier"}
+ok, reasons = mod.is_authorized(snap, cap, receipt)
+assert not ok, "string-boolean trust_context must deny"
+assert any("trust_context_" in r for r in reasons)
+# and the pristine-math snapshot with no trust_context and no cap still denies
+snap2 = mod.make_snapshot()
+ok2, reasons2 = mod.is_authorized(snap2, None, None)
+assert not ok2 and "capability_missing" in reasons2
 print("string-boolean rejection ok")
 PY
   log "PASS: extended edge cases"
@@ -81,7 +110,7 @@ fi
 
 # --- 6. Summary ---
 log "================================"
-log "VERIFY COMPLETE: pass checks logged above, fail=$FAIL"
+log "VERIFY COMPLETE: fail=$FAIL"
 if [[ "$FAIL" -ne 0 ]]; then
   log "RESULT: FAIL"
   exit 1

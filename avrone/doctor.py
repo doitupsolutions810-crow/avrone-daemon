@@ -43,7 +43,7 @@ TOKEN_ENV = ("AVRONE_ADMIN_TOKEN", "AVRONE_FLEET_TOKEN", "AVRONE_LLM_API_KEY", "
              "XAI_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "BRAVE_API_KEY", "TAVILY_API_KEY")
 _TRUE = {"1", "true", "yes", "on", "allow"}
 _FALSE = {"0", "false", "no", "off", "deny"}
-_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/@\s]*@")
+_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]*@")
 DOCKER_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock")
 
 

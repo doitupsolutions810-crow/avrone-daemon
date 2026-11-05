@@ -79,16 +79,64 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
                 r"(?:(bearer|basic|token)\s+)?[^\s,;\"']+"),
      lambda m: f"{m.group(1)}{m.group(2)}{(m.group(3) + ' ') if m.group(3) else ''}{REDACTED}"),  # type: ignore[list-item]
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), f"Bearer {REDACTED}"),
-    (re.compile(r"(?i)([\"']?\b[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?\s*[:=]\s*)(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)"),
-     lambda m: m.group(1) + REDACTED),  # type: ignore[list-item]
+    (None, None),  # key = value with a secret-ish key: _KVRule, filled in below (linear, no regex)
     (re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"), REDACTED),
     (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"), REDACTED),
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), REDACTED),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), REDACTED),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), REDACTED),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), REDACTED),
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/@\s:]+:[^/@\s]+@"), r"\1***@"),
+    (re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s:]+:[^/@\s]+@"), r"\1***@"),
 ]
+
+
+# Scheme regexes above are bounded ({0,31}) and unanchored: `\b[a-z][a-z0-9+.\-]*://` rescanned the
+# rest of every "a.a.a..." run from each of its word boundaries (quadratic: 16 KB of minified JS in
+# one tool result held the event loop for seconds, since every CodeX event is redacted on emit).
+
+_IDENT_RE = re.compile(r"[\w.-]+")
+_SECRET_RE = re.compile(_SECRET_WORD, re.I)
+_KV_TAIL_RE = re.compile(r"[\"']?\s*[:=]\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
+
+
+def _redact_kv(s: str) -> str:
+    """Mask the value of `key = value` / `"key": "value"` when the key holds a secret word.
+
+    Was one regex, `[\\w.-]*SECRET[\\w.-]*\\s*[:=]...`: on a long run of word chars and dots
+    ("a.a.a...", minified JS, dotted versions) it backtracked from every boundary: 4 KB took
+    0.7 s, 16 KB 11 s, 50 KB 99 s. Identifiers are now tokenised once (linear), and only tokens
+    that contain a secret word and are followed by := are looked at."""
+    out: list[str] = []
+    last = 0
+    for m in _IDENT_RE.finditer(s):
+        if m.start() < last or not _SECRET_RE.search(m.group()):
+            continue
+        tail = _KV_TAIL_RE.match(s, m.end())
+        if tail is None:
+            continue
+        out.append(s[last:tail.start(1)])
+        out.append(REDACTED)
+        last = tail.end(1)
+    if not out:
+        return s
+    out.append(s[last:])
+    return "".join(out)
+
+
+
+class _KVRule:
+    """Stands in _PATTERNS for the old key/value regex (same .search / .sub surface, so
+    secret_scan's per-rule names still line up)."""
+    pattern = "key=value with a secret word in the key"
+
+    def search(self, s: str) -> bool:
+        return _redact_kv(s) != s
+
+    def sub(self, _rep: Any, s: str) -> str:
+        return _redact_kv(s)
+
+
+_PATTERNS[3] = (_KVRule(), None)  # type: ignore[assignment]
 
 
 def _env_secret_values() -> list[str]:

@@ -81,6 +81,24 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.56: Round 63: ReDoS in the secret redactor every CodeX event passes through. 5,370 tests + 19 integration
+
+A sweep of all 68 module-level regexes against long repeated units (`a.`, `a-`, `token`, `http://`, ...)
+found catastrophic backtracking in `ctxspawn.redact`, which `codex._scrub` runs on every string of every
+event, on the event loop, before it is logged or sent to `/ws/events`.
+
+- **Key=value rule:** `[\w.-]*SECRET[\w.-]*\s*[:=]...` backtracked from every word boundary of a
+  `a.a.a...` run (minified JS, dotted versions, paths). 4 KB took 0.7 s, 16 KB 11 s, 50 KB 99 s. One
+  fetched page or one `write_file` call could hold the node for minutes. Now `_redact_kv`: identifiers
+  are tokenised once and only those holding a secret word and followed by `:=` are checked. 50 KB takes
+  ~4 ms. A seeded property test (12,000 cases) checks it against the old regex output exactly. It keeps
+  its slot in `_PATTERNS`, so `secret_scan` rule names still line up.
+- **URL-credential rules** (`ctxspawn`, `doctor`, `tools_extra`, `tools_introspect`,
+  `tools_researchnote`): `\b[a-z][a-z0-9+.\-]*://` was quadratic too (~0.36 s per 8 KB). The scheme is
+  now `{0,31}` and unanchored, so `<40 letters>http://u:p@h` is still redacted.
+- Tests: `tests/test_round63_redact_redos.py`, 25 tests; 18 fail on v0.55 (the slowest cases were
+  deselected for that run). Probe: `/workspace/work/regexscan.py`.
+
 ## v0.55: Round 62: edit_file's loose match fixed (corrupting overlaps, quadratic scan). 5,345 tests + 19 integration
 
 - **replace_all corrupted files.** The trailing-whitespace fallback found OVERLAPPING matches and spliced them in reverse. Example: `"a\na\na\n"` with old `"a\na  "` became `"B\n"`, losing a line. It is now non-overlapping, left to right, like `str.replace` (`"B\na\n"`), and the "matches N times" count agrees with it.

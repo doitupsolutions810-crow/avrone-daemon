@@ -104,7 +104,7 @@ ENV_REPORT_MAX_CHARS = 8000
 ENV_SECRET_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL",
                       "AUTH", "PRIVATE", "COOKIE", "SESSION", "SIGNING", "CERT")
 _PREFIX_RE = re.compile(r"[A-Z0-9_]{0,64}")
-_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/@\s]*@")
+_URL_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]*@")
 _SECRET_QUERY_RE = re.compile(
     r"(?i)([?&](?:[a-z0-9_\-]*(?:token|key|secret|password|passwd|auth|sig|signature|session|code)"
     r"[a-z0-9_\-]*)=)[^&#\s]*")

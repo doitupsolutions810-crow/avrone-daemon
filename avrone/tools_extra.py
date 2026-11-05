@@ -1028,7 +1028,7 @@ SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD")
 # Secret-shaped names always listed (as set/unset) so the report is stable across hosts.
 KNOWN_SECRET_ENV = ("AVRONE_ADMIN_TOKEN", "AVRONE_LLM_API_KEY", "OPENCLAW_GATEWAY_TOKEN", "XAI_API_KEY",
                     "OPENAI_API_KEY", "OPENROUTER_API_KEY", "BRAVE_API_KEY", "TAVILY_API_KEY")
-_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/@\s]*@")
+_URL_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]*@")
 
 
 def is_secret_name(name: str) -> bool:

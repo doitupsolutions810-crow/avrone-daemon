@@ -44,7 +44,7 @@ _TOKEN_RES = (
     re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+)?"),
-    re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/@\s]+@"),
+    re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]+@"),
 )
 _BLOB_RE = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 REDACTED = "***redacted***"

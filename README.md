@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.53: Round 60: checkpoint saves and admin CodeX views off the event loop. 5,320 tests + 19 integration
+
+- **Checkpoint saves blocked the loop.** `Checkpoint.put` re-read, re-parsed and rewrote the whole file, with an fsync, for every finished worker, the plan, every deep round and the result. At 18 MB that was ~81 ms per put, and the cap is 64 MB. Trinity now saves through `asyncio.to_thread`. `_Store` also skips the re-read when the file still has the (inode, size, mtime_ns) of its own last write: ~48 ms, all off the loop. Another writer changes the signature, so cross-process merging still works.
+- **priv_admin `codex_runs` / `codex_tail`** read every run log, or streamed a whole log, on the loop. They now use `to_thread`, like their `/api` twins.
+- Found with an AST sweep for sync store calls in async functions outside `to_thread`.
+- Tests: `tests/test_round60_checkpoint_admin_off_loop.py` (10 tests, 5 fail on v0.52).
+
 ## v0.52: Round 59: learning bridge off the event loop. 5,310 tests + 19 integration
 
 - **Every squad and deep run froze the node for the memory parse.** With asyncio's slow-callback detector on and a 200k-line memory store, each squad and each deep wave logged a ~1.0 s blocked step. Profiling put all of it in `Trinity._lessons_block` (bridge `lessons_block` loads and folds the whole store to find the lessons). Lessons are on by default, so every run stalled the API, WebSockets and fleet heartbeats. The end-of-run `_distill` save ran on the loop too. Both now run via `asyncio.to_thread`; the same workload logs no slow callbacks at 0.1 s.

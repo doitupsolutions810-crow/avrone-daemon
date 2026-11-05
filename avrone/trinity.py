@@ -988,7 +988,7 @@ class TrinityCore:
                 return cached
         result = await factory()
         if ck is not None and isinstance(result, str) and not _reviewer_failed(result):
-            ck.put(key, result)
+            await asyncio.to_thread(ck.put, key, result)  # rewrites the whole file: off the loop
         return result
 
     def _ck_open(self, checkpoint: Any, task: str, mode: str, run_id: str | None,
@@ -1047,7 +1047,7 @@ class TrinityCore:
                 self.codex.emit(run_id, "run.done", "Trinity", answer=f"Model backend error: {e}")
                 return {"run_id": run_id, "answer": f"Model backend error: {e}", "agents": []}
             if ck is not None:
-                ck.put("subtasks", subtasks)
+                await asyncio.to_thread(ck.put, "subtasks", subtasks)
 
         self.squad_roles[run_id] = [{"role": str(s.get("role")), "focus": str(s.get("focus", ""))}
                                     for s in subtasks if isinstance(s, dict)]
@@ -1131,7 +1131,7 @@ class TrinityCore:
         if learned:
             out["lessons_learned"] = learned
         if ck is not None and not answer.startswith("Lead failed ("):
-            ck.put("result", out)  # a failed merge is retried on resume
+            await asyncio.to_thread(ck.put, "result", out)  # a failed merge is retried on resume
         return out
 
     # ------------------------------------------------------------ deep analysis
@@ -1201,9 +1201,9 @@ class TrinityCore:
             self.codex.emit(run_id, "checkpoint.resume", "DeepLead", path=str(ck.path),
                             rounds_done=len(history), next_round=start)
 
-        def save_rounds(stop: str | None = None) -> None:
+        async def save_rounds(stop: str | None = None) -> None:
             if ck is not None:
-                ck.put("rounds", {"history": history, "all_agents": all_agents, "seen": seen,
+                await asyncio.to_thread(ck.put, "rounds", {"history": history, "all_agents": all_agents, "seen": seen,
                                   "current": current, "report": report, "converged": converged,
                                   "lead_ok": lead_ok, "total_ok": total_ok,
                                   "total_failed": total_failed, "stop_reason": stop})
@@ -1242,17 +1242,17 @@ class TrinityCore:
                 # Nothing usable came back (no reviewers, or every one failed): another
                 # round would only repeat that, and the lead had nothing to weigh.
                 stop_reason = "no_reviews"
-                save_rounds(stop_reason)
+                await save_rounds(stop_reason)
                 break
             if converged:
                 stop_reason = "converged"
-                save_rounds(stop_reason)
+                await save_rounds(stop_reason)
                 break
             if not lead_ok:
                 stop_reason = "lead_failed"
                 break  # not saved: a resume retries this round's lead (its reviews are cached)
             current = _md_section(report, "Bottom line") or report
-            save_rounds()
+            await save_rounds()
         last = history[-1]
         confidence = deep_confidence(report, lead_ok, last["reviewers_ok"], last["reviewers_failed"],
                                      converged, len(history))
@@ -1283,7 +1283,7 @@ class TrinityCore:
         if learned:
             out["lessons_learned"] = learned
         if ck is not None and lead_ok:
-            ck.put("result", out)
+            await asyncio.to_thread(ck.put, "result", out)
         return out
 
     async def _deep_wave(self, run_id: str, rnd: int, brief: str,

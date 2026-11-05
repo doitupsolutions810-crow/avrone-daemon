@@ -120,6 +120,10 @@ class _Store:
         # (the MCP server and the HTTP node on one data dir) no longer erase each other's steps
         self._dirty: set[str] = set()
         self._dropped: set[str] = set()
+        # (inode, size, mtime_ns) of the file as this store last wrote it: when the file still has
+        # it at the next save, nobody else wrote in between and the re-read is skipped. Every step
+        # used to re-read and re-parse the whole file (18 MB: ~40 ms of an ~80 ms save)
+        self._sig: tuple[int, int, int] | None = None
         self.load()
 
     def load(self) -> None:
@@ -175,9 +179,18 @@ class _Store:
         with self.lock:
             return self._save_locked()
 
+    def _stat_sig(self) -> "tuple[int, int, int] | None":
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_ino, st.st_size, st.st_mtime_ns)
+
     def _merge_disk(self) -> None:
         if not (self._dirty or self._dropped):
             return
+        if self._sig is not None and self._stat_sig() == self._sig:
+            return  # unchanged since our own last write
         try:
             st = self.path.stat()
             import stat as _stat
@@ -231,6 +244,7 @@ class _Store:
                     os.fsync(f.fileno())
                 os.replace(tmp, self.path)
                 _fsync_dir(self.path.parent)
+                self._sig = self._stat_sig()
             except BaseException:
                 try:
                     os.unlink(tmp)

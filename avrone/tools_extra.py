@@ -1309,7 +1309,8 @@ def _admin_codex(ctx: "AgentContext") -> Any:
 
 
 async def _admin_codex_runs(ctx: "AgentContext", args: dict[str, Any]) -> Any:
-    return _admin_codex(ctx).runs(_int(args.get("limit"), 20, 1, 50))
+    # stats and reads every run log: in a thread, like /api/runs (blocked the loop ~1 s on a busy node)
+    return await asyncio.to_thread(_admin_codex(ctx).runs, _int(args.get("limit"), 20, 1, 50))
 
 
 async def _admin_codex_tail(ctx: "AgentContext", args: dict[str, Any]) -> Any:
@@ -1319,10 +1320,13 @@ async def _admin_codex_tail(ctx: "AgentContext", args: dict[str, Any]) -> Any:
     n = _int(args.get("limit"), 20, 1, 100)
     out = []
     cx = _admin_codex(ctx)
-    try:
-        evs = cx.replay(run_id, limit=n)  # only the tail is kept while streaming
-    except TypeError:  # an older codex without the limit argument
-        evs = cx.replay(run_id)[-n:]
+
+    def tail() -> list:
+        try:
+            return cx.replay(run_id, limit=n)  # only the tail is kept while streaming
+        except TypeError:  # an older codex without the limit argument
+            return cx.replay(run_id)[-n:]
+    evs = await asyncio.to_thread(tail)  # streams the whole log to find its tail: off the loop
     for e in evs:
         data = e.get("data")
         out.append({"ts": e.get("ts"), "kind": e.get("kind"), "agent": e.get("agent"),

@@ -69,6 +69,7 @@ as a confidence guarantee without defending the independence assumption.
    policies and persistent keys have been configured and tested.
 7. `provenance_depth` is an integer in `[0, 4096]`; larger or coerced values are rejected.
 8. `digest` must be exactly 64 lowercase hexadecimal characters before constant-time comparison.
+9. Identifier fields must be canonical (no leading or trailing whitespace) and must reject Unicode control, bidi/format, and surrogate code points to prevent log and identity spoofing.
 
 ## Verification
 

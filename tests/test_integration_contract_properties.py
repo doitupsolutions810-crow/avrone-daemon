@@ -103,3 +103,74 @@ def test_nested_unknown_fields_are_rejected_by_summary_recomputation():
     forged = copy.deepcopy(record)
     forged["evidence"]["unreviewed"] = "unexpected"
     assert verify_evidence_event(forged)[0] is False
+
+
+@pytest.mark.parametrize("field", ["source", "run_id", "check_id", "capability_id", "human_root"])
+@pytest.mark.parametrize("value", [" padded ", "\\tleading", "trailing\\n"])
+def test_builder_rejects_noncanonical_identifier_whitespace(field, value):
+    kwargs = {field: value}
+    if field == "human_root":
+        kwargs["provenance_depth"] = 1
+    with pytest.raises(EvidenceContractError):
+        make(**kwargs)
+
+
+def test_verifier_rejects_rehashed_noncanonical_identifier():
+    record = make()
+    record["source"] = " property-suite "
+    record["digest"] = hashlib.sha256(
+        _canonical({key: value for key, value in record.items() if key != "digest"})
+    ).hexdigest()
+    assert verify_evidence_event(record)[0] is False
+
+
+@pytest.mark.parametrize("value", ["\\x7f", "\\x85", "\\u202e", "\\u2066", "\\u200b", "\\ud800"])
+def test_builder_rejects_control_bidi_zero_width_and_surrogate_characters(value):
+    with pytest.raises(EvidenceContractError):
+        make(source="agent" + value)
+
+
+def test_verifier_contains_deeply_nested_untrusted_evidence():
+    record = make()
+    nested = "leaf"
+    for _ in range(1500):
+        nested = [nested]
+    record["evidence"]["untrusted"] = nested
+    valid, reason = verify_evidence_event(record)
+    assert valid is False
+    assert reason
+
+
+@pytest.mark.parametrize("field,value", [
+    ("source", []),
+    ("run_id", {}),
+    ("check_id", None),
+    ("refs", {"not": "a list"}),
+    ("capability_id", {"id": "spoof"}),
+    ("human_root", 7),
+    ("provenance_depth", []),
+    ("evidence", []),
+    ("digest", 123),
+])
+def test_verifier_never_throws_for_malformed_field_shapes(field, value):
+    record = make()
+    record[field] = value
+    valid, reason = verify_evidence_event(record)
+    assert valid is False
+    assert isinstance(reason, str)
+
+
+def test_maximum_run_count_boundary_and_rare_failure_snapshot():
+    record = make(failures=1, runs=10**9)
+    snap = record["evidence"]
+    assert snap["p"] == 1e-9
+    assert 0 <= snap["S"] <= 0.25
+    assert snap["orientation"] == "mixed"
+    assert verify_evidence_event(record)[0]
+
+
+def test_maximum_provenance_depth_is_inclusive_and_next_value_rejected():
+    record = make(provenance_depth=4096, human_root="operator:root")
+    assert verify_evidence_event(record)[0]
+    with pytest.raises(EvidenceContractError):
+        make(provenance_depth=4097, human_root="operator:root")

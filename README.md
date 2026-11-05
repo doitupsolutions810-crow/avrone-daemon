@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.51: Round 58: admin endpoints and agent-pack tools off the event loop. 5,306 tests + 19 integration
+
+- **Live-node stall probe** (uvicorn, `/api/status` pinged every 20 ms during each call):
+  - `/api/capgate` walked and re-MACed the whole receipt chain inline. With 40k receipts, the node froze for 0.85 s, growing with the chain.
+  - `/api/map` parsed every run log inline. With 360k lines (json or mermaid), the node froze for 1.3 s. `/api/telemetry` had already moved to a thread.
+  - `/api/checkpoints` and `/api/evolve` read every file inline.
+  - All four now run in `asyncio.to_thread`. Worst `/api/status` latency during each call: 0.01 to 0.04 s.
+- **Agent packs:** `/api/fleet/agentpack` decoded, gunzipped, verified and installed a 50 MB pack inline (~0.7 s). It now runs in a thread; the install is still an atomic swap under the per-agent lock. The `agent_pack_export` and `agent_pack_import` tools (1.6 s and 0.6 s on the loop) are `off_loop`. Fleet migration keeps its synchronous export on purpose, so no await sits between the busy re-check and the snapshot.
+- **Probed clean:** telemetry and map with `hours` set to nan, inf, -1, 1e308 or 0. All-tools fuzz seeds 16 to 19.
+- Tests: `tests/test_round58_api_and_pack_loop_stalls.py` (12 tests).
+
 ## v0.50: Round 57: MCP HTTP credentials on cross-origin redirects, evolve plain-copy clones. 5,294 tests + 19 integration
 
 - **MCP HTTP redirect leak:** `HTTPTransport` followed redirects with every configured header. httpx drops `Authorization` on a cross-origin hop, but an `X-Api-Key` (any custom credential header) and the `Mcp-Session-Id` went to whatever host the server's `Location` named. A request hook now strips configured headers, the session id, cookies and auth headers whenever a hop leaves the configured origin (scheme, host, port; an https to http downgrade counts). Same-origin redirects (`/mcp` to `/mcp/`) keep them.

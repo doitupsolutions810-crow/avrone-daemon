@@ -355,14 +355,15 @@ async def capgate_status(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
     from . import capgate
     return {"mode": capgate.mode(), "policy": capgate.policy(), "ttl": capgate.ttl(),
-            "chain": capgate.verify_chain(settings.data_dir)}
+            # a full walk re-MACs every receipt (40k receipts: 0.85 s): off the event loop
+            "chain": await asyncio.to_thread(capgate.verify_chain, settings.data_dir)}
 
 
 @app.get("/api/checkpoints")
 async def checkpoints_list(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
     from .checkpoint import list_managed
-    return list_managed(settings.data_dir)
+    return await asyncio.to_thread(list_managed, settings.data_dir)
 
 
 @app.get("/api/checkpoints/{ck_id}")
@@ -527,7 +528,8 @@ async def fleet_agentpack(request: Request):
     """Inbound agent-home migration (edgepack): signed gateway, kind "agentpack", cap agent:migrate."""
     payload = await _gateway(request, "agentpack")
     try:
-        return _fleet().receive_agentpack(payload)
+        # base64 + gunzip + verify + install of a pack up to the 50 MB quota held the loop ~0.7 s
+        return await asyncio.to_thread(_fleet().receive_agentpack, payload)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from None
     except (ValueError, RuntimeError) as e:
@@ -560,7 +562,7 @@ async def gateway_status():
 async def api_evolve(request: Request, x_admin_token: str | None = Header(default=None)):
     require_local(request, x_admin_token)
     from .evolve import list_accepted
-    return {"accepted": list_accepted(core().settings)}
+    return {"accepted": await asyncio.to_thread(list_accepted, core().settings)}
 
 
 @app.get("/api/osint/metrics")
@@ -587,7 +589,8 @@ async def api_map(request: Request, hours: float = 24, format: str = "json", x_a
     require_local(request, x_admin_token)
     from fastapi.responses import PlainTextResponse
     from .telemetry import system_map, to_mermaid
-    g = system_map(core(), hours * 3600)
+    # parses every run log like /api/telemetry (360k lines: 1.3 s with /api/status frozen): in a thread
+    g = await asyncio.to_thread(system_map, core(), hours * 3600)
     return PlainTextResponse(to_mermaid(g)) if format == "mermaid" else g
 
 

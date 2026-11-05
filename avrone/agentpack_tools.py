@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import agentcontainer, agentpack
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -53,6 +53,7 @@ def _audit(ctx: "AgentContext", kind: str, **data: Any) -> None:
         pass
 
 
+@off_loop  # export/import of a 50 MB home took 0.6-1.6 s on the event loop
 async def t_agent_pack_export(ctx: "AgentContext", args: dict[str, Any]) -> str:
     try:
         aid = _agent(ctx)
@@ -74,6 +75,7 @@ async def t_agent_pack_export(ctx: "AgentContext", args: dict[str, Any]) -> str:
             f"{man['memory']['entries']} memories) sha256={digest}")
 
 
+@off_loop  # export/import of a 50 MB home took 0.6-1.6 s on the event loop
 async def t_agent_pack_import(ctx: "AgentContext", args: dict[str, Any]) -> str:
     name = str(args.get("name", "")).strip()
     try:

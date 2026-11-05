@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.50.0)
+# AVRONE MASTER PROMPT (v0.51.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,294 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,306 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 222 test files, offline by default
+├── tests/                  # 223 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +312,17 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.51: Round 58: admin endpoints and agent-pack tools off the event loop. 5,306 tests + 19 integration
+
+- **Live-node stall probe** (uvicorn, `/api/status` pinged every 20 ms during each call):
+  - `/api/capgate` walked and re-MACed the whole receipt chain inline. With 40k receipts, the node froze for 0.85 s, growing with the chain.
+  - `/api/map` parsed every run log inline. With 360k lines (json or mermaid), the node froze for 1.3 s. `/api/telemetry` had already moved to a thread.
+  - `/api/checkpoints` and `/api/evolve` read every file inline.
+  - All four now run in `asyncio.to_thread`. Worst `/api/status` latency during each call: 0.01 to 0.04 s.
+- **Agent packs:** `/api/fleet/agentpack` decoded, gunzipped, verified and installed a 50 MB pack inline (~0.7 s). It now runs in a thread; the install is still an atomic swap under the per-agent lock. The `agent_pack_export` and `agent_pack_import` tools (1.6 s and 0.6 s on the loop) are `off_loop`. Fleet migration keeps its synchronous export on purpose, so no await sits between the busy re-check and the snapshot.
+- **Probed clean:** telemetry and map with `hours` set to nan, inf, -1, 1e308 or 0. All-tools fuzz seeds 16 to 19.
+- Tests: `tests/test_round58_api_and_pack_loop_stalls.py` (12 tests).
+
 ## v0.50: Round 57: MCP HTTP credentials on cross-origin redirects, evolve plain-copy clones. 5,294 tests + 19 integration
 
 - **MCP HTTP redirect leak:** `HTTPTransport` followed redirects with every configured header. httpx drops `Authorization` on a cross-origin hop, but an `X-Api-Key` (any custom credential header) and the `Mcp-Session-Id` went to whatever host the server's `Location` named. A request hook now strips configured headers, the session id, cookies and auth headers whenever a hop leaves the configured origin (scheme, host, port; an https to http downgrade counts). Same-origin redirects (`/mcp` to `/mcp/`) keep them.
@@ -333,18 +344,6 @@ landed and the suite is green. End with what is still open.
 
 Memory sync was also fuzzed with junk records (string, list, bool, inf and missing `ts`; NaN values; list keys; foreign namespaces; a 10 MB key). It handled every case cleanly.
 
-## v0.48: Round 55: quadratic diff, osint rollup stall, one serialization per event. 5,273 tests + 19 integration
-
-9 new tests. 7 of them fail on v0.47. Four of those call names added this round (`DIFF_INLINE_CHARS`, `codex.wire_text`), so 3 tests confirm 2 bugs on behavior alone. The third fix comes from a measurement: event fan-out across 32 subscribers dropped from 1.3 s to 0. A static AST scan listed every `async def` tool or endpoint that reads files without ever awaiting, and each one was timed against large state (20k-line diffs, 300k CodeX events, 3,600-file trees, 150k lesson lines, a 50 MB file, a 20 MB write).
-
-| Lane | Finding | Mapping | Verification |
-|---|---|---|---|
-| diff_files | **difflib is quadratic** on many similar short lines: 20k lines took 5.4 s and 40k took 21 s. The 1 MB input cap allows about 200k lines, which means minutes. It ran on the event loop and could not be interrupted | inputs over `DIFF_INLINE_CHARS` (64k) are diffed in a child process (`searchproc.diff_main`) with a `DIFF_TIMEOUT_S` (20 s) deadline. On timeout it returns an ERROR that suggests diffing smaller pieces | the loop gap stays under 0.4 s on a 14k-line diff; the child's output is identical to the inline diff |
-| osint_metrics | scanned every run log on the loop (300k events: a 0.72 s stall) | `off_loop` | |
-| event fan-out | every WebSocket pump re-ran `asdict()` + `dumps` on its own copy of each event: a 4 MB event cost about 1.3 s of loop time across 32 HUD subscribers | `emit()` serializes once and caches the text; `codex.wire_text()` returns it (the stream.gap notice still serializes itself) | one `dumps_event` call for 20 subscribers; the wire text matches the log line |
-
-Probed live under uvicorn with no change needed: 10 MB binary, 15 MB text and 100k-`{` frames, a 20k-frame flood, 80 connections against the 64-subscriber cap (17 refused), and never-reading clients during a run. There were no tracebacks, `/api/status` stayed at about 1 ms, and slots recovered. The all-tools fuzz ran on 2 more seeds and came back clean.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -356,4 +355,4 @@ Probed live under uvicorn with no change needed: 10 MB binary, 15 MB text and 10
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.50.0 checked out: 5,294 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.51.0 checked out: 5,306 passed, 99% coverage. Next: round <N+1> on <angle>."

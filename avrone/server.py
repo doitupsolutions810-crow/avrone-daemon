@@ -577,7 +577,8 @@ async def api_telemetry(request: Request, hours: float = 24, x_admin_token: str 
     require_local(request, x_admin_token)
     from .telemetry import telemetry
     from .codex import jsonable
-    return jsonable(telemetry(core(), hours * 3600))  # strict JSON whatever a sensor or log held
+    # in a thread: telemetry parses every run log; on a busy node that held the event loop
+    return jsonable(await asyncio.to_thread(telemetry, core(), hours * 3600))  # strict JSON whatever a sensor or log held
 
 
 @app.get("/api/map")
@@ -592,7 +593,7 @@ async def api_map(request: Request, hours: float = 24, format: str = "json", x_a
 @app.get("/api/runs")
 async def runs(request: Request, x_admin_token: str | None = Header(default=None)):
     require_local(request, x_admin_token)
-    return core().codex.runs()
+    return await asyncio.to_thread(core().codex.runs)  # stats every log: off the event loop
 
 
 @app.get("/api/runs/{run_id}")
@@ -627,9 +628,10 @@ async def run_bridge(run_id: str, request: Request, x_admin_token: str | None = 
         raise HTTPException(400, "bad run id")
     c = core()
     open_ = (getattr(c, "_bridges", None) or {}).get(bridge_run_id(run_id))
-    posts = open_.posts() if open_ is not None else load_posts(c.settings.data_dir, run_id)
+    posts = open_.posts() if open_ is not None else await asyncio.to_thread(load_posts, c.settings.data_dir, run_id)
     if posts is None:
-        if not c.codex.replay(run_id):
+        # replay parses the whole run log: in a thread, or a big run stalled every other request
+        if not await asyncio.to_thread(c.codex.replay, run_id, 1):
             raise HTTPException(404, f"no run {run_id!r}")
         posts = []
     return {"run_id": run_id, "count": len(posts), "posts": posts}

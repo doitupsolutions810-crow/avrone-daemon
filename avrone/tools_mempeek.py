@@ -22,6 +22,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .tools import Tool
+from .tools import off_loop
 from .tools_introspect import redact_value
 
 if TYPE_CHECKING:
@@ -117,6 +118,7 @@ def _cap(text: str) -> str:
     return text if len(text) <= PEEK_MAX_CHARS else text[:PEEK_MAX_CHARS] + "\n...[truncated]"
 
 
+@off_loop
 async def t_memory_peek(ctx: "AgentContext", args: dict[str, Any]) -> str:
     limit = _int(args.get("limit"), 10, 1, PEEK_MAX_LIMIT)
     value_chars = _int(args.get("value_chars"), 120, 0, PEEK_MAX_VALUE_CHARS)

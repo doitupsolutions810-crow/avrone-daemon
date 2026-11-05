@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.47: Round 54: event-loop stalls, docker bind paths with ':', and the tool wrapper. 5,264 tests + 19 integration
+
+21 new tests, all of which failed on v0.46. Thirteen of those call a name added this round (`off_loop`, `bind_args`), so 8 tests confirm 6 distinct bugs. This round went looking for more bugs in the same class as round 53's ReDoS, where one call freezes the whole node. A stall probe ran every tool against 200k memory lines, 200k CodeX events and 3,000 workspace files while a 20 ms ticker measured the longest event-loop gap. A multi-process memory race (8 processes, saves, loads and trims on one store) found no torn lines and no lost keys.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| event loop | `memory_recall`, `memory_list`, `memory_peek`, `lesson_recall` and `codex_search` parsed whole logs on the event loop. With 200k memory lines, `memory_recall` held it for **1.09 s per call**, pausing every agent, the API, WebSockets and fleet heartbeats | `tools.off_loop` runs an await-free tool in a worker thread (it refuses one that awaits). The worst gap dropped to **~47 ms** | a ticker keeps running during a 200k-line recall |
+| HTTP | `/api/telemetry`, `/api/runs` and `/api/runs/{id}/bridge` read run logs on the loop | `asyncio.to_thread` | each reader runs outside the loop |
+| docker | `-v SRC:DST` splits on `:`. A workspace like `/data/proj:v2` became source `/data/proj` with an invalid mode, so the container never started | `agentfs.bind_args`: `--mount type=bind,"source=…",target=…` (CSV-quoted) for `:` or `,`; newline, NUL or `"` refused; relative paths made absolute; used by `DockerRunner.start`, `docker_run` and the per-agent `/agent` volume | parsed back with the csv reader docker uses |
+| tool wrapper | a tool calling `sys.exit()` raised **SystemExit** through the agent loop, which can stop the node's event loop | `ToolRegistry.call` catches `SystemExit` with capgate both off and on | |
+| plugins | a plugin's plain `def` tool failed every call ("can't be used in 'await' expression") | `_invoke` runs sync tools in a worker thread | |
+| tool wrapper | an output or exception whose `__str__` raises escaped the wrapper | `_safe_str` gives `<TypeName>` | |
+
 ## v0.46: Round 53: catastrophic regexes, MCP wire encoding, fallback specs, python/evolve/git inputs. 5,243 tests + 19 integration
 
 15 new tests. 13 failed on v0.45; 3 of those fail only on a name or limit added this round (`wire_safe`, the 2000-char pattern cap), so 10 failing tests confirm 6 distinct bugs. The all-tools fuzz from round 52 was rerun with nested (depth 150), wide (5000 keys, 50,000 items) and 1 MB values over every tool, fleet tools included, for 4 more seeds; the process-spawning tools were probed one hostile field at a time.

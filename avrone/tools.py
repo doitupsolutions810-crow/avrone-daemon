@@ -6,7 +6,9 @@ Contract:
 """
 from __future__ import annotations
 
+import asyncio
 import difflib
+import functools
 import inspect
 import re
 from dataclasses import dataclass
@@ -19,6 +21,53 @@ if TYPE_CHECKING:
     from .trinity import AgentContext
 
 ToolFn = Callable[["AgentContext", dict[str, Any]], Awaitable[str]]
+
+
+
+def _drive_sync(fn: Any, ctx: Any, args: Any) -> Any:
+    """Run a coroutine function that never awaits to completion on this (worker) thread."""
+    coro = fn(ctx, args)
+    try:
+        coro.send(None)
+    except StopIteration as e:
+        return e.value
+    coro.close()
+    raise RuntimeError(f"{getattr(fn, '__name__', fn)} awaited; it cannot run off the event loop")
+
+
+def off_loop(fn: Any) -> Any:
+    """Run an await-free async tool in a worker thread. Tools that parse whole memory/CodeX logs
+    (100k+ JSON lines on a busy node) held the event loop for over a second per call, stalling every
+    agent, the API, WebSockets and fleet heartbeats; in a thread the loop keeps getting the GIL."""
+    @functools.wraps(fn)
+    async def wrapper(ctx: Any, args: Any) -> Any:
+        return await asyncio.to_thread(_drive_sync, fn, ctx, args)
+    wrapper.off_loop = True  # type: ignore[attr-defined]
+    return wrapper
+
+
+
+def _safe_str(v: Any) -> str:
+    try:
+        return str(v)
+    except Exception:  # noqa: BLE001 - a hostile __str__ must not escape the tool wrapper
+        return f"<{type(v).__name__}>"
+
+
+def _as_text(out: Any) -> str:
+    return out if isinstance(out, str) else _safe_str(out)
+
+
+async def _invoke(fn: Any, ctx: Any, args: Any) -> Any:
+    """Call a tool body. A plugin's plain `def` tool used to fail every call with "object str can't
+    be used in 'await' expression"; it now runs in a worker thread. A tool calling sys.exit() used to
+    raise SystemExit through the agent loop and take the node's event loop down; callers now catch it."""
+    if inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(getattr(fn, "__call__", None)):
+        return await fn(ctx, args)
+    res = await asyncio.to_thread(fn, ctx, args)
+    if inspect.isawaitable(res):  # a sync factory returning a coroutine (functools.partial etc.)
+        res = await res
+    return res
 
 
 @dataclass
@@ -192,10 +241,10 @@ class ToolRegistry:
         from . import capgate  # opt-in capability gate (AVRONE_CAPGATE); a no-op when off
         if capgate.mode() == "off":
             try:
-                out = await tool.fn(ctx, args)
-            except Exception as e:  # errors go back to the agent
-                return f"ERROR: {type(e).__name__}: {e}"
-            return out if isinstance(out, str) else str(out)
+                out = await _invoke(tool.fn, ctx, args)
+            except (Exception, SystemExit) as e:  # errors go back to the agent
+                return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
+            return _as_text(out)
         allowed, why, cap_id = capgate.gate(ctx, name)
         ddir = capgate.data_dir_of(ctx)
         caller = getattr(ctx, "name", "") or "agent"
@@ -208,10 +257,10 @@ class ToolRegistry:
             return msg
         outcome = "ok"
         try:
-            out = await tool.fn(ctx, args)
-        except Exception as e:  # errors go back to the agent
-            out, outcome = f"ERROR: {type(e).__name__}: {e}", "error"
-        out = out if isinstance(out, str) else str(out)
+            out = await _invoke(tool.fn, ctx, args)
+        except (Exception, SystemExit) as e:  # errors go back to the agent
+            out, outcome = f"ERROR: {type(e).__name__}: {_safe_str(e)}", "error"
+        out = _as_text(out)
         if ddir is not None:
             capgate.record(ddir, caller=caller, tool=name, args=args,
                            outcome=outcome if not why else f"{outcome}+audit", output=out,

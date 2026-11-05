@@ -319,8 +319,11 @@ class DockerRunner(Runner):
 
     async def start(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
-        argv = ["docker", "run", "-d", "--rm", "--name", self.container,
-                "-v", f"{self.workspace}:/workspace", "-w", "/workspace"]
+        try:
+            mount = agentfs.bind_args(self.workspace, "/workspace")
+        except agentfs.AgentFSError as e:
+            raise RuntimeError(f"Could not start environment container: {e}") from None
+        argv = ["docker", "run", "-d", "--rm", "--name", self.container, *mount, "-w", "/workspace"]
         if not self.s.allow_network:
             argv += ["--network", "none"]
         argv += [self.s.docker_image, "sleep", "infinity"]

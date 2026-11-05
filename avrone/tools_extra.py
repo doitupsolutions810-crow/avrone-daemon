@@ -35,6 +35,7 @@ import httpx
 
 from . import fsunify, memstore
 from .tools import Tool, _safe_path, runner_accepts_cwd
+from .tools import off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -582,6 +583,7 @@ def _tokens(s: str) -> set[str]:
     return {t for t in re.findall(r"[a-z0-9]+", s.lower()) if t}
 
 
+@off_loop
 async def t_memory_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     mem = load_memory(_mem_file(ctx), _mem_ns(ctx))
     if not mem:
@@ -611,6 +613,7 @@ async def t_memory_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
+@off_loop
 async def t_memory_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     """List the keys in this agent's own namespace, newest first (keys only, no values)."""
     ns = _mem_ns(ctx)
@@ -710,7 +713,12 @@ async def t_docker_run(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: cmd is required"
     ws = _ws(ctx)
     run_name = f"avrone-dr-{uuid.uuid4().hex[:12]}"
-    argv = ["docker", "run", "--rm", "--name", run_name, "-v", f"{ws}:/workspace", "-w", "/workspace"]
+    try:
+        from .agentfs import AgentFSError, bind_args
+        mount = bind_args(ws, "/workspace")
+    except AgentFSError as e:
+        return f"ERROR: {e}"
+    argv = ["docker", "run", "--rm", "--name", run_name, *mount, "-w", "/workspace"]
     if not _setting(ctx, "allow_network", True):
         argv += ["--network", "none"]
     argv += [image, "sh", "-c", cmd]
@@ -846,6 +854,7 @@ def _line1(v: Any, n: int) -> str:
     return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", str(v))[:n]
 
 
+@off_loop
 async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
     codex = getattr(ctx.core, "codex", None)
     log_dir = getattr(codex, "log_dir", None)

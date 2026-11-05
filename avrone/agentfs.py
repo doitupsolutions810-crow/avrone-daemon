@@ -128,6 +128,21 @@ def container_agent_path(workspace: Path, host_dir: Path) -> str:
     return f"{CONTAINER_WORKSPACE}/{rel.as_posix()}"
 
 
+def bind_args(host: Path | str, target: str) -> list[str]:
+    """docker args that bind-mount `host` (made absolute) at `target`.
+
+    `-v SRC:DST` splits on ':', so a workspace like /data/proj:v2 became source /data/proj with an
+    invalid mode (the container never started), and a relative path is a named volume to older
+    docker. A path with ':' or ',' now uses `--mount` with CSV quoting (what docker's parser reads);
+    a newline, NUL or '"' cannot be quoted for docker and is refused."""
+    src = str(Path(host).resolve())
+    if any(c in src for c in "\n\r\x00\""):
+        raise AgentFSError("the host path contains a newline, NUL or quote; docker cannot mount it")
+    if ":" in src or "," in src:
+        return ["--mount", f'type=bind,"source={src}",target={target}']
+    return ["-v", f"{src}:{target}"]
+
+
 def agent_volume_args(host_dir: Path) -> list[str]:
     """docker args that mount one agent dir as its private volume at /agent."""
-    return ["-v", f"{Path(host_dir).resolve()}:{CONTAINER_AGENT_MOUNT}"]
+    return bind_args(host_dir, CONTAINER_AGENT_MOUNT)

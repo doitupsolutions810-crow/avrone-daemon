@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import bridge as bridgemod
 from .tools import Tool
+from .tools import off_loop
 from .tools_researchnote import redact_text
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ def rank(recs: list[dict[str, Any]], topic: str) -> tuple[list[dict[str, Any]], 
     return [r for _, r in scored], True
 
 
+@off_loop
 async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     topic = args.get("topic")
     topic = "" if topic is None else str(topic)[:500]

@@ -44,6 +44,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AVRONE", version=__version__, lifespan=lifespan)
+
+
+from fastapi.exceptions import RequestValidationError as _RequestValidationError  # noqa: E402
+
+
+@app.exception_handler(_RequestValidationError)
+async def _validation_error(request: Request, exc: _RequestValidationError):
+    """422 that can always be encoded. FastAPI echoes the offending input back; a body of 1e999
+    (parsed as inf) or NaN made that echo itself fail strict JSON encoding, so a malformed request
+    answered 500 instead of 422 on /api/chat, /api/fleet/tell and /api/terminal; so did a lone
+    surrogate in the echoed input."""
+    import json as _json
+
+    from fastapi.responses import Response
+
+    from .codex import jsonable
+    # ensure_ascii: a lone surrogate in the echoed input (\\ud800 in the body) cannot be UTF-8
+    # encoded and raised inside JSONResponse; as an ASCII escape it is valid JSON text
+    body = _json.dumps({"detail": jsonable(exc.errors())}, ensure_ascii=True, allow_nan=False)
+    return Response(body, status_code=422, media_type="application/json")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -604,6 +624,12 @@ async def run_bridge(run_id: str, request: Request, x_admin_token: str | None = 
 @app.post("/api/terminal")
 async def terminal(body: TerminalIn, x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
+    try:  # a lone surrogate ("\\udfff" in the JSON) cannot become a command line: 422, not a 500
+        body.cmd.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(422, "cmd is not valid UTF-8 (lone surrogate)") from None
+    if "\x00" in body.cmd:
+        raise HTTPException(422, "cmd contains a NUL byte")
     res = await core().runner.run(body.cmd)
     core().codex.emit("admin", "tool.result", "Admin", tool="terminal", output=res.text()[:4000])
     return asdict(res)

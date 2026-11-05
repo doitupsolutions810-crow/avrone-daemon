@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import math
 import re
 import threading
@@ -238,8 +239,16 @@ class Codex:
             data = _scrub(data)
         data = jsonable(data)
         ev = Event(run_id=str(run_id), kind=str(kind), agent=str(agent), data=data)
-        line = dumps_event(asdict(ev)) + "\n"
-        with self._write_lock, (self.log_dir / f"{log_name(run_id)}.jsonl").open("a", encoding="utf-8") as f:
+        line = (dumps_event(asdict(ev)) + "\n").encode("utf-8", errors="backslashreplace")
+        with self._write_lock, (self.log_dir / f"{log_name(run_id)}.jsonl").open("ab+") as f:
+            # A crash mid-write leaves a last line with no newline; appending straight after it glued
+            # the NEXT event onto the torn bytes, so the first event after every crash was lost too.
+            # Start on a fresh line instead (only the torn event itself is lost). One write() call, so
+            # O_APPEND keeps concurrent writers' events whole.
+            fd = f.fileno()
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                line = b"\n" + line
             f.write(line)
         self.emitted += 1
         for q in list(self._subscribers):

@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.38: Round 45: job queue, CodeX log and HTTP API under crashes, races and junk. 4,971 tests + 5 integration
+
+Every fix below was confirmed by running the new tests against v0.37 first (22 failed), then fixing.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| codex | **a crash mid-write cost the NEXT event too**: the following emit appended straight onto the torn bytes, making one corrupt line out of two | emit opens `ab+`, checks the last byte with `pread`, and starts on a fresh line when it is torn; one `write()` per event | torn-tail restart keeps the next events; 4 processes x 200 KB events never interleave |
+| jobqueue | **`enqueue(priority=10**30)` raised OverflowError** (SQLite INTEGER is 64-bit) | priority clamped to ±2^62 | 54 hostile priority x max_attempts combinations |
+| jobqueue | **`extend(seconds=inf / "1e400" / 1e300)` wrote an infinite lease**: if that worker then died, the job could never be reaped | non-finite or junk means one normal lease; capped at 7 days (`EXTEND_MAX_S`) | 8 hostile values |
+| server | **a malformed body answered 500, not 422**: FastAPI echoes the input back, and `1e999` (inf), `NaN` or a lone surrogate made that echo fail encoding on `/api/chat`, `/api/fleet/tell`, `/api/terminal` | `RequestValidationError` handler: strict, ASCII-escaped JSON via `codex.jsonable` | 19 hostile bodies x 3 header sets x 8 POST endpoints: never 500 |
+| server | **`/api/terminal` with a lone surrogate or NUL in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched | strict-JSON 422 tests |
+| fuzz | — | 4 processes drain 150 jobs from one SQLite file with no job run twice; expired-lease owner fenced from complete/fail/extend/release; poison job goes dead; corrupt rows never kill `claim()`; `replay()`/`runs()` survive binary, 3 MB, deeply nested, directory and symlink logs; `emit()` with NaN, cycles, a `repr` bomb, surrogates always writes one JSON line | `tests/test_round45_queue_codex_edges.py` (86 tests) |
+
 ## v0.37: Round 44: filesystem escapes, hostile agent packs, several processes on one data dir. 4,885 tests + 5 integration
 
 All six process bugs below were confirmed by running the new tests against v0.36 first (6 failed), then fixed.

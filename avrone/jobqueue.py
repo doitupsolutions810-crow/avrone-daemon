@@ -22,6 +22,8 @@ log = logging.getLogger("avrone.jobqueue")
 
 RESULT_MAX = 100000
 ERROR_MAX = 4000
+PRIORITY_MAX = 2**62
+EXTEND_MAX_S = 7 * 86400  # one heartbeat can never park a job for longer than this
 
 
 def _encode_result(result: Any) -> str:
@@ -121,6 +123,8 @@ class JobQueue:
             prio = int(priority)
         except (TypeError, ValueError, OverflowError):
             prio = 0
+        # SQLite INTEGER is 64-bit: a priority like 10**30 used to raise OverflowError out of enqueue()
+        prio = max(-PRIORITY_MAX, min(PRIORITY_MAX, prio))
         try:
             tries = max(1, min(int(max_attempts), 1000))
         except (TypeError, ValueError, OverflowError):
@@ -202,7 +206,15 @@ class JobQueue:
 
     async def extend(self, jid: str, token: str, seconds: float | None = None) -> bool:
         """Heartbeat: push a running job's lease out. False when the lease is already lost."""
-        until = time.time() + (self.lease_s if seconds is None else max(1.0, float(seconds)))
+        # seconds=inf (or "1e400", 1e300) used to write an infinite lease: the job could never be
+        # reaped again if its worker then died. NaN/junk now means "one normal lease".
+        try:
+            secs = self.lease_s if seconds is None else float(seconds)
+        except (TypeError, ValueError, OverflowError):
+            secs = self.lease_s
+        if not math.isfinite(secs):
+            secs = self.lease_s
+        until = time.time() + max(1.0, min(EXTEND_MAX_S, secs))
         cur = await self._run(lambda: self._db.execute(
             "UPDATE jobs SET lease_until=?, updated=? WHERE id=? AND status='running' AND token=?",
             (until, time.time(), jid, token)))

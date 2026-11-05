@@ -177,7 +177,11 @@ def test_serve_roundtrip_batch_parse_error_and_notifications():
     ])
     by_id = {m["id"]: m for m in msgs}
     assert by_id[1]["result"]["serverInfo"]["name"] == "avrone"
-    assert by_id[None]["error"]["code"] == -32700
+    # Parse failures and non-object JSON-RPC values both use a null id, so
+    # assert their distinct protocol error codes without relying on arrival order.
+    null_id_errors = [m.get("error", {}).get("code") for m in msgs if m.get("id") is None]
+    assert -32700 in null_id_errors
+    assert -32600 in null_id_errors
     assert by_id[2]["result"] == {}
     assert by_id[3]["error"]["code"] == -32601
     assert by_id[5]["result"]["content"][0]["text"] == "squad:t"

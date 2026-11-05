@@ -88,7 +88,7 @@ def test_seeded_measurement_fuzz_always_round_trips():
     ("human_root", "forged-root"),
     ("provenance_depth", 1),
 ])
-def test_rehashed_identity_mutation_still_cannot_forge_measurements(field, value):
+def test_identity_mutation_without_digest_refresh_is_rejected(field, value):
     record = make()
     original_digest = record["digest"]
     changed = copy.deepcopy(record)

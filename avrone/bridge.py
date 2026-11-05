@@ -244,6 +244,10 @@ class Bridge:
                     head = json.dumps({"tombstones": list(self._evicted)}) + "\n" if self._evicted else ""
                     with tmp.open("w", encoding="utf-8") as f:
                         f.write(head + "".join(json.dumps(r, default=str) + "\n" for r in self._posts.values()))
+                        # durable before the rename: a power cut after os.replace could otherwise leave
+                        # a zero-length journal (delayed allocation) and lose every post of the run
+                        f.flush()
+                        os.fsync(f.fileno())
                     os.replace(tmp, self.path)
                     self._lines = len(self._posts)
         except OSError:
@@ -266,6 +270,16 @@ class Bridge:
         refs_l = _refs(list(refs) if refs is not None and not isinstance(refs, str) else refs)
         with self._lock:
             unknown = [r for r in refs_l if r not in self._posts]
+            if unknown and self.path is not None:
+                # another PROCESS on this data dir (a second worker, the MCP server) may have posted
+                # it: this Bridge's ring only learns of those at compaction, so a reply to a sibling
+                # process's post was refused as "unknown post id". Re-read the journal and recheck.
+                try:
+                    with self._file_lock():
+                        self._replay(self.path.read_text(encoding="utf-8", errors="replace"))
+                except OSError:
+                    pass
+                unknown = [r for r in refs_l if r not in self._posts]
             if unknown:
                 raise BridgeError(f"unknown post id(s): {', '.join(unknown[:5])}")
             if require_refs and not refs_l:

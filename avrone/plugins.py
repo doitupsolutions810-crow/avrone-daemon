@@ -36,14 +36,24 @@ def plugins_dir() -> Path:
 
 def _run_register(name: str, source: str, register: Callable[..., Any],
                   registry: ToolRegistry, settings: Any) -> dict[str, Any]:
-    before = set(registry.names())
+    before = {n: registry.get(n) for n in registry.names()}
     try:
         register(registry, settings)
         error = None
-    except Exception as e:
+    except (Exception, SystemExit) as e:  # sys.exit() inside register() used to take the node down
         error = f"{type(e).__name__}: {e}"
         log.warning("plugin %s register() failed: %s\n%s", name, error, traceback.format_exc())
-    added = sorted(set(registry.names()) - before)
+    # A plugin may ADD tools, never silently REPLACE one that was already there (a builtin such as
+    # shell/read_file, or another plugin's): the replacement kept source "builtin", so nothing in
+    # /api/tools, capgate receipts or the codex showed that the tool now ran third-party code.
+    replaced = sorted(n for n, t in before.items() if registry.get(n) is not t)
+    for n in replaced:
+        registry.register(before[n])  # put the original back (also undoes an unregister)
+    added = sorted(set(registry.names()) - set(before))
+    # tools added before a register() failure are kept (documented, tests/test_plugins_edges.py)
+    if replaced:
+        msg = f"refused to replace existing tool(s): {', '.join(replaced)}"
+        error = f"{error}; {msg}" if error else msg
     for n in added:
         t = registry.get(n)
         if t is not None and t.source == "builtin":
@@ -86,7 +96,7 @@ def load_plugins(registry: ToolRegistry, settings: Any = None,
                 register = getattr(module, "register", None)
                 if not callable(register):
                     raise AttributeError("plugin has no register(registry, settings) function")
-            except Exception as e:
+            except (Exception, SystemExit) as e:  # a top-level sys.exit() must not kill the node
                 log.warning("plugin %s failed to import: %s", name, e)
                 reports.append({"name": name, "source": str(p), "tools": [], "error": f"{type(e).__name__}: {e}"})
                 continue
@@ -105,7 +115,7 @@ def load_plugins(registry: ToolRegistry, settings: Any = None,
                 register = obj if callable(obj) and not hasattr(obj, "register") else getattr(obj, "register", None)
                 if not callable(register):
                     raise AttributeError("entry point has no register(registry, settings)")
-            except Exception as e:
+            except (Exception, SystemExit) as e:
                 reports.append({"name": ep.name, "source": src, "tools": [], "error": f"{type(e).__name__}: {e}"})
                 continue
             reports.append(_run_register(ep.name, src, register, registry, settings))

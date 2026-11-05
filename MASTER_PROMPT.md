@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.38.0)
+# AVRONE MASTER PROMPT (v0.39.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~4,971 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~4,987 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -98,7 +98,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 210 test files, offline by default
+├── tests/                  # 211 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -311,6 +311,20 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.39: Round 46: live WebSocket feed, bridge journal across processes, hostile plugins, non-ASCII tokens. 4,987 tests + 5 integration
+
+Every fix below was confirmed by running the new tests against v0.38 first, then fixing.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| server | **a non-ASCII admin token (latin-1 header byte, `%ff`, `é`) answered 500, not 401, on every admin route, and crashed the `/ws/events` handler**: `hmac.compare_digest` raises TypeError on non-ASCII str | `token_eq()` compares UTF-8 bytes, constant time, never raises | 401 for 3 non-ASCII tokens; WS refused before accept |
+| capgate | the same TypeError on a non-ASCII `sig` in a hand-edited policy or receipt file | byte comparison in `check_sig` and `verify_chain` | refused as "bad signature" |
+| bridge | **a reply to a post made by ANOTHER process was refused** ("unknown post id"): each process's ring only learned sibling posts at compaction | on unknown refs, re-read the journal under the file lock and recheck; a truly unknown id is still refused | cross-process reply test |
+| bridge | compaction renamed an un-fsynced temp file over the journal (power cut could leave it empty) | `fsync` before `os.replace` | 4 forked processes x 150 posts through compaction: all 600 kept |
+| plugins | **`sys.exit()` at import or inside `register()` killed the node** (`SystemExit` is not an `Exception`) | caught and reported like any other plugin failure | exit-at-import and exit-in-register reports; good plugins still load |
+| plugins | **a plugin could silently replace an existing tool** (`shell`, `read_file`, another plugin's): the replacement kept `source="builtin"`, so `/api/tools`, capgate receipts and the codex never showed third-party code ran | originals restored, report says `refused to replace existing tool(s): ...`; new tools still added and tagged `plugin:<name>`; partial tools before a `register()` error are still kept (existing contract) | hijack and plugin-vs-plugin tests |
+| fuzz | — | WS: binary, 500 KB, 50 junk frames per client x 5 clients, the stream still delivers and every subscriber slot is freed; hostile event payloads arrive as strict JSON. Bridge: torn/junk journal lines, 600 seeded hostile remote posts (NaN/inf ts, 50 KB text, cycles, overwrite attempts). Plugins: binary, syntax error, no/uncallable `register`, infinite recursion, package raising on import | `tests/test_round46_ws_bridge_plugin_edges.py` |
+
 ## v0.38: Round 45: job queue, CodeX log and HTTP API under crashes, races and junk. 4,971 tests + 5 integration
 
 Every fix below was confirmed by running the new tests against v0.37 first (22 failed), then fixing.
@@ -321,7 +335,7 @@ Every fix below was confirmed by running the new tests against v0.37 first (22 f
 | jobqueue | **`enqueue(priority=10**30)` raised OverflowError** (SQLite INTEGER is 64-bit) | priority clamped to ±2^62 | 54 hostile priority x max_attempts combinations |
 | jobqueue | **`extend(seconds=inf / "1e400" / 1e300)` wrote an infinite lease**: if that worker then died, the job could never be reaped | non-finite or junk means one normal lease; capped at 7 days (`EXTEND_MAX_S`) | 8 hostile values |
 | server | **a malformed body answered 500, not 422**: FastAPI echoes the input back, and `1e999` (inf), `NaN` or a lone surrogate made that echo fail encoding on `/api/chat`, `/api/fleet/tell`, `/api/terminal` | `RequestValidationError` handler: strict, ASCII-escaped JSON via `codex.jsonable` | 19 hostile bodies x 3 header sets x 8 POST endpoints: never 500 |
-| server | **`/api/terminal` with a lone surrogate or NUL in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched | strict-JSON 422 tests |
+| server | **`/api/terminal` with a lone surrogate in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched (a NUL keeps the v0.26 contract: exit -1 result; v0.39 restored it) | strict-JSON 422 tests |
 | fuzz | — | 4 processes drain 150 jobs from one SQLite file with no job run twice; expired-lease owner fenced from complete/fail/extend/release; poison job goes dead; corrupt rows never kill `claim()`; `replay()`/`runs()` survive binary, 3 MB, deeply nested, directory and symlink logs; `emit()` with NaN, cycles, a `repr` bomb, surrogates always writes one JSON line | `tests/test_round45_queue_codex_edges.py` (86 tests) |
 
 ## v0.37: Round 44: filesystem escapes, hostile agent packs, several processes on one data dir. 4,885 tests + 5 integration
@@ -336,16 +350,6 @@ All six process bugs below were confirmed by running the new tests against v0.36
 | paths | — | `agentfs.confine` and `tools._safe_path` vs seeded hostile paths (`..` variants, `~`, drive letters, UNC, NUL, full-width dots, RTL marks, lone surrogates) and real symlinks (dir link out, link to `/`, relative file link, self loop) | never resolves outside the root |
 | agentpack | — | 26 booby-trapped bundles (symlink, hardlink, device, FIFO, dir members, traversal, absolute, backslash, drive, control chars, case and NFC collisions, file-vs-dir, duplicate manifest, unlisted file, wrong hash, setuid mode, bad agent id/origin, memory tamper, not gzip, empty, truncated) + a 64 MB gzip bomb (refused in under 5 s, never inflated) + random byte flips | only `PackError`, never anything else |
 
-## v0.36: Round 43: crash, multi-process and hostile-peer edges. 4,843 tests + 5 integration
-
-| Lane | Finding | Mapping | Verification |
-|---|---|---|---|
-| capgate | **two processes sharing a data dir forked the receipt chain** (thread lock only), which `verify_chain` then reported as tampering | `flock` on `receipts.jsonl.lock` across threads and processes | 4 forked processes x 60 receipts: one linked chain of 240 |
-| capgate | **a crash mid-append broke the chain forever**: the next receipt glued onto the torn bytes | torn tail moved to `receipts.jsonl.torn` (kept as evidence) and cut before the next append | torn-tail and torn-only-file tests |
-| capgate | deleting the LAST receipts was invisible (what remains still links) | signed head pointer `receipts.jsonl.head` (count + newest hash); verify reports `truncated`, `head mismatch (chain replaced)`, or an unsigned/forged head; a lost head is recounted | 5 tests |
-| gateway | **a `tool_call_id` with a lone surrogate crashed the request locally**; one like `"\x00\n"` passed the empty check and went out as `"\n"` | id cleaned (surrogates, NUL), capped at 256 and stripped before the emptiness check | seeded `sanitize_messages` contract fuzz (found by the 6,000-iteration soak) |
-| fuzz | — | `test_round43_crash_peer_edges.py`: memstore merge vs hostile peer payloads (stats add up, caps hold, old never beats newest), `extract_choice` raises only what `Gateway.chat` catches, Retry-After/temperature never NaN or negative, 300-line junk stream into the MCP server (strict JSON-RPC replies, still answers the last line) | 20 tests; `FUZZ_ITERS=6000` soak green |
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -357,4 +361,4 @@ All six process bugs below were confirmed by running the new tests against v0.36
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.38.0 checked out: 4,971 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.39.0 checked out: 4,987 passed, 99% coverage. Next: round <N+1> on <angle>."

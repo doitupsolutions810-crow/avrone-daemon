@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.39: Round 46: live WebSocket feed, bridge journal across processes, hostile plugins, non-ASCII tokens. 4,987 tests + 5 integration
+
+Every fix below was confirmed by running the new tests against v0.38 first, then fixing.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| server | **a non-ASCII admin token (latin-1 header byte, `%ff`, `é`) answered 500, not 401, on every admin route, and crashed the `/ws/events` handler**: `hmac.compare_digest` raises TypeError on non-ASCII str | `token_eq()` compares UTF-8 bytes, constant time, never raises | 401 for 3 non-ASCII tokens; WS refused before accept |
+| capgate | the same TypeError on a non-ASCII `sig` in a hand-edited policy or receipt file | byte comparison in `check_sig` and `verify_chain` | refused as "bad signature" |
+| bridge | **a reply to a post made by ANOTHER process was refused** ("unknown post id"): each process's ring only learned sibling posts at compaction | on unknown refs, re-read the journal under the file lock and recheck; a truly unknown id is still refused | cross-process reply test |
+| bridge | compaction renamed an un-fsynced temp file over the journal (power cut could leave it empty) | `fsync` before `os.replace` | 4 forked processes x 150 posts through compaction: all 600 kept |
+| plugins | **`sys.exit()` at import or inside `register()` killed the node** (`SystemExit` is not an `Exception`) | caught and reported like any other plugin failure | exit-at-import and exit-in-register reports; good plugins still load |
+| plugins | **a plugin could silently replace an existing tool** (`shell`, `read_file`, another plugin's): the replacement kept `source="builtin"`, so `/api/tools`, capgate receipts and the codex never showed third-party code ran | originals restored, report says `refused to replace existing tool(s): ...`; new tools still added and tagged `plugin:<name>`; partial tools before a `register()` error are still kept (existing contract) | hijack and plugin-vs-plugin tests |
+| fuzz | — | WS: binary, 500 KB, 50 junk frames per client x 5 clients, the stream still delivers and every subscriber slot is freed; hostile event payloads arrive as strict JSON. Bridge: torn/junk journal lines, 600 seeded hostile remote posts (NaN/inf ts, 50 KB text, cycles, overwrite attempts). Plugins: binary, syntax error, no/uncallable `register`, infinite recursion, package raising on import | `tests/test_round46_ws_bridge_plugin_edges.py` |
+
 ## v0.38: Round 45: job queue, CodeX log and HTTP API under crashes, races and junk. 4,971 tests + 5 integration
 
 Every fix below was confirmed by running the new tests against v0.37 first (22 failed), then fixing.
@@ -91,7 +105,7 @@ Every fix below was confirmed by running the new tests against v0.37 first (22 f
 | jobqueue | **`enqueue(priority=10**30)` raised OverflowError** (SQLite INTEGER is 64-bit) | priority clamped to ±2^62 | 54 hostile priority x max_attempts combinations |
 | jobqueue | **`extend(seconds=inf / "1e400" / 1e300)` wrote an infinite lease**: if that worker then died, the job could never be reaped | non-finite or junk means one normal lease; capped at 7 days (`EXTEND_MAX_S`) | 8 hostile values |
 | server | **a malformed body answered 500, not 422**: FastAPI echoes the input back, and `1e999` (inf), `NaN` or a lone surrogate made that echo fail encoding on `/api/chat`, `/api/fleet/tell`, `/api/terminal` | `RequestValidationError` handler: strict, ASCII-escaped JSON via `codex.jsonable` | 19 hostile bodies x 3 header sets x 8 POST endpoints: never 500 |
-| server | **`/api/terminal` with a lone surrogate or NUL in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched | strict-JSON 422 tests |
+| server | **`/api/terminal` with a lone surrogate in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched (a NUL keeps the v0.26 contract: exit -1 result; v0.39 restored it) | strict-JSON 422 tests |
 | fuzz | — | 4 processes drain 150 jobs from one SQLite file with no job run twice; expired-lease owner fenced from complete/fail/extend/release; poison job goes dead; corrupt rows never kill `claim()`; `replay()`/`runs()` survive binary, 3 MB, deeply nested, directory and symlink logs; `emit()` with NaN, cycles, a `repr` bomb, surrogates always writes one JSON line | `tests/test_round45_queue_codex_edges.py` (86 tests) |
 
 ## v0.37: Round 44: filesystem escapes, hostile agent packs, several processes on one data dir. 4,885 tests + 5 integration

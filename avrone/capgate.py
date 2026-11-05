@@ -148,7 +148,8 @@ def check_sig(cap: Any) -> tuple[bool, str]:
     if not isinstance(cap, dict) or not isinstance(cap.get("sig"), str):
         return False, "not a capability"
     body = {k: v for k, v in cap.items() if k != "sig"}
-    if not hmac.compare_digest(_mac(body), cap["sig"]):
+    # bytes: a non-ASCII sig in a hand-edited policy made compare_digest raise TypeError
+    if not hmac.compare_digest(_mac(body).encode(), cap["sig"].encode("utf-8", "surrogatepass")):
         return False, "bad signature"
     return True, ""
 
@@ -302,7 +303,8 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
                     return {"ok": False, "count": n, "line": i, "error": "broken link (line removed or reordered)"}
                 if _digest(body) != rec["hash"]:
                     return {"ok": False, "count": n, "line": i, "error": "hash mismatch (line edited)"}
-                if not hmac.compare_digest(_mac({**body, "hash": rec["hash"]}), str(rec["sig"])):
+                if not hmac.compare_digest(_mac({**body, "hash": rec["hash"]}).encode(),
+                                           str(rec["sig"]).encode("utf-8", "surrogatepass")):
                     return {"ok": False, "count": n, "line": i, "error": "bad signature (forged or wrong key)"}
             except (ValueError, KeyError, TypeError):
                 return {"ok": False, "count": n, "line": i, "error": "unreadable line"}
@@ -312,7 +314,7 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
         try:
             h = json.loads(hp.read_text())
             body = {"count": int(h["count"]), "head": str(h["head"])}
-            signed = hmac.compare_digest(_mac(body), str(h.get("sig")))
+            signed = hmac.compare_digest(_mac(body).encode(), str(h.get("sig")).encode("utf-8", "surrogatepass"))
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             signed, body = False, {}
         if not signed:

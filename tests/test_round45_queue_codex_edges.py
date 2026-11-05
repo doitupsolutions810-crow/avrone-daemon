@@ -273,9 +273,9 @@ def test_validation_errors_are_strict_json_422(body):
         json.loads(r.content.decode("ascii"))
 
 
-def test_terminal_nul_command_is_422():
+def test_terminal_nul_command_is_a_result_not_500():
     from fastapi.testclient import TestClient
     from avrone.server import app
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.post("/api/terminal", json={"cmd": "echo a\x00b"}, headers={"x-admin-token": "test-token"})
-        assert r.status_code == 422
+        assert r.status_code == 200 and r.json()["exit_code"] == -1 and "NUL" in r.json()["stderr"]

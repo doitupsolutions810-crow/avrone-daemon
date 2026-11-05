@@ -1,6 +1,8 @@
 """Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD)."""
 from __future__ import annotations
 
+from typing import Any
+
 import hmac
 
 import asyncio
@@ -71,10 +73,20 @@ def core() -> TrinityCore:
     return state["core"]
 
 
+def token_eq(given: Any, expected: str) -> bool:
+    """Constant-time token check that never raises. hmac.compare_digest refuses str with non-ASCII
+    characters (TypeError): a header or ?token= carrying one (latin-1 bytes, %ff, an emoji) turned a
+    refused request into a 500 on every admin route and crashed the /ws/events handler."""
+    if given is None or not expected:
+        return False
+    a = str(given).encode("utf-8", "surrogatepass")
+    return hmac.compare_digest(a, expected.encode("utf-8", "surrogatepass"))
+
+
 def require_admin(token: str | None) -> None:
     if not settings.admin_token:
         raise HTTPException(403, "Admin access is off. Set AVRONE_ADMIN_TOKEN to enable it.")
-    if token is None or not hmac.compare_digest(str(token), settings.admin_token):
+    if not token_eq(token, settings.admin_token):
         raise HTTPException(401, "Bad admin token")
 
 
@@ -97,7 +109,7 @@ def caller_allowed(host: str | None, token: str | None) -> bool:
     policy = access_policy()
     if policy == "all":
         return True
-    if settings.admin_token and token is not None and hmac.compare_digest(str(token), settings.admin_token):
+    if settings.admin_token and token_eq(token, settings.admin_token):
         return True
     return policy == "loopback" and (host or "") in LOOPBACK_HOSTS
 
@@ -628,8 +640,8 @@ async def terminal(body: TerminalIn, x_admin_token: str | None = Header(default=
         body.cmd.encode("utf-8")
     except UnicodeEncodeError:
         raise HTTPException(422, "cmd is not valid UTF-8 (lone surrogate)") from None
-    if "\x00" in body.cmd:
-        raise HTTPException(422, "cmd contains a NUL byte")
+    # a NUL is NOT rejected here: the runner answers it as a result (exit -1, "NUL" in stderr),
+    # the v0.26 contract (tests/test_robust_v026_api.py)
     res = await core().runner.run(body.cmd)
     core().codex.emit("admin", "tool.result", "Admin", tool="terminal", output=res.text()[:4000])
     return asdict(res)

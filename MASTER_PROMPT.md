@@ -65,6 +65,7 @@ Avrone/
 │   ├── gateway.py               Gateway: route model calls across several providers with fallback + circuit breaking.
 │   ├── governor.py              Health / thermal governor: adapt squad parallelism to the node's condition.
 │   ├── greatscale.py            Great Scale bridge: AVRONE peer of doitupsolutions810-crow/great-scale (public/residual.cjs).
+│   ├── integration_contract.py  Portable, deterministic evidence envelope for AVRONE ↔ Great Scale integrations.
 │   ├── jobqueue.py              Durable job queue (SQLite, WAL): work survives a restart and retries on failure.
 │   ├── llm.py                   Model client. Talks to any OpenAI-compatible /chat/completions endpoint.
 │   ├── mcp_client.py            Dependency-free MCP (Model Context Protocol) client.

@@ -34,6 +34,8 @@ def test_memstore_check_refusals(tmp_path):
 
 def test_governor_readers(monkeypatch, tmp_path):
     monkeypatch.setattr(governor, "_psutil", lambda: None)
+    # Keep this host-memory fallback test independent of the runner's real cgroup limits.
+    monkeypatch.setattr(governor, "cgroup_mem_pct", lambda root=None: None)
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal: 0 kB\n")
     real_open = open

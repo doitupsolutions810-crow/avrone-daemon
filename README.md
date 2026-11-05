@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.61: Round 68: fleet replay cache O(1) per request (journal). 5,438 tests + 19 integration
+
+- **Problem:** `FleetManager.verify()` runs synchronously inside the async gateway handlers. Every accepted request pruned the whole nonce dict and rewrote `fleet_nonces.json` in full, so its cost grew with the cache: 0.8 ms per request at 1k live nonces, 8 ms at 10k, 42 ms at 50k and 85 ms near the 100k cap. A busy or hostile signed peer could saturate the event loop at roughly 100 requests per second.
+- **Fix:** once more than `NONCE_JOURNAL_MIN` (1024) nonces are live, an accepted request appends one `<nonce> <expiry>` line to `fleet_nonces.json.journal`. The journal is compacted into the snapshot when it grows past half the live set, which keeps the amortized cost O(1). Expired entries are pruned at most once a second, and an expired nonce that has not been pruned yet no longer blocks reuse. Measured: 0.04 ms per request at 10k, 50k and 99k live nonces. Small caches keep the old full-snapshot path.
+- **Replay protection is unchanged:** instances that share a data dir read each other's journal tail under the same flock. A restart loads the snapshot plus the journal. Compaction loses no nonce. Torn, junk and NaN journal lines are ignored. A full cache still refuses new requests rather than evicting a live nonce.
+- **Tests:** `tests/test_round68_nonce_journal.py`, 7 tests; 5 fail on v0.60.
+
 ## v0.60: Round 67: symlink loops in agent and workspace paths. 5,431 tests + 19 integration
 
 - **Symlink loops leaked host paths:** on Python 3.12, `Path.resolve()` raises

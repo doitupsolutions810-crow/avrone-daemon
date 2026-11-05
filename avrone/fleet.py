@@ -127,6 +127,11 @@ NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 # Replay-cache bound: past this many live nonces new requests are refused (fail closed) rather than
 # evicting a live nonce, which would re-open replay of that request.
 NONCE_CACHE_MAX = 100_000
+# Past this many live nonces each accepted request appends one line to fleet_nonces.json.journal
+# instead of rewriting the whole snapshot, and expired nonces are pruned at most once a second.
+# Before (round 68): every request pruned the dict and rewrote the JSON on the event loop, O(n):
+# 8 ms per request at 10k live nonces, 85 ms near the cap, so the gateway saturated at ~100 rps.
+NONCE_JOURNAL_MIN = 1024
 # Peer registry bounds: a token holder (or allow-all fleet) could register unlimited node ids, each
 # rewriting fleet.json (quadratic), with megabytes of capabilities/presence per record.
 DEFAULT_MAX_NODES, HARD_MAX_NODES = 256, 4096
@@ -801,9 +806,11 @@ class FleetManager:
     # ------------------------------------------------------------ replay cache persistence
     def _load_nonces(self) -> dict[str, float]:
         p = self._nonce_path
-        if not p.exists():
-            return {}
         now = time.time()
+        if not p.exists():
+            out: dict[str, float] = {}
+            self._read_journal(out, now, from_start=True)
+            return out
         try:
             raw = json.loads(p.read_text())
             if not isinstance(raw, dict):
@@ -811,6 +818,7 @@ class FleetManager:
             out = {k: float(v) for k, v in raw.items()
                    if isinstance(k, str) and NONCE_RE.fullmatch(k) and isinstance(v, (int, float))
                    and not isinstance(v, bool) and float(v) >= now}
+            self._read_journal(out, now, from_start=True)
             return dict(list(out.items())[:NONCE_CACHE_MAX])
         except (OSError, ValueError, TypeError, RecursionError):
             self._boot_guard = now
@@ -845,13 +853,16 @@ class FleetManager:
         try:
             st = p.stat()
         except OSError:
+            self._read_journal(self._nonces, now)
             return
         sig = (st.st_mtime_ns, st.st_size)
         if sig == getattr(self, "_nonce_sig", None):
+            self._read_journal(self._nonces, now)
             return
         try:
             raw = json.loads(p.read_text())
         except (OSError, ValueError, RecursionError):
+            self._read_journal(self._nonces, now)
             return  # unreadable now: keep ours; our save rewrites it whole
         if isinstance(raw, dict):
             for k, v in raw.items():
@@ -859,6 +870,62 @@ class FleetManager:
                         and not isinstance(v, bool) and v == v and float(v) >= now:
                     self._nonces[k] = max(float(v), self._nonces.get(k, 0.0))
         self._nonce_sig = sig
+        self._read_journal(self._nonces, now, from_start=True)  # a new snapshot: re-read what follows it
+
+    def _journal_path(self) -> Path | None:
+        p = getattr(self, "_nonce_path", None)
+        return None if p is None else p.with_name(p.name + ".journal")
+
+    def _read_journal(self, into: dict[str, float], now: float, from_start: bool = False) -> None:
+        """Fold journal lines ("<nonce> <expiry>") appended since our last read into `into`."""
+        jp = self._journal_path()
+        if jp is None:
+            return
+        off = 0 if from_start else getattr(self, "_journal_off", 0)
+        try:
+            size = jp.stat().st_size
+            if size < off:  # someone compacted (truncated) it: read it whole again
+                off = 0
+            if size == off:
+                self._journal_off = off
+                return
+            with open(jp, "rb") as fh:
+                fh.seek(off)
+                chunk = fh.read(size - off)
+        except OSError:
+            return
+        end = chunk.rfind(b"\n") + 1  # only whole lines; a torn tail is re-read next time
+        for line in chunk[:end].split(b"\n"):
+            k, _, v = line.decode("ascii", "replace").partition(" ")
+            if not NONCE_RE.fullmatch(k):
+                continue
+            try:
+                exp = float(v)
+            except ValueError:
+                continue
+            if exp == exp and exp >= now:
+                into[k] = max(exp, into.get(k, 0.0))
+        self._journal_off = off + end
+        self._journal_lines = (0 if off == 0 else getattr(self, "_journal_lines", 0)) + chunk[:end].count(b"\n")
+
+    def _persist_nonce(self, nonce: str, exp: float) -> None:
+        """Small cache: rewrite the snapshot (as before). Big cache: append one journal line, and
+        compact into the snapshot once the journal outgrows the live set. Caller holds the locks."""
+        jp = self._journal_path()
+        if jp is None or len(self._nonces) <= NONCE_JOURNAL_MIN:
+            self._save_nonces()
+            return
+        if getattr(self, "_journal_lines", 0) >= max(NONCE_JOURNAL_MIN, len(self._nonces) // 2):
+            self._save_nonces()
+            return
+        try:
+            with open(jp, "ab") as fh:
+                fh.write(f"{nonce} {exp!r}\n".encode("ascii"))
+                self._journal_off = fh.tell()
+            self._journal_lines = getattr(self, "_journal_lines", 0) + 1
+        except OSError as e:
+            log.debug("could not append to replay journal: %s", e)
+            self._save_nonces()
 
     def _save_nonces(self) -> None:
         """Atomic, best effort: a failed write never refuses a valid request (the boot guard covers
@@ -872,6 +939,11 @@ class FleetManager:
             os.replace(tmp, p)
             st = p.stat()
             self._nonce_sig = (st.st_mtime_ns, st.st_size)
+            jp = self._journal_path()
+            if jp is not None and getattr(self, "_journal_off", 0):
+                with open(jp, "r+b") as fh:  # everything in it was merged into the snapshot we wrote
+                    fh.truncate(0)
+            self._journal_off, self._journal_lines = 0, 0
         except OSError as e:
             log.debug("could not persist replay cache: %s", e)
             with contextlib.suppress(OSError):
@@ -920,13 +992,20 @@ class FleetManager:
         # replayed to the OTHER worker ran twice, and each save overwrote the other's nonces.
         with self._lock, self._nonce_file_lock():
             self._merge_disk_nonces(now)
-            self._nonces = {k: v for k, v in self._nonces.items() if now <= v}
-            if nonce in self._nonces:
+            big = len(self._nonces) > NONCE_JOURNAL_MIN
+            if not big or now >= getattr(self, "_next_prune", 0.0) or now < getattr(self, "_next_prune", 0.0) - 2:
+                self._nonces = {k: v for k, v in self._nonces.items() if now <= v}
+                self._next_prune = now + 1.0
+            seen = self._nonces.get(nonce)
+            if seen is not None and now <= seen:
                 raise GatewayRefused("replay", "replayed request (nonce already seen)")
             if len(self._nonces) >= NONCE_CACHE_MAX:
-                raise GatewayRefused("replay", "replay cache full; refusing new requests until nonces expire")
-            self._nonces[nonce] = max(ts_i + WINDOW_S, now + 2 * WINDOW_S)
-            self._save_nonces()
+                self._nonces = {k: v for k, v in self._nonces.items() if now <= v}
+                if len(self._nonces) >= NONCE_CACHE_MAX:
+                    raise GatewayRefused("replay", "replay cache full; refusing new requests until nonces expire")
+            exp = max(ts_i + WINDOW_S, now + 2 * WINDOW_S)
+            self._nonces[nonce] = exp
+            self._persist_nonce(nonce, exp)
 
     def allowed(self, node_id: str) -> bool:
         if not self.allow:

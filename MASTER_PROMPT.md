@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.60.0)
+# AVRONE MASTER PROMPT (v0.61.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,431 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,438 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 233 test files, offline by default
+├── tests/                  # 234 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +312,13 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.61: Round 68: fleet replay cache O(1) per request (journal). 5,438 tests + 19 integration
+
+- **Problem:** `FleetManager.verify()` runs synchronously inside the async gateway handlers. Every accepted request pruned the whole nonce dict and rewrote `fleet_nonces.json` in full, so its cost grew with the cache: 0.8 ms per request at 1k live nonces, 8 ms at 10k, 42 ms at 50k and 85 ms near the 100k cap. A busy or hostile signed peer could saturate the event loop at roughly 100 requests per second.
+- **Fix:** once more than `NONCE_JOURNAL_MIN` (1024) nonces are live, an accepted request appends one `<nonce> <expiry>` line to `fleet_nonces.json.journal`. The journal is compacted into the snapshot when it grows past half the live set, which keeps the amortized cost O(1). Expired entries are pruned at most once a second, and an expired nonce that has not been pruned yet no longer blocks reuse. Measured: 0.04 ms per request at 10k, 50k and 99k live nonces. Small caches keep the old full-snapshot path.
+- **Replay protection is unchanged:** instances that share a data dir read each other's journal tail under the same flock. A restart loads the snapshot plus the journal. Compaction loses no nonce. Torn, junk and NaN journal lines are ignored. A full cache still refuses new requests rather than evicting a live nonce.
+- **Tests:** `tests/test_round68_nonce_journal.py`, 7 tests; 5 fail on v0.60.
+
 ## v0.60: Round 67: symlink loops in agent and workspace paths. 5,431 tests + 19 integration
 
 - **Symlink loops leaked host paths:** on Python 3.12, `Path.resolve()` raises
@@ -347,25 +354,6 @@ landed and the suite is green. End with what is still open.
 - Tests: `tests/test_round66_docker_restart_race.py` (3; the stampede test fails on v0.58) and
   `tests/test_round66_evolve_worktree_race.py` (14; 10 fail on v0.58).
 
-## v0.58: Round 65: job queue retention and backlog cap; queue_submit junk input; flaky stall tests made robust. 5,402 tests + 19 integration
-
-- **No retention:** finished jobs (done/dead, each up to 100 KB of result) were never deleted, so `jobs.db`
-  only grew. `JobQueue.prune()` drops finished jobs older than `AVRONE_QUEUE_RETAIN_S` (7 days), then all
-  but the newest `AVRONE_QUEUE_KEEP_FINISHED` (5000). It runs every 100 enqueues and never touches
-  queued or running jobs. New index `jobs_finished(status, updated)`.
-- **No backlog cap:** an agent in a loop could queue without bound. `enqueue()` raises `QueueFull` at
-  `AVRONE_QUEUE_MAX_PENDING` (10,000). The count happens inside the insert's `BEGIN IMMEDIATE`, so two
-  queues on one file land exactly at the cap (60 concurrent enqueues, cap 20: 20 stored, 40 refused).
-- **`queue_submit`:** `int(args["priority"])` in the tool raised on `"x"`, NaN and `"1e400"`, and a
-  missing task raised `KeyError`. Numbers now go through `_num` (junk → default, clamped to ±2^62), an
-  empty or non-string task is refused, a task over 1 MB is refused before it is stored, and a full
-  queue returns `ERROR: queue full`.
-- **Flaky tests:** the round 57 `plain_copy` and round 58 agent-pack loop-stall tests failed under
-  full-suite load (GIL slices over 0.25 s while the off-loop call took seconds). They now pass when the
-  gap is under 0.25 s or under half the call's own time. A blocking call still fails, since its gap is
-  about its whole duration.
-- Tests: `tests/test_round65_queue_retention.py`, 19 tests; 16 fail on v0.57.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -377,4 +365,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.60.0 checked out: 5,431 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.61.0 checked out: 5,438 passed, 99% coverage. Next: round <N+1> on <angle>."

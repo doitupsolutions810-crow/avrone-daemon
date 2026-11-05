@@ -1,2 +1,2 @@
 """AVRONE: a self-hosted, multi-agent chat and search system."""
-__version__ = "0.60.0"
+__version__ = "0.61.0"

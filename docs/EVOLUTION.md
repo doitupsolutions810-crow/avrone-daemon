@@ -97,3 +97,13 @@ candidates.
 - This is the known account-wide no-runner / provisioning fault (before checkout). **Not treated as a code failure.** No logs pulled for test/lint reasons; no code changes pushed.
 - Same pattern on `main` (most recent CI run 42055121861): runner_id 0, blank name, rapid failure.
 - Recommendation: pause this automation until GitHub Actions runners provision correctly for the account. No force-push or branch deletion performed.
+
+## CI Status Check — 2026-11-05 (current, descent/xcv-trust-gates)
+
+- **Verify.sh**: present in repo tree (confirmed via tree listing).
+- **docker-verify job**: present in `.github/workflows/ci.yml` (builds image and runs Verify.sh).
+- Most recent CI run on `descent/xcv-trust-gates` (run 42071520512, head sha 1e16dd020006e6930fd8433393159b171f94584e, commit "docs: append CI status findings for descent/xcv-trust-gates (known runner provisioning fault continues)"): status completed, conclusion failure.
+- Jobs (test (3.11), test (3.12), docker-verify): all completed in ~3 seconds with **runner_id: 0**, **runner_name: ""** (blank), labels ubuntu-24.04.
+- This is the known account-wide no-runner / provisioning fault (before checkout). **Not treated as a code failure.** No logs pulled for test/lint reasons; no code changes pushed.
+- Same pattern on `main` (most recent CI run 42055121861): runner_id 0, blank name, rapid failure.
+- CI is not green (all recent runs fail at provisioning). Recommendation: pause this automation until GitHub Actions runners provision correctly for the account. No force-push or branch deletion performed.

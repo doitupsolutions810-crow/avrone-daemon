@@ -64,6 +64,7 @@ assert snap_m["psi"] == CONE + 0.25
 assert snap_m["orientation"] == "mixed"
 print("invariants ok")
 PY
+then
   log "PASS: Great Scale invariants"
 else
   log "FAIL: Great Scale invariants"
@@ -102,6 +103,7 @@ ok2, reasons2 = mod.is_authorized(snap2, None, None)
 assert not ok2 and "capability_missing" in reasons2
 print("string-boolean rejection ok")
 PY
+then
   log "PASS: extended edge cases"
 else
   log "FAIL: extended edge cases"

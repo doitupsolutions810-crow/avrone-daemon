@@ -114,6 +114,11 @@ class _Store:
         self.write_errors = 0
         self.set_aside: Path | None = None
         self.lock = _file_lock(self.path)
+        # keys this process wrote / deleted since the last save: on save the file is re-read under a
+        # process lock and only THESE are applied on top, so two processes writing one checkpoint
+        # (the MCP server and the HTTP node on one data dir) no longer erase each other's steps
+        self._dirty: set[str] = set()
+        self._dropped: set[str] = set()
         self.load()
 
     def load(self) -> None:
@@ -169,7 +174,49 @@ class _Store:
         with self.lock:
             return self._save_locked()
 
+    def _merge_disk(self) -> None:
+        if not (self._dirty or self._dropped):
+            return
+        try:
+            st = self.path.stat()
+            import stat as _stat
+            if not _stat.S_ISREG(st.st_mode) or st.st_size > max_bytes() or st.st_size == 0:
+                return
+            raw = json.loads(self.path.read_bytes().decode("utf-8"))
+        except (OSError, ValueError, RecursionError):
+            return
+        if not (isinstance(raw, dict) and isinstance(raw.get("steps"), dict) and raw.get("version") == VERSION):
+            return
+        mine = self.data["steps"]
+        steps = {k: v for k, v in raw["steps"].items() if k not in self._dropped}
+        for k in self._dirty:
+            if k in mine:
+                steps[k] = mine[k]
+        self.data["steps"] = steps
+        for k, v in raw.items():  # e.g. an owner stamped by another process
+            if k not in ("steps", "updated") and k not in self.data:
+                self.data[k] = v
+
     def _save_locked(self) -> bool:
+        fd = None
+        try:
+            fd = os.open(str(self.path) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except (OSError, ImportError):
+            pass  # no data dir yet / no flock: the save below reports any real error
+        try:
+            self._merge_disk()
+            ok = self._write_locked()
+            if ok:
+                self._dirty.clear()
+                self._dropped.clear()
+            return ok
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def _write_locked(self) -> bool:
         self.data["updated"] = time.time()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,6 +289,8 @@ class Checkpoint:
             return False
         with self._store.lock:  # mutate + serialise + replace as one critical section
             self._store.data["steps"][self.prefix + key] = stored
+            self._store._dirty.add(self.prefix + key)
+            self._store._dropped.discard(self.prefix + key)
             return self._store.save()
 
     def keys(self) -> list[str]:
@@ -255,6 +304,8 @@ class Checkpoint:
             steps = self._store.data["steps"]
             for k in [k for k in steps if k.startswith(self.prefix)]:
                 del steps[k]
+                self._store._dirty.discard(k)
+                self._store._dropped.add(k)
             self._store.save()
 
     # ------------------------------------------------------------ run binding
@@ -399,11 +450,31 @@ def claim(path: str | Path) -> Any:
     with _active_lock:
         if k in _active:
             raise CheckpointConflict(f"checkpoint {Path(path).stem!r} is in use by a running job")
+        # ...and not by a job in ANOTHER process on this data dir (the in-process set cannot see it).
+        # A non-blocking flock on <ckpt>.claim: the kernel drops it if that process dies, so a crash
+        # never leaves the checkpoint stuck "in use".
+        fd = None
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(path) + ".claim", os.O_RDWR | os.O_CREAT, 0o600)
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise CheckpointConflict(f"checkpoint {Path(path).stem!r} is in use by a job in another process") from None
+        except (OSError, ImportError):
+            if fd is not None:
+                os.close(fd)
+            fd = None
         _active.add(k)
 
     def release() -> None:
+        nonlocal fd
         with _active_lock:
             _active.discard(k)
+            if fd is not None:
+                os.close(fd)
+                fd = None
     return release
 
 

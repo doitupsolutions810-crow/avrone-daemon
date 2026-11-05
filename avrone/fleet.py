@@ -813,6 +813,49 @@ class FleetManager:
             log.warning("fleet_nonces.json unreadable; refusing requests signed before this boot")
             return {}
 
+    @contextlib.contextmanager
+    def _nonce_file_lock(self):
+        p = getattr(self, "_nonce_path", None)
+        if p is None:
+            yield
+            return
+        fd = None
+        try:
+            fd = os.open(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except (OSError, ImportError):  # no flock here: thread lock only, as before
+            pass
+        try:
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def _merge_disk_nonces(self, now: float) -> None:
+        """Fold in nonces another process saved since we last looked (cheap: skipped while the
+        file's (mtime, size) is the one we last wrote or read)."""
+        p = getattr(self, "_nonce_path", None)
+        if p is None:
+            return
+        try:
+            st = p.stat()
+        except OSError:
+            return
+        sig = (st.st_mtime_ns, st.st_size)
+        if sig == getattr(self, "_nonce_sig", None):
+            return
+        try:
+            raw = json.loads(p.read_text())
+        except (OSError, ValueError, RecursionError):
+            return  # unreadable now: keep ours; our save rewrites it whole
+        if isinstance(raw, dict):
+            for k, v in raw.items():
+                if isinstance(k, str) and NONCE_RE.fullmatch(k) and isinstance(v, (int, float)) \
+                        and not isinstance(v, bool) and v == v and float(v) >= now:
+                    self._nonces[k] = max(float(v), self._nonces.get(k, 0.0))
+        self._nonce_sig = sig
+
     def _save_nonces(self) -> None:
         """Atomic, best effort: a failed write never refuses a valid request (the boot guard covers
         the next restart if the file is then unreadable)."""
@@ -823,6 +866,8 @@ class FleetManager:
         try:
             tmp.write_text(json.dumps(self._nonces, separators=(",", ":")))
             os.replace(tmp, p)
+            st = p.stat()
+            self._nonce_sig = (st.st_mtime_ns, st.st_size)
         except OSError as e:
             log.debug("could not persist replay cache: %s", e)
             with contextlib.suppress(OSError):
@@ -865,7 +910,12 @@ class FleetManager:
             elif ts_i < guard:
                 raise GatewayRefused("replay", "request signed before this node restarted (replay cache "
                                                "was lost); re-sign and retry")
-        with self._lock:  # prune + "seen?" + insert are ONE step: a nonce is accepted at most once
+        # prune + "seen?" + insert are ONE step: a nonce is accepted at most once - across threads
+        # (self._lock) AND across processes sharing this data dir (two uvicorn workers, a restart
+        # overlapping the old process): each used to keep its own cache, so a captured request
+        # replayed to the OTHER worker ran twice, and each save overwrote the other's nonces.
+        with self._lock, self._nonce_file_lock():
+            self._merge_disk_nonces(now)
             self._nonces = {k: v for k, v in self._nonces.items() if now <= v}
             if nonce in self._nonces:
                 raise GatewayRefused("replay", "replayed request (nonce already seen)")

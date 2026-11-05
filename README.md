@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.37: Round 44: filesystem escapes, hostile agent packs, several processes on one data dir. 4,885 tests + 5 integration
+
+All six process bugs below were confirmed by running the new tests against v0.36 first (6 failed), then fixed.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| fleet | **a captured signed request replayed to a SECOND worker process ran twice**: each process kept its own replay cache, and each save overwrote the other's nonces | nonce check + insert under `flock` on `fleet_nonces.json.lock`, folding in nonces other processes saved (re-read skipped while the file's mtime/size is unchanged) | worker A accepts, worker B refuses; 6 forked processes race one request x5 rounds: accepted exactly once each round; a third process started later refuses all 40 |
+| checkpoint | **two processes writing one checkpoint erased each other's steps** (whole-file last-writer-wins) | save re-reads the file under `flock` and applies only this process's written/deleted keys; a cleared scope is never resurrected | 3 forked writers x 40 steps: all 120 kept |
+| checkpoint | **`claim()` only saw jobs in its own process**, so two processes could resume one checkpoint at once | non-blocking `flock` on `<ckpt>.claim`, held for the run; the kernel frees it if the process dies | conflict across processes; free after release and after a hard crash (`os._exit`) |
+| paths | — | `agentfs.confine` and `tools._safe_path` vs seeded hostile paths (`..` variants, `~`, drive letters, UNC, NUL, full-width dots, RTL marks, lone surrogates) and real symlinks (dir link out, link to `/`, relative file link, self loop) | never resolves outside the root |
+| agentpack | — | 26 booby-trapped bundles (symlink, hardlink, device, FIFO, dir members, traversal, absolute, backslash, drive, control chars, case and NFC collisions, file-vs-dir, duplicate manifest, unlisted file, wrong hash, setuid mode, bad agent id/origin, memory tamper, not gzip, empty, truncated) + a 64 MB gzip bomb (refused in under 5 s, never inflated) + random byte flips | only `PackError`, never anything else |
+
 ## v0.36: Round 43: crash, multi-process and hostile-peer edges. 4,843 tests + 5 integration
 
 | Lane | Finding | Mapping | Verification |

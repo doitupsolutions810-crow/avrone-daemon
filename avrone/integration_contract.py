@@ -6,8 +6,9 @@ attest human identity, or claim that a model-derived result is independently ver
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
-import math
+import re
 from typing import Any
 
 from .greatscale import evidence_snapshot
@@ -17,6 +18,7 @@ MAX_RUN_ID = 128
 MAX_SOURCE = 80
 MAX_REFS = 32
 MAX_REF = 160
+MAX_PROVENANCE_DEPTH = 4096
 
 
 class EvidenceContractError(ValueError):
@@ -57,8 +59,9 @@ def build_evidence_event(*, source: str, run_id: str, failures: int, runs: int,
     source = _text(source, "source", MAX_SOURCE)
     run_id = _text(run_id, "run_id", MAX_RUN_ID)
     check_id = _text(check_id, "check_id", MAX_REF)
-    if isinstance(provenance_depth, bool) or not isinstance(provenance_depth, int) or provenance_depth < 0:
-        raise EvidenceContractError("provenance_depth must be a non-negative integer")
+    if (isinstance(provenance_depth, bool) or not isinstance(provenance_depth, int)
+            or not 0 <= provenance_depth <= MAX_PROVENANCE_DEPTH):
+        raise EvidenceContractError(f"provenance_depth must be an integer in [0, {MAX_PROVENANCE_DEPTH}]")
     if capability_id is not None:
         capability_id = _text(capability_id, "capability_id", MAX_REF)
     if human_root is not None:
@@ -104,7 +107,7 @@ def verify_evidence_event(event: Any) -> tuple[bool, str]:
         if refs != event["refs"]:
             raise EvidenceContractError("refs are not canonical")
         depth = event["provenance_depth"]
-        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+        if isinstance(depth, bool) or not isinstance(depth, int) or not 0 <= depth <= MAX_PROVENANCE_DEPTH:
             raise EvidenceContractError("invalid provenance_depth")
         if depth > 0 and not event["human_root"]:
             raise EvidenceContractError("positive provenance_depth requires human_root")
@@ -121,7 +124,9 @@ def verify_evidence_event(event: Any) -> tuple[bool, str]:
         body = {key: event[key] for key in required if key != "digest"}
         actual = hashlib.sha256(_canonical(body)).hexdigest()
         supplied = event["digest"]
-        if not isinstance(supplied, str) or not __import__("hmac").compare_digest(actual, supplied):
+        if not isinstance(supplied, str) or re.fullmatch(r"[0-9a-f]{64}", supplied) is None:
+            raise EvidenceContractError("digest must be 64 lowercase hexadecimal characters")
+        if not hmac.compare_digest(actual, supplied):
             raise EvidenceContractError("digest mismatch")
     except (EvidenceContractError, ValueError, TypeError, OverflowError, RecursionError) as exc:
         return False, str(exc)

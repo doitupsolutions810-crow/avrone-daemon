@@ -67,6 +67,8 @@ as a confidence guarantee without defending the independence assumption.
 5. Preserve the original receipt and append corrections; do not rewrite history.
 6. Keep the existing `AVRONE_CAPGATE` mode opt-in until deployment-specific
    policies and persistent keys have been configured and tested.
+7. `provenance_depth` is an integer in `[0, 4096]`; larger or coerced values are rejected.
+8. `digest` must be exactly 64 lowercase hexadecimal characters before constant-time comparison.
 
 ## Verification
 

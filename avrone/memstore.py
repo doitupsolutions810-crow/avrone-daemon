@@ -301,13 +301,18 @@ class MemoryStore:
     def merge(self, ns: str, entries: list[dict[str, Any]], **meta: Any) -> dict[str, int]:
         """Last-writer-wins merge of foreign entries into `ns` (by their own ts). Entries that are
         older than or equal to what `ns` already holds are skipped; oversize/bad ones are rejected."""
+        return self.merge_many({ns: entries}, **meta)
+
+    def merge_many(self, groups: dict[str, list[dict[str, Any]]], **meta: Any) -> dict[str, int]:
+        """merge() into several namespaces under ONE lock, read and rewrite. A fleet push spread over
+        32 namespaces used to re-read and rewrite the whole store 32 times (~0.8 s each at 200k lines)."""
         stats = {"merged": 0, "skipped": 0, "rejected": 0}
         with self._locked():
             records = self._records()
             spaces = self._fold(records)
             pending: list[dict[str, Any]] = []
             evicted = False
-            for e in entries:
+            for ns, e in ((n, x) for n, items in groups.items() for x in items):
                 if not isinstance(e, dict):
                     stats["rejected"] += 1
                     continue

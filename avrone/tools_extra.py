@@ -565,6 +565,7 @@ def load_memory(path: Path, namespace: str | None = None) -> dict[str, dict[str,
     return latest
 
 
+@off_loop
 async def t_memory_save(ctx: "AgentContext", args: dict[str, Any]) -> str:
     key = str(args.get("key", "")).strip()
     if not key:
@@ -641,10 +642,13 @@ async def t_memory_sync(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if scope not in ("agent", "node"):
         return "ERROR: scope must be \"agent\" or \"node\""
     store = memstore.MemoryStore(_mem_file(ctx))
+    # read off the event loop (this tool awaits the push, so it can't be off_loop as a whole):
+    # a 200k-line store stalled every other run and the HUD for ~0.85 s per call
     if scope == "agent":
-        spaces = {(ns := _mem_ns(ctx)): store.load(ns)}
+        ns = _mem_ns(ctx)
+        spaces = {ns: await asyncio.to_thread(store.load, ns)}
     else:
-        spaces = {ns: v for ns, v in store.namespaces().items() if memstore.is_local(ns)}
+        spaces = {ns: v for ns, v in (await asyncio.to_thread(store.namespaces)).items() if memstore.is_local(ns)}
     raw_keys = args.get("keys")
     if raw_keys in (None, "", []):
         want: set[str] = set()

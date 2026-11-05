@@ -17,7 +17,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from . import bridge as bridgemod
-from .tools import Tool
+from .tools import Tool, off_loop
 from .tools_researchnote import redact_text
 
 if TYPE_CHECKING:
@@ -33,6 +33,7 @@ def _data_dir(ctx: "AgentContext") -> Any:
     return getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)
 
 
+@off_loop
 async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
     key = str(args.get("key") or "").strip()
     reason = re.sub(r"[\x00-\x1f\x7f]", " ", str(args.get("reason") or "")).strip()

@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 import logging
 import os
 import math
@@ -60,6 +61,8 @@ def _safe_part(s: Any) -> str:
 # tools taken from one server: a hostile or buggy server paging 100 x 32 MB of tool entries used to
 # put millions of tools into the registry (and into every agent's tool docs)
 MAX_TOOLS_PER_SERVER = 512
+STDERR_LINE_CHARS = 2000  # one kept stderr line (the last one is quoted when the server dies)
+SEND_TIMEOUT_S = 30.0  # notifications and server-request replies: a request uses its own timeout
 
 DEFAULT_MAX_RESPONSE, MIN_MAX_RESPONSE, HARD_MAX_RESPONSE = 32 * 1024 * 1024, 64 * 1024, 1024 * 1024 * 1024
 
@@ -187,13 +190,29 @@ class StdioTransport(_Transport):
         self._stderr_task = asyncio.create_task(self._drain_stderr())
 
     async def _drain_stderr(self) -> None:
+        """Keep reading stderr in chunks, whatever its shape. Line iteration stopped for good at the
+        first line over the stream limit (ValueError, swallowed): the pipe then filled and the server
+        blocked on its next stderr write. Whole 12 MB lines were also kept and quoted into errors."""
         assert self.proc and self.proc.stderr
+        partial = bytearray()
+
+        def keep(raw: bytes) -> None:
+            line = raw[:STDERR_LINE_CHARS * 4].decode(errors="replace").rstrip()[:STDERR_LINE_CHARS]
+            if line:
+                self.stderr_tail = (self.stderr_tail + [line])[-20:]
+                log.debug("mcp stderr [%s]: %s", self.command, line)
         with contextlib.suppress(Exception):
-            async for raw in self.proc.stderr:
-                line = raw.decode(errors="replace").rstrip()
-                if line:
-                    self.stderr_tail = (self.stderr_tail + [line])[-20:]
-                    log.debug("mcp stderr [%s]: %s", self.command, line)
+            while True:
+                chunk = await self.proc.stderr.read(65536)
+                if not chunk:
+                    break
+                parts = chunk.split(b"\n")
+                for i, piece in enumerate(parts):
+                    if len(partial) < STDERR_LINE_CHARS * 4:
+                        partial += piece[:STDERR_LINE_CHARS * 4 - len(partial)]
+                    if i < len(parts) - 1:  # a newline ended this piece
+                        keep(bytes(partial)); partial.clear()
+            keep(bytes(partial))
 
     async def _read_loop(self) -> None:
         assert self.proc and self.proc.stdout
@@ -216,7 +235,7 @@ class StdioTransport(_Transport):
             log.debug("mcp stdio reader stopped: %s", e)
         finally:
             self._fail_pending(MCPError("MCP server process exited" + (
-                f": {self.stderr_tail[-1]}" if self.stderr_tail else "")))
+                f": {self.stderr_tail[-1][:300]}" if self.stderr_tail else "")))
 
     async def _lines(self):
         """stdout lines, each at most self._limit bytes. A longer line used to kill the reader (the
@@ -273,18 +292,34 @@ class StdioTransport(_Transport):
             # Server->client request (ping, sampling, roots...). Answer ping, decline the rest.
             await self._send(_client_reply(m))
 
-    async def _send(self, obj: dict) -> None:
+    async def _send(self, obj: dict, timeout: float | None = None) -> None:
         if not self.proc or not self.proc.stdin or self.proc.returncode is not None:
             raise MCPError("MCP server process is not running")
+        if self._reader is not None and self._reader.done():
+            # its stdout closed: no reply can ever be read, so don't wait out the timeout for one
+            raise MCPError("MCP server closed its output; the connection is gone")
         data = (json.dumps(obj, separators=(",", ":")) + "\n").encode()
-        async with self._write_lock:
-            try:
-                self.proc.stdin.write(data)
-                await self.proc.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError, OSError, RuntimeError) as e:
-                # the server died between the returncode check and the write: this used to escape
-                # as a raw BrokenPipeError past the tool wrapper (which only catches MCPError)
-                raise MCPError(f"MCP server process is not running ({type(e).__name__})")
+        timeout = SEND_TIMEOUT_S if timeout is None else timeout
+        writing = False
+        try:
+            async with asyncio.timeout(timeout):
+                async with self._write_lock:
+                    writing = True
+                    self.proc.stdin.write(data)
+                    await self.proc.stdin.drain()
+        except TimeoutError:
+            if not writing:  # queued behind another write: nothing of ours went out
+                raise MCPError(f"MCP server input busy for {timeout:g}s; nothing was sent")
+            # a server that stopped reading stdin: drain() blocked forever, past the request timeout
+            # and holding the write lock, so every later call on this server hung too. A half-written
+            # line can't be taken back, so the connection is dropped.
+            with contextlib.suppress(ProcessLookupError):
+                self.proc.kill()
+            raise MCPError(f"MCP server stopped reading its input ({timeout:g}s); connection dropped")
+        except (BrokenPipeError, ConnectionResetError, OSError, RuntimeError) as e:
+            # the server died between the returncode check and the write: this used to escape
+            # as a raw BrokenPipeError past the tool wrapper (which only catches MCPError)
+            raise MCPError(f"MCP server process is not running ({type(e).__name__})")
 
     async def request(self, method: str, params: dict | None, timeout: float) -> Any:
         self._id += 1
@@ -295,8 +330,9 @@ class StdioTransport(_Transport):
         if params is not None:
             msg["params"] = params
         try:
-            await self._send(msg)
-            resp = await asyncio.wait_for(fut, timeout)
+            t0 = time.monotonic()
+            await self._send(msg, timeout)
+            resp = await asyncio.wait_for(fut, max(0.01, timeout - (time.monotonic() - t0)))
         except asyncio.TimeoutError:
             raise MCPError(f"timeout waiting for {method}")
         finally:

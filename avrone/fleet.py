@@ -1406,8 +1406,8 @@ class FleetManager:
                 remote_all.add(target)
             groups.setdefault(target, []).append(e)
         stats = {"merged": 0, "skipped": 0, "rejected": bad}
-        for target, items in groups.items():
-            for k, v in store.merge(target, items, source=sender).items():
+        if groups:
+            for k, v in store.merge_many(groups, source=sender).items():
                 stats[k] += v
         self._audit("fleet.memory.merge", sender=sender, namespaces=sorted(groups), over_quota=over_quota, **stats)
         out = {"ok": True, "node": self.node_id, "namespaces": sorted(groups), **stats}

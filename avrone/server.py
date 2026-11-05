@@ -514,7 +514,8 @@ async def fleet_memory(request: Request):
     """Inbound memory sync from a child node: same signed gateway as run/message (kind "memory")."""
     payload = await _gateway(request, "memory")
     try:
-        return _fleet().receive_memory(payload)
+        # store read + rewrite (and its file lock) off the event loop: a big store stalled every client
+        return await asyncio.to_thread(_fleet().receive_memory, payload)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from None
     except ValueError as e:

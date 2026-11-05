@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.49: Round 56: hostile stdio MCP servers, one-rewrite fleet memory merge, memory tools off the loop. 5,283 tests + 19 integration
+
+10 new tests. 9 of them fail on v0.48. Two of those call the new `merge_many`, so 7 confirm 5 bugs on behavior alone. I wrote fake MCP servers that stop reading their input, flood stderr, or die with a 12 MB stderr line, and timed memory and fleet memory paths against stores of 120k to 200k lines.
+
+| Lane | Finding | Mapping |
+|---|---|---|
+| MCP stdio send | `stdin.drain()` had no deadline. A server that stopped reading its input (2 MB tool args) hung the call **forever**, past the request timeout. It also held the write lock, so every later call to that server hung too | the send counts against the request timeout. A half-written line drops the connection (the server is killed), and a call queued behind a stuck write fails with nothing sent. `SEND_TIMEOUT_S` (30 s) covers notifications |
+| MCP stdio stderr | stderr was read line by line. The first line over the stream limit raised inside a `suppress()`, and the drain stopped for good. The pipe then filled and the server blocked on its next stderr write | stderr is read in 64 KB chunks, and kept lines are clipped to `STDERR_LINE_CHARS` (2000) |
+| MCP exit error | the "process exited" error quoted the last stderr line whole (12 MB) | clipped to 300 chars; a request after the server closed stdout fails at once |
+| fleet memory merge | `receive_memory` merged one namespace at a time. Each pass re-read and rewrote the whole store: 32 namespaces over 200k lines took **24 s**, on the event loop | `MemoryStore.merge_many` does one read and one rewrite (0.76 s), and `/api/fleet/memory` runs it via `asyncio.to_thread` |
+| memory tools | `memory_save` and `lesson_forget` read the whole store and took its file lock on the loop. `memory_sync` read it on the loop too (a 0.85 s stall) | the first two are `off_loop`; `memory_sync` reads through `to_thread` (0.13 s) |
+
+Memory sync was also fuzzed with junk records (string, list, bool, inf and missing `ts`; NaN values; list keys; foreign namespaces; a 10 MB key). It handled every case cleanly.
+
 ## v0.48: Round 55: quadratic diff, osint rollup stall, one serialization per event. 5,273 tests + 19 integration
 
 9 new tests. 7 of them fail on v0.47. Four of those call names added this round (`DIFF_INLINE_CHARS`, `codex.wire_text`), so 3 tests confirm 2 bugs on behavior alone. The third fix comes from a measurement: event fan-out across 32 subscribers dropped from 1.3 s to 0. A static AST scan listed every `async def` tool or endpoint that reads files without ever awaiting, and each one was timed against large state (20k-line diffs, 300k CodeX events, 3,600-file trees, 150k lesson lines, a 50 MB file, a 20 MB write).

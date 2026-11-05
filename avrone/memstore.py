@@ -185,6 +185,13 @@ class MemoryStore:
             except (ValueError, RecursionError):  # torn/corrupt line, or absurdly nested JSON
                 continue
             if isinstance(rec, dict) and "key" in rec:
+                # a hand-edited or foreign line with a dict/list/bool key or a null/object value used
+                # to be served as is: load() returned {"{'x': 1}": {... "value": 5}} and tools that
+                # slice or join values raised on it. Keys/values read the way merge() takes them.
+                key, value = merge_key(rec.get("key")), merge_value(rec.get("value"))
+                if not key or value is None:
+                    continue
+                rec["key"], rec["value"] = key, value
                 if not isinstance(rec.get("ns"), str) or not rec["ns"]:
                     rec["ns"] = agent_namespace(rec.get("agent"))
                 if "ts" in rec:
@@ -240,7 +247,11 @@ class MemoryStore:
             raise MemoryRefused("key is required")
         if len(key) > MAX_KEY:
             raise MemoryRefused(f"key longer than {MAX_KEY} characters")
-        size = len(value.encode())
+        try:  # a lone surrogate raised UnicodeEncodeError, which callers catching MemoryRefused missed
+            key.encode("utf-8")
+            size = len(value.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise MemoryRefused("key/value is not valid text (lone surrogate)") from None
         if size > max_value():
             raise MemoryRefused(f"value is {size} bytes; cap is {max_value()} (AVRONE_MEMORY_MAX_VALUE)")
         if not ns:
@@ -351,7 +362,10 @@ class MemoryStore:
     def trim(self, ns: str, keep: int) -> int:
         """Drop the oldest keys of `ns` until at most `keep` remain (atomic rewrite).
         Returns how many keys were evicted."""
-        keep = max(0, int(keep))
+        try:  # "abc", NaN, inf, None used to raise out of trim()
+            keep = max(0, int(keep)) if not isinstance(keep, bool) else 0
+        except (TypeError, ValueError, OverflowError):
+            raise MemoryRefused("keep must be a whole number") from None
         with self._locked():
             spaces = self._fold(self._records())
             space = spaces.get(ns, {})

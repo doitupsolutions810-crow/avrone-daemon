@@ -100,12 +100,66 @@ async def snapshot(core: "TrinityCore") -> dict[str, Any]:
     return snap
 
 
-def flatten(snap: dict[str, Any], path: tuple[str, ...] = ()) -> list[dict[str, Any]]:
-    """Tree -> one row per node with its route from here ('' = this node)."""
-    rows = [{"route": "/".join(path), "node_id": snap.get("node_id"), "status": snap.get("status", "online"),
-             "url": snap.get("url"), "env": snap.get("env", {}), "agents": snap.get("agents", [])}]
-    for nid, child in (snap.get("children") or {}).items():
-        rows += flatten(child, path + (nid,))
+MAX_TREE_DEPTH = 16
+MAX_ROWS = 2000
+
+
+def _d(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
+def _s(v: Any, n: int = 200) -> str | None:
+    return None if v is None else str(v)[:n]
+
+
+def _clean_env(env: Any) -> dict[str, Any]:
+    env = _d(env)
+    nets = []
+    for i in env.get("networks") if isinstance(env.get("networks"), list) else []:
+        if isinstance(i, dict):
+            addrs = i.get("addrs") if isinstance(i.get("addrs"), list) else []
+            nets.append({"name": _s(i.get("name"), 64) or "?", "state": _s(i.get("state"), 32),
+                         "addrs": [str(a)[:64] for a in addrs[:32]]})
+    run = dict(_d(env.get("runner")))
+    cont = run.get("container")
+    if cont is not None:
+        cont = _d(cont)
+        run["container"] = {**cont, "addrs": [str(a)[:64] for a in cont.get("addrs", [])[:32]]
+                            if isinstance(cont.get("addrs"), list) else []}
+    return {**env, "device": _d(env.get("device")), "runner": run, "services": _d(env.get("services")),
+            "networks": nets[:32]}
+
+
+def _clean_agents(v: Any) -> list[dict[str, Any]]:
+    out = []
+    for a in v if isinstance(v, list) else []:
+        if isinstance(a, dict) and isinstance(a.get("name"), str) and a["name"]:
+            out.append({**a, "name": a["name"][:120]})
+    return out[:MAX_AGENTS]
+
+
+def flatten(snap: dict[str, Any], path: tuple[str, ...] = (), _rows: list | None = None) -> list[dict[str, Any]]:
+    """Tree -> one row per node with its route from here ('' = this node).
+
+    Children's snapshots come from peers. A peer whose presence nested `children` a few hundred
+    levels deep (RecursionError), sent `children` as a list or `agents` without names (KeyError in
+    find_agent/render), or used "/" in a child id (a route that could not be resolved) used to break
+    /api/fleet/directory, fleet_agents and agent lookup for the whole fleet. Rows are now cleaned,
+    depth is capped at MAX_TREE_DEPTH and the tree at MAX_ROWS."""
+    rows = [] if _rows is None else _rows
+    snap = _d(snap)
+    if len(rows) >= MAX_ROWS:
+        return rows
+    rows.append({"route": "/".join(path), "node_id": _s(snap.get("node_id"), 120),
+                 "status": _s(snap.get("status", "online"), 32) or "online", "url": _s(snap.get("url"), 300),
+                 "env": _clean_env(snap.get("env")), "agents": _clean_agents(snap.get("agents"))})
+    if len(path) >= MAX_TREE_DEPTH:
+        return rows
+    for nid, child in list(_d(snap.get("children")).items())[:MAX_ROWS]:
+        nid = str(nid)[:120]
+        if not nid or "/" in nid or nid in path:
+            continue
+        flatten(child, path + (nid,), rows)
     return rows
 
 

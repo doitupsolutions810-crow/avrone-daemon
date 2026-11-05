@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.40.0)
+# AVRONE MASTER PROMPT (v0.41.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,041 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,071 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -98,7 +98,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 212 test files, offline by default
+├── tests/                  # 213 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -311,6 +311,22 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.41: Round 48: memory store, OSINT rollup, presence tree from peers, agent kit. 5,071 tests + 19 integration
+
+25 of the 30 new tests failed on v0.40 before the fixes.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| agentkit | **`env_install` built its lock file name from `manager` before checking it**: `manager="x/../../victim"` opened `<data>/.install-x/../../victim.lock` with mode `w` and truncated a file outside the data dir (confirmed on v0.40); a missing parent dir crashed the tool instead | `manager` must be `pip` or `apt` before any file is opened | 7 hostile managers: victim intact, no runner command, no lock file |
+| agentkit | **one torn or non-object line in `resources.jsonl` broke `env_install` and `resources` for good**; `resources` `limit` of `"abc"` raised, `0` listed every line, negatives sliced from the front | non-object lines skipped; limit clamped 1..500; missing/junk `ts`/`agent` rendered as `?` | junk ledger + 8 junk limits |
+| agentkit | task board grew without limit (every op rewrites and lists all of it) | `MAX_BOARD_TASKS = 500` | 501st add refused |
+| memstore | **a lone surrogate raised `UnicodeEncodeError` past every `except MemoryRefused`** (memory tools, research notes) | refused as `MemoryRefused` (odd keys like `k\x00ey` still round-trip, v0.20 contract) | 4 bad key/value pairs |
+| memstore | hand-edited lines with dict/list/bool keys or null/object values were served as is (tools slicing values raised) | read with the same rules as `merge()` (number values kept as text) | junk lines skipped, the store still saves |
+| memstore | `trim("abc" / NaN / inf / None)` raised a raw error | `MemoryRefused("keep must be a whole number")` | 6 junk keeps |
+| osint | `osint_metrics` read every run log whole (a multi-GB log meant multi-GB RAM) and echoed 500 KB hosts into the report | logs streamed line by line, lines over 1 MB skipped, hosts clipped to 253 chars, tool names to 80 | hostile log (3 MB line, 500 KB host, deep brackets, torn tail, dir, dangling symlink): report under 4 KB |
+| presence | **a peer's presence could break `/api/fleet/directory`, `fleet_agents` and agent lookup for the whole fleet**: `children` nested 500 deep (RecursionError), `children` as a list, `agents` without names (KeyError), junk `env` | rows cleaned; depth capped at `MAX_TREE_DEPTH = 16`, tree at `MAX_ROWS = 2000`; child ids with `/` or repeating the route skipped | 5 hostile trees: render, lookup and JSON all work |
+| fuzz | — | 4 forked processes x 60 memory saves keep all 240 keys; 450 seeded merge rounds with junk keys/values/ts and journal garbage keep every value a string and every namespace under its cap | `tests/test_round48_mem_osint_presence_kit_edges.py` |
+
 ## v0.40: Round 47: recon target smuggling, hostile MCP servers, governor/telemetry and fleet strict JSON. 5,041 tests + 5 integration
 
 29 of the 54 new tests failed on v0.39 before the fixes.
@@ -337,19 +353,6 @@ Every fix below was confirmed by running the new tests against v0.38 first, then
 | plugins | **a plugin could silently replace an existing tool** (`shell`, `read_file`, another plugin's): the replacement kept `source="builtin"`, so `/api/tools`, capgate receipts and the codex never showed third-party code ran | originals restored, report says `refused to replace existing tool(s): ...`; new tools still added and tagged `plugin:<name>`; partial tools before a `register()` error are still kept (existing contract) | hijack and plugin-vs-plugin tests |
 | fuzz | — | WS: binary, 500 KB, 50 junk frames per client x 5 clients, the stream still delivers and every subscriber slot is freed; hostile event payloads arrive as strict JSON. Bridge: torn/junk journal lines, 600 seeded hostile remote posts (NaN/inf ts, 50 KB text, cycles, overwrite attempts). Plugins: binary, syntax error, no/uncallable `register`, infinite recursion, package raising on import | `tests/test_round46_ws_bridge_plugin_edges.py` |
 
-## v0.38: Round 45: job queue, CodeX log and HTTP API under crashes, races and junk. 4,971 tests + 5 integration
-
-Every fix below was confirmed by running the new tests against v0.37 first (22 failed), then fixing.
-
-| Lane | Finding | Mapping | Verification |
-|---|---|---|---|
-| codex | **a crash mid-write cost the NEXT event too**: the following emit appended straight onto the torn bytes, making one corrupt line out of two | emit opens `ab+`, checks the last byte with `pread`, and starts on a fresh line when it is torn; one `write()` per event | torn-tail restart keeps the next events; 4 processes x 200 KB events never interleave |
-| jobqueue | **`enqueue(priority=10**30)` raised OverflowError** (SQLite INTEGER is 64-bit) | priority clamped to ±2^62 | 54 hostile priority x max_attempts combinations |
-| jobqueue | **`extend(seconds=inf / "1e400" / 1e300)` wrote an infinite lease**: if that worker then died, the job could never be reaped | non-finite or junk means one normal lease; capped at 7 days (`EXTEND_MAX_S`) | 8 hostile values |
-| server | **a malformed body answered 500, not 422**: FastAPI echoes the input back, and `1e999` (inf), `NaN` or a lone surrogate made that echo fail encoding on `/api/chat`, `/api/fleet/tell`, `/api/terminal` | `RequestValidationError` handler: strict, ASCII-escaped JSON via `codex.jsonable` | 19 hostile bodies x 3 header sets x 8 POST endpoints: never 500 |
-| server | **`/api/terminal` with a lone surrogate in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched (a NUL keeps the v0.26 contract: exit -1 result; v0.39 restored it) | strict-JSON 422 tests |
-| fuzz | — | 4 processes drain 150 jobs from one SQLite file with no job run twice; expired-lease owner fenced from complete/fail/extend/release; poison job goes dead; corrupt rows never kill `claim()`; `replay()`/`runs()` survive binary, 3 MB, deeply nested, directory and symlink logs; `emit()` with NaN, cycles, a `repr` bomb, surrogates always writes one JSON line | `tests/test_round45_queue_codex_edges.py` (86 tests) |
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -361,4 +364,4 @@ Every fix below was confirmed by running the new tests against v0.37 first (22 f
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.40.0 checked out: 5,041 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.41.0 checked out: 5,071 passed, 99% coverage. Next: round <N+1> on <angle>."

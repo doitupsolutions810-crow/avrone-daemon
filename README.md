@@ -81,6 +81,22 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.41: Round 48: memory store, OSINT rollup, presence tree from peers, agent kit. 5,071 tests + 19 integration
+
+25 of the 30 new tests failed on v0.40 before the fixes.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| agentkit | **`env_install` built its lock file name from `manager` before checking it**: `manager="x/../../victim"` opened `<data>/.install-x/../../victim.lock` with mode `w` and truncated a file outside the data dir (confirmed on v0.40); a missing parent dir crashed the tool instead | `manager` must be `pip` or `apt` before any file is opened | 7 hostile managers: victim intact, no runner command, no lock file |
+| agentkit | **one torn or non-object line in `resources.jsonl` broke `env_install` and `resources` for good**; `resources` `limit` of `"abc"` raised, `0` listed every line, negatives sliced from the front | non-object lines skipped; limit clamped 1..500; missing/junk `ts`/`agent` rendered as `?` | junk ledger + 8 junk limits |
+| agentkit | task board grew without limit (every op rewrites and lists all of it) | `MAX_BOARD_TASKS = 500` | 501st add refused |
+| memstore | **a lone surrogate raised `UnicodeEncodeError` past every `except MemoryRefused`** (memory tools, research notes) | refused as `MemoryRefused` (odd keys like `k\x00ey` still round-trip, v0.20 contract) | 4 bad key/value pairs |
+| memstore | hand-edited lines with dict/list/bool keys or null/object values were served as is (tools slicing values raised) | read with the same rules as `merge()` (number values kept as text) | junk lines skipped, the store still saves |
+| memstore | `trim("abc" / NaN / inf / None)` raised a raw error | `MemoryRefused("keep must be a whole number")` | 6 junk keeps |
+| osint | `osint_metrics` read every run log whole (a multi-GB log meant multi-GB RAM) and echoed 500 KB hosts into the report | logs streamed line by line, lines over 1 MB skipped, hosts clipped to 253 chars, tool names to 80 | hostile log (3 MB line, 500 KB host, deep brackets, torn tail, dir, dangling symlink): report under 4 KB |
+| presence | **a peer's presence could break `/api/fleet/directory`, `fleet_agents` and agent lookup for the whole fleet**: `children` nested 500 deep (RecursionError), `children` as a list, `agents` without names (KeyError), junk `env` | rows cleaned; depth capped at `MAX_TREE_DEPTH = 16`, tree at `MAX_ROWS = 2000`; child ids with `/` or repeating the route skipped | 5 hostile trees: render, lookup and JSON all work |
+| fuzz | — | 4 forked processes x 60 memory saves keep all 240 keys; 450 seeded merge rounds with junk keys/values/ts and journal garbage keep every value a string and every namespace under its cap | `tests/test_round48_mem_osint_presence_kit_edges.py` |
+
 ## v0.40: Round 47: recon target smuggling, hostile MCP servers, governor/telemetry and fleet strict JSON. 5,041 tests + 5 integration
 
 29 of the 54 new tests failed on v0.39 before the fixes.

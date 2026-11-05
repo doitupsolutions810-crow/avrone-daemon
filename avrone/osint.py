@@ -61,6 +61,37 @@ async def t_osint_domain(ctx: "AgentContext", args: dict[str, Any]) -> str:
             f"\n[Subdomains] {sub_count or ct[:200]}")
 
 
+MAX_EVENT_LINE = 1024 * 1024
+
+
+def _iter_lines(p: Path):
+    """The file's lines, read one at a time (a multi-GB run log used to be read whole into memory);
+    a line longer than MAX_EVENT_LINE is skipped. None when the file cannot be opened."""
+    try:
+        if not p.is_file():
+            return None
+        f = p.open("rb")
+    except OSError:
+        return None
+
+    def gen():
+        with f:
+            skipping = False
+            while True:
+                try:
+                    chunk = f.readline(MAX_EVENT_LINE + 1)
+                except OSError:
+                    return
+                if not chunk:
+                    return
+                complete = chunk.endswith(b"\n")
+                if skipping or (len(chunk) > MAX_EVENT_LINE and not complete):
+                    skipping = not complete
+                    continue
+                yield chunk.decode("utf-8", "replace")
+    return gen()
+
+
 def _event(line: str) -> dict[str, Any] | None:
     """One JSONL event object, or None for a blank, corrupt, too-deep or non-object line."""
     try:
@@ -80,12 +111,11 @@ async def t_osint_metrics(ctx: "AgentContext", args: dict[str, Any]) -> str:
     runs = 0
     if log_dir.exists():
         for p in log_dir.glob("*.jsonl"):
-            try:
-                text = p.read_text(encoding="utf-8", errors="replace")
-            except OSError:  # vanished or not a regular file: skip it, never sink the rollup
+            lines = _iter_lines(p)
+            if lines is None:  # vanished or not a regular file: skip it, never sink the rollup
                 continue
             runs += 1
-            for line in text.splitlines():
+            for line in lines:
                 ev = _event(line)
                 if ev is None:
                     continue
@@ -95,13 +125,13 @@ async def t_osint_metrics(ctx: "AgentContext", args: dict[str, Any]) -> str:
                 data = ev.get("data")
                 data = data if isinstance(data, dict) else {}
                 if k == recon.REFUSED_KIND:  # refusals are audited, not probes
-                    refused[str(data.get("tool", "?"))] += 1
+                    refused[str(data.get("tool", "?"))[:80]] += 1
                     continue
                 if k.startswith(("recon.", "osint.")):
-                    kinds[k] += 1
+                    kinds[k[:80]] += 1
                     h = data.get("host")
                     if h and isinstance(h, str):
-                        hosts[h] += 1
+                        hosts[h[:253]] += 1  # a 5 MB "host" used to be echoed whole into the report
     if not kinds and not refused:
         return "no recon/OSINT activity recorded yet"
     lines = [f"recon/OSINT metrics across {runs} run logs", "", "by tool:"]

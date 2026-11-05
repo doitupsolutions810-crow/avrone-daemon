@@ -249,6 +249,10 @@ async def t_env_install(ctx: "AgentContext", args: dict[str, Any]) -> str:
     pkg, mgr = str(args.get("package") or "").strip(), str(args.get("manager", "pip")).lower()
     if not PKG_RE.match(pkg):
         return "ERROR: invalid package name"
+    if mgr not in ("pip", "apt"):
+        # checked BEFORE the lock file is opened: the manager is part of its name, and
+        # manager="x/../../../../srv/app/poetry" opened (and truncated) <that>.lock outside the data dir
+        return "ERROR: manager must be pip or apt"
     if policy == "deny":
         record_change(ctx, f"{mgr} install (denied)", pkg, False, "AVRONE_SELF_CHANGES=deny")
         return "ERROR: self-changes are disabled on this node (AVRONE_SELF_CHANGES=deny)"
@@ -275,7 +279,9 @@ def _installed_before(ctx: "AgentContext", mgr: str, pkg: str) -> str | None:
     for line in reversed(p.read_text().splitlines()):
         try:
             r = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(r, dict):  # a "[1]" or "5" line used to raise on every later env_install
             continue
         if r.get("ok") and r.get("action") == f"{mgr} install" and r.get("target") == pkg:
             return r.get("agent", "another agent")
@@ -303,12 +309,36 @@ async def t_resources(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = _ledger(ctx)
     if not p.exists():
         return "resource ledger empty"
-    rows = [json.loads(line) for line in p.read_text().splitlines()[-int(args.get("limit", 30)):]]
-    return "\n".join(f"{time.strftime('%H:%M:%S', time.localtime(r['ts']))} {r['agent']} {r['action']} {r['target']} "
-                     f"{'ok' if r['ok'] else 'FAIL'}" for r in rows)
+    # limit: "abc" raised, 0 meant every line ([-0:]), negatives sliced from the front
+    try:
+        limit = int(args.get("limit", 30))
+    except (TypeError, ValueError, OverflowError):
+        limit = 30
+    limit = max(1, min(500, limit))
+    rows = []
+    for line in p.read_text(errors="replace").splitlines():
+        try:  # one torn or hand-edited line used to break the tool for good
+            r = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(r, dict):
+            rows.append(r)
+    rows = rows[-limit:]
+
+    def when(v: Any) -> str:
+        try:
+            return time.strftime("%H:%M:%S", time.localtime(float(v)))
+        except (TypeError, ValueError, OverflowError, OSError):
+            return "??:??:??"
+    return "\n".join(f"{when(r.get('ts'))} {str(r.get('agent', '?'))[:80]} {str(r.get('action', '?'))[:80]} "
+                     f"{str(r.get('target', '?'))[:120]} {'ok' if r.get('ok') else 'FAIL'}" for r in rows) \
+        or "resource ledger empty"
 
 
 # ---------------------------------------------------------------- task board
+MAX_BOARD_TASKS = 500
+
+
 def _board(ctx: "AgentContext") -> Path:
     d = _data(ctx) / "boards"
     d.mkdir(exist_ok=True)
@@ -329,6 +359,8 @@ async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
         title = str(args.get("title") or "").strip()
         if not title:
             return "ERROR: op=add needs a title"
+        if len(board) >= MAX_BOARD_TASKS:  # every op rewrites and lists the whole board
+            return f"ERROR: the board is full ({MAX_BOARD_TASKS} tasks); update existing ones instead"
         item = {"id": max((t["id"] for t in board), default=0) + 1, "title": title[:200], "status": "todo",
                 "owner": str(args.get("owner", ctx.name)), "note": "", "by": ctx.name}
         board.append(item)

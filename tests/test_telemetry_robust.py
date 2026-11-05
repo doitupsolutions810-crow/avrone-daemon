@@ -153,16 +153,18 @@ def test_unreadable_file_skipped(tmp_path, monkeypatch):
     assert tm.telemetry(core, 3600)["runs"]["total"] == 1
 
 
-def test_read_tail_real_permission_error(tmp_path):
+def test_read_tail_permission_error(monkeypatch, tmp_path):
     p = tmp_path / "x.jsonl"
     p.write_text("{}\n")
-    p.chmod(0)
-    try:
-        if os.access(p, os.R_OK):
-            pytest.skip("running as root")
-        assert tm._read_tail(p, 1000) is None
-    finally:
-        p.chmod(0o644)
+    real_open = open
+
+    def denied(path, *args, **kwargs):
+        if Path(path) == p:
+            raise PermissionError("fixture denial")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", denied)
+    assert tm._read_tail(p, 1000) is None
 
 
 def test_log_dir_missing(tmp_path):

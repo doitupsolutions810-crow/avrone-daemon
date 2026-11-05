@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.53.0)
+# AVRONE MASTER PROMPT (v0.54.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,320 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,330 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 225 test files, offline by default
+├── tests/                  # 226 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +312,13 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.54: Round 61: agent-dir walks off the event loop. 5,330 tests + 19 integration
+
+- **Every write into an agent dir froze the node.** `quota_write` (behind `fs_write`, and behind `write_file`/`edit_file` inside an agent dir) walks the whole agent dir with lstat to check the quota. On a 100k-file dir (one npm or pip install gets there), that was ~0.26 s per write on the loop, under a `threading.Lock`. It now runs in a worker thread, and the per-dir lock still serialises check plus write (6 concurrent 300 KB writes under a 1 MB quota: exactly 3 land).
+- `fs_list` (rglob sort plus usage walk, ~0.6 s at 100k), `fs_delete` (rmtree plus usage), `fs_read`, `list_files` (sorts each directory level before its 400 cap) and `evolve_list` (reads every proposal; 3000 take ~0.15 s) are now `off_loop`.
+- Found with an AST sweep for blocking I/O (open, read_text, walk, rglob, rmtree, stat) in async tools outside `to_thread`.
+- Tests: `tests/test_round61_agentfs_walks_off_loop.py` (10 tests, 9 fail on v0.53).
+
 ## v0.53: Round 60: checkpoint saves and admin CodeX views off the event loop. 5,320 tests + 19 integration
 
 - **Checkpoint saves blocked the loop.** `Checkpoint.put` re-read, re-parsed and rewrote the whole file, with an fsync, for every finished worker, the plan, every deep round and the result. At 18 MB that was ~81 ms per put, and the cap is 64 MB. Trinity now saves through `asyncio.to_thread`. `_Store` also skips the re-read when the file still has the (inode, size, mtime_ns) of its own last write: ~48 ms, all off the loop. Another writer changes the signature, so cross-process merging still works.
@@ -325,17 +332,6 @@ landed and the suite is green. End with what is still open.
 - Probed clean: all-tools fuzz seeds 20-23, governor parsers against junk cgroup, meminfo, vm_stat and pmset text.
 - Tests: `tests/test_round59_lessons_off_loop.py` (4 tests, 3 fail on v0.51).
 
-## v0.51: Round 58: admin endpoints and agent-pack tools off the event loop. 5,306 tests + 19 integration
-
-- **Live-node stall probe** (uvicorn, `/api/status` pinged every 20 ms during each call):
-  - `/api/capgate` walked and re-MACed the whole receipt chain inline. With 40k receipts, the node froze for 0.85 s, growing with the chain.
-  - `/api/map` parsed every run log inline. With 360k lines (json or mermaid), the node froze for 1.3 s. `/api/telemetry` had already moved to a thread.
-  - `/api/checkpoints` and `/api/evolve` read every file inline.
-  - All four now run in `asyncio.to_thread`. Worst `/api/status` latency during each call: 0.01 to 0.04 s.
-- **Agent packs:** `/api/fleet/agentpack` decoded, gunzipped, verified and installed a 50 MB pack inline (~0.7 s). It now runs in a thread; the install is still an atomic swap under the per-agent lock. The `agent_pack_export` and `agent_pack_import` tools (1.6 s and 0.6 s on the loop) are `off_loop`. Fleet migration keeps its synchronous export on purpose, so no await sits between the busy re-check and the snapshot.
-- **Probed clean:** telemetry and map with `hours` set to nan, inf, -1, 1e308 or 0. All-tools fuzz seeds 16 to 19.
-- Tests: `tests/test_round58_api_and_pack_loop_stalls.py` (12 tests).
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -347,4 +343,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.53.0 checked out: 5,320 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.54.0 checked out: 5,330 passed, 99% coverage. Next: round <N+1> on <angle>."

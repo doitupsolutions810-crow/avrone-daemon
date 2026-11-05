@@ -453,7 +453,9 @@ async def t_write(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: {raw_path} is a directory; give a file path inside it"
     if r.in_agent:
         from .agentfs_tools import quota_write
-        size, used, quota = quota_write(ctx, r.root, p, content.encode("utf-8"), tool="write_file")
+        # quota_write walks the whole agent dir under a thread lock: never on the event loop
+        size, used, quota = await asyncio.to_thread(quota_write, ctx, r.root, p, content.encode("utf-8"),
+                                                    False, "write_file")
         return f"wrote {fsunify.display(ctx, p)} ({size} bytes; agent dir {used}/{quota} bytes)"
     p.parent.mkdir(parents=True, exist_ok=True)
     # atomic: a crash or full disk mid-write never leaves a half-written file behind

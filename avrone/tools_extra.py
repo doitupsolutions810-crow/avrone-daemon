@@ -222,6 +222,7 @@ async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------------- list_files / search_files
 
+@off_loop  # sorts every directory level before capping at 400 entries
 async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     r = fsunify.resolve(ctx, str(args.get("path", "") or "."), "list_files")
     root, skip = r.path, fsunify.skip_dirs(ctx, r)
@@ -451,7 +452,7 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
     blob = out.encode("utf-8", "surrogateescape")
     if r.in_agent:
         from .agentfs_tools import quota_write
-        quota_write(ctx, r.root, p, blob, tool="edit_file")
+        await asyncio.to_thread(quota_write, ctx, r.root, p, blob, False, "edit_file")  # walks the agent dir
     else:
         atomic_write_bytes(p, blob)
     plural = "replacement" if count == 1 else "replacements"

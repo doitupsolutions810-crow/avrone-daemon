@@ -46,7 +46,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -1154,6 +1154,7 @@ async def t_evolve_diff(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return r.text(8000) or "(no diff)"
 
 
+@off_loop  # reads every proposal file (3000: ~0.15 s)
 async def t_evolve_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     rows = []
     for f in sorted(_data(ctx).glob("*.json")):

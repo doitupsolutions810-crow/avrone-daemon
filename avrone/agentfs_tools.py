@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .agentfs import AgentFSError, confine
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -183,6 +183,8 @@ def quota_write(ctx: "AgentContext", root: Path, p: Path, data: bytes, append: b
     return new_size, projected, quota
 
 
+# off_loop: quota checks walk the whole agent dir (100k files ~0.26 s), listing sorts it (~0.6 s)
+@off_loop
 async def t_fs_write(ctx: "AgentContext", args: dict[str, Any]) -> str:
     root, p = _resolve(ctx, "fs_write", args.get("path", ""))
     data = str(args.get("content", "")).encode("utf-8")
@@ -190,6 +192,7 @@ async def t_fs_write(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return f"wrote {_rel(root, p)} ({new_size} bytes; dir {projected}/{quota} bytes)"
 
 
+@off_loop
 async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
     root, p = _resolve(ctx, "fs_read", args.get("path", ""))
     if not p.exists():
@@ -211,6 +214,7 @@ async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return out
 
 
+@off_loop
 async def t_fs_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     root, p = _resolve(ctx, "fs_list", args.get("path", ""))
     if not p.exists():
@@ -233,6 +237,7 @@ async def t_fs_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return head + "\n" + ("\n".join(lines) if lines else "(empty)")
 
 
+@off_loop
 async def t_fs_delete(ctx: "AgentContext", args: dict[str, Any]) -> str:
     root = _agent_root(ctx)
     raw = str(args.get("path", "")).strip().rstrip("/\\")

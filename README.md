@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.54: Round 61: agent-dir walks off the event loop. 5,330 tests + 19 integration
+
+- **Every write into an agent dir froze the node.** `quota_write` (behind `fs_write`, and behind `write_file`/`edit_file` inside an agent dir) walks the whole agent dir with lstat to check the quota. On a 100k-file dir (one npm or pip install gets there), that was ~0.26 s per write on the loop, under a `threading.Lock`. It now runs in a worker thread, and the per-dir lock still serialises check plus write (6 concurrent 300 KB writes under a 1 MB quota: exactly 3 land).
+- `fs_list` (rglob sort plus usage walk, ~0.6 s at 100k), `fs_delete` (rmtree plus usage), `fs_read`, `list_files` (sorts each directory level before its 400 cap) and `evolve_list` (reads every proposal; 3000 take ~0.15 s) are now `off_loop`.
+- Found with an AST sweep for blocking I/O (open, read_text, walk, rglob, rmtree, stat) in async tools outside `to_thread`.
+- Tests: `tests/test_round61_agentfs_walks_off_loop.py` (10 tests, 9 fail on v0.53).
+
 ## v0.53: Round 60: checkpoint saves and admin CodeX views off the event loop. 5,320 tests + 19 integration
 
 - **Checkpoint saves blocked the loop.** `Checkpoint.put` re-read, re-parsed and rewrote the whole file, with an fsync, for every finished worker, the plan, every deep round and the result. At 18 MB that was ~81 ms per put, and the cap is 64 MB. Trinity now saves through `asyncio.to_thread`. `_Store` also skips the re-read when the file still has the (inode, size, mtime_ns) of its own last write: ~48 ms, all off the loop. Another writer changes the signature, so cross-process merging still works.

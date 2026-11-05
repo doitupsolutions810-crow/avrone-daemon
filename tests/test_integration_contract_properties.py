@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import random
 
 import pytest
 
@@ -179,3 +180,54 @@ def test_maximum_provenance_depth_is_inclusive_and_next_value_rejected():
     assert verify_evidence_event(record)[0]
     with pytest.raises(EvidenceContractError):
         make(provenance_depth=4097, human_root="operator:root")
+
+
+def test_canonical_sha256_golden_vector():
+    record = make()
+    assert record["digest"] == "bb6bd562eeb56c60bc8a619ec427c306fff390e911be4627f9ead0848849b85a"
+
+
+def test_seeded_mutation_sweep_never_accepts_stale_digests():
+    rng = random.Random(20261105)
+    base = make(failures=3, runs=101, refs=["anchor-a", "anchor-b"])
+    fields = ["source", "run_id", "check_id", "kind", "schema",
+              "capability_id", "human_root", "refs", "provenance_depth"]
+    for _ in range(500):
+        candidate = copy.deepcopy(base)
+        field = rng.choice(fields)
+        original = candidate[field]
+        if field == "source":
+            candidate[field] = "forged-source-" + str(rng.randrange(1_000_000))
+        elif field == "run_id":
+            candidate[field] = "forged-run-" + str(rng.randrange(1_000_000))
+        elif field == "check_id":
+            candidate[field] = "forged-check-" + str(rng.randrange(1_000_000))
+        elif field == "kind":
+            candidate[field] = "untrusted-kind"
+        elif field == "schema":
+            candidate[field] = "untrusted-schema"
+        elif field == "capability_id":
+            candidate[field] = "cap:" + str(rng.randrange(1_000_000))
+        elif field == "human_root":
+            candidate[field] = "operator:" + str(rng.randrange(1_000_000))
+        elif field == "refs":
+            candidate[field] = ["ref:" + str(rng.randrange(1_000_000))]
+        else:
+            candidate[field] = rng.randrange(0, 4097)
+        assert candidate[field] != original
+        assert verify_evidence_event(candidate)[0] is False
+
+
+def test_seeded_evidence_summary_mutations_never_verify():
+    rng = random.Random(424242)
+    for _ in range(250):
+        record = make(failures=2, runs=17)
+        key = rng.choice(["failures", "runs", "p", "S", "orientation", "psi", "runsFor95"])
+        current = record["evidence"][key]
+        if isinstance(current, (int, float)) and not isinstance(current, bool):
+            record["evidence"][key] = current + (rng.random() + 0.01)
+        elif key == "orientation":
+            record["evidence"][key] = "pass"
+        else:
+            record["evidence"][key] = "mutated"
+        assert verify_evidence_event(record)[0] is False

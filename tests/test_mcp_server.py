@@ -185,7 +185,7 @@ def test_serve_roundtrip_batch_parse_error_and_notifications():
     assert by_id[2]["result"] == {}
     assert by_id[3]["error"]["code"] == -32601
     assert by_id[5]["result"]["content"][0]["text"] == "squad:t"
-    assert 4 not in by_id and len(msgs) == 5
+    assert 4 not in by_id and len(msgs) == 6  # scalar junk now receives the required invalid-request reply
 
 
 def test_serve_internal_error_maps_to_32603(monkeypatch):

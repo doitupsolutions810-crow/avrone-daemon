@@ -62,3 +62,14 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def diff_main() -> None:
+    """unified_diff in a child (see t_diff_files): difflib is quadratic on many similar short lines
+    (20k lines: 5 s; the 1 MB input cap allows ~200k lines: minutes) and cannot be interrupted."""
+    import difflib
+    req = json.loads(sys.stdin.read())
+    for ln in difflib.unified_diff(req["a"].splitlines(keepends=True), req["b"].splitlines(keepends=True),
+                                   fromfile=req["a_name"], tofile=req["b_name"], n=int(req["n"])):
+        sys.stdout.write(json.dumps(ln) + "\n")
+    sys.stdout.flush()

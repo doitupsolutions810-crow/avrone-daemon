@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import recon
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -120,6 +120,7 @@ def _event(line: str) -> dict[str, Any] | None:
     return ev if isinstance(ev, dict) else None
 
 
+@off_loop
 async def t_osint_metrics(ctx: "AgentContext", args: dict[str, Any]) -> str:
     """Roll up recon/OSINT activity from the Codex run logs: tool counts and top targets."""
     data_dir = Path(ctx.core.settings.data_dir)

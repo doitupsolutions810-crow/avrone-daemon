@@ -772,6 +772,29 @@ def _read_text_for_diff(ctx: "AgentContext", raw: Any, label: str) -> tuple[str 
     return data.decode(errors="replace"), fsunify.display(ctx, p)
 
 
+DIFF_INLINE_CHARS = 64_000
+DIFF_TIMEOUT_S = 20.0
+
+
+async def _diff_in_child(req: dict[str, Any]) -> list[str] | None:
+    pkg_parent = str(Path(__file__).resolve().parent.parent)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", f"import sys; sys.path.insert(0, {pkg_parent!r}); "
+                              "from avrone.searchproc import diff_main; diff_main()",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    payload = json.dumps(req).encode()
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(payload), DIFF_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        await proc.wait()
+        return None
+    if proc.returncode != 0:
+        raise RuntimeError(f"diff process failed (exit {proc.returncode})")
+    return [json.loads(x) for x in out.splitlines() if x.strip()]
+
+
 async def t_diff_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     import difflib
 
@@ -792,8 +815,16 @@ async def t_diff_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
         if len(b_text) > DIFF_MAX_TEXT_CHARS:
             return f"ERROR: text_b is longer than {DIFF_MAX_TEXT_CHARS} chars"
     context = _int(args.get("context"), 3, 0, 20)
-    lines = list(difflib.unified_diff(a_text.splitlines(keepends=True), b_text.splitlines(keepends=True),
-                                      fromfile=a_name, tofile=b_name, n=context))
+    if len(a_text) + len(b_text) <= DIFF_INLINE_CHARS:
+        lines = list(difflib.unified_diff(a_text.splitlines(keepends=True), b_text.splitlines(keepends=True),
+                                          fromfile=a_name, tofile=b_name, n=context))
+    else:
+        # big inputs diff in a child process with a deadline: difflib is quadratic on many similar
+        # short lines and held the event loop (and the GIL) for 5 s at 20k lines, minutes at 1 MB
+        lines = await _diff_in_child({"a": a_text, "b": b_text, "a_name": a_name, "b_name": b_name, "n": context})
+        if lines is None:
+            return (f"ERROR: diff took over {DIFF_TIMEOUT_S:g}s (too many similar lines); "
+                    "diff smaller pieces of the files instead")
     if not lines:
         return f"No differences between {a_name} and {b_name}."
     out = "".join(ln if ln.endswith("\n") else ln + "\n\\ No newline at end of file\n" for ln in lines)

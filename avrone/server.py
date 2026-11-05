@@ -695,7 +695,8 @@ async def events(ws: WebSocket):
                         with anyio.fail_after(ws_send_timeout()):
                             # a client that stops reading (stalled TCP, suspended laptop) used to
                             # hold its subscriber slot forever: 64 of them locked the HUD out
-                            await ws.send_text(dumps_event(asdict(ev)))
+                            w = getattr(ev, "_wire", None)  # emit() serialized it once for every subscriber
+                            await ws.send_text(w if isinstance(w, str) else dumps_event(asdict(ev)))
                 except TimeoutError:
                     with anyio.CancelScope(shield=True), anyio.move_on_after(1):
                         try:

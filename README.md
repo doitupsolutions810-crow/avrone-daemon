@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.48: Round 55: quadratic diff, osint rollup stall, one serialization per event. 5,273 tests + 19 integration
+
+9 new tests. 7 of them fail on v0.47. Four of those call names added this round (`DIFF_INLINE_CHARS`, `codex.wire_text`), so 3 tests confirm 2 bugs on behavior alone. The third fix comes from a measurement: event fan-out across 32 subscribers dropped from 1.3 s to 0. A static AST scan listed every `async def` tool or endpoint that reads files without ever awaiting, and each one was timed against large state (20k-line diffs, 300k CodeX events, 3,600-file trees, 150k lesson lines, a 50 MB file, a 20 MB write).
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| diff_files | **difflib is quadratic** on many similar short lines: 20k lines took 5.4 s and 40k took 21 s. The 1 MB input cap allows about 200k lines, which means minutes. It ran on the event loop and could not be interrupted | inputs over `DIFF_INLINE_CHARS` (64k) are diffed in a child process (`searchproc.diff_main`) with a `DIFF_TIMEOUT_S` (20 s) deadline. On timeout it returns an ERROR that suggests diffing smaller pieces | the loop gap stays under 0.4 s on a 14k-line diff; the child's output is identical to the inline diff |
+| osint_metrics | scanned every run log on the loop (300k events: a 0.72 s stall) | `off_loop` | |
+| event fan-out | every WebSocket pump re-ran `asdict()` + `dumps` on its own copy of each event: a 4 MB event cost about 1.3 s of loop time across 32 HUD subscribers | `emit()` serializes once and caches the text; `codex.wire_text()` returns it (the stream.gap notice still serializes itself) | one `dumps_event` call for 20 subscribers; the wire text matches the log line |
+
+Probed live under uvicorn with no change needed: 10 MB binary, 15 MB text and 100k-`{` frames, a 20k-frame flood, 80 connections against the 64-subscriber cap (17 refused), and never-reading clients during a run. There were no tracebacks, `/api/status` stayed at about 1 ms, and slots recovered. The all-tools fuzz ran on 2 more seeds and came back clean.
+
 ## v0.47: Round 54: event-loop stalls, docker bind paths with ':', and the tool wrapper. 5,264 tests + 19 integration
 
 21 new tests, all of which failed on v0.46. Thirteen of those call a name added this round (`off_loop`, `bind_args`), so 8 tests confirm 6 distinct bugs. This round went looking for more bugs in the same class as round 53's ReDoS, where one call freezes the whole node. A stall probe ran every tool against 200k memory lines, 200k CodeX events and 3,000 workspace files while a 20 ms ticker measured the longest event-loop gap. A multi-process memory race (8 processes, saves, loads and trims on one store) found no torn lines and no lost keys.

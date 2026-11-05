@@ -98,6 +98,12 @@ def jsonable(v: Any, depth: int = 0) -> Any:
         return f"<{type(v).__name__}>"
 
 
+def wire_text(ev: "Event") -> str:
+    """The event's strict-JSON text: the copy emit() already serialized, else a fresh dump."""
+    w = getattr(ev, "_wire", None)
+    return w if isinstance(w, str) else dumps_event(asdict(ev))
+
+
 def dumps_event(ev: dict[str, Any]) -> str:
     """One event as strict JSON text (no NaN), for the run log and the live stream."""
     try:
@@ -253,7 +259,11 @@ class Codex:
             data = _scrub(data)
         data = jsonable(data)
         ev = Event(run_id=str(run_id), kind=str(kind), agent=str(agent), data=data)
-        line = (dumps_event(asdict(ev)) + "\n").encode("utf-8", errors="backslashreplace")
+        text = dumps_event(asdict(ev))
+        # serialized once: every WebSocket pump used to re-run asdict()+dumps for its own copy, so a
+        # 4 MB event cost ~1.3 s of event-loop time across 32 HUD subscribers
+        ev._wire = text  # type: ignore[attr-defined]
+        line = (text + "\n").encode("utf-8", errors="backslashreplace")
         with self._write_lock, (self.log_dir / f"{log_name(run_id)}.jsonl").open("ab+") as f:
             # A crash mid-write leaves a last line with no newline; appending straight after it glued
             # the NEXT event onto the torn bytes, so the first event after every crash was lost too.

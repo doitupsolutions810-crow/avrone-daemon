@@ -309,6 +309,12 @@ class DockerRunner(Runner):
         self.container = f"avrone-env-{uuid.uuid4().hex[:8]}"
         self.agent_pool: agentcontainer.AgentContainerPool | None = None  # AVRONE_AGENT_CONTAINER=persistent
         self.restarts = 0
+        # Restart fence (round 66): N commands that hit the dead shared container at once each ran
+        # `docker rm -f` + `docker run --name <same>`; later removers deleted the container an
+        # earlier one had just started, and overlapping runs hit a name conflict, so most of them
+        # failed. One restart per generation; the rest wait on the lock and just retry.
+        self._restart_lock = asyncio.Lock()
+        self._gen = 0
 
     def _pool(self) -> agentcontainer.AgentContainerPool:
         if self.agent_pool is None:
@@ -394,16 +400,21 @@ class DockerRunner(Runner):
             if getattr(res, "timed_out", False):  # killing the docker client leaves a --rm container running
                 await self._remove(run_name)
             return res
+        gen = self._gen
         res = await self._exec(self.exec_argv(cmd, agent_cwd, t), cmd, t)
         if agentcontainer.container_gone(res, self.container):
             # the shared environment container died (daemon restart, OOM): bring it back once
-            self.restarts += 1
-            await self._remove(self.container)
-            try:
-                await self.start()
-            except Exception as e:  # noqa: BLE001
-                res.stderr = (res.stderr.rstrip("\n") + f"\n[could not restart the environment container: {e}]")[:2000]
-                return res
+            async with self._restart_lock:
+                if self._gen == gen:  # nobody restarted it since this command was sent
+                    self.restarts += 1
+                    await self._remove(self.container)
+                    try:
+                        await self.start()
+                    except Exception as e:  # noqa: BLE001
+                        res.stderr = (res.stderr.rstrip("\n")
+                                      + f"\n[could not restart the environment container: {e}]")[:2000]
+                        return res
+                    self._gen += 1
             res = await self._exec(self.exec_argv(cmd, agent_cwd, t), cmd, t)
         return res
 

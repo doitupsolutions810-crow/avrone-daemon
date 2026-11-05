@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 import math
 import os
 import re
@@ -120,21 +121,40 @@ def _proposal(ctx: "AgentContext", pid: str) -> tuple[Path | None, dict[str, Any
     return mp, meta, wt, ""
 
 
+_WT_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 async def _ensure_worktree(ctx: "AgentContext", pid: str) -> tuple[Path, str]:
-    """A fresh checkout of the repo's HEAD for proposal `pid`, on its own branch."""
+    """A fresh checkout of the repo's HEAD for proposal `pid`, on its own branch.
+
+    Built in a private temp dir and renamed into place, under a per-proposal lock: two concurrent
+    calls used to clone into the same dir (the loser's plain-copy fallback rmtree'd the winner's
+    clone), and a crash mid-build left a half-made wt-<pid> that every later call returned."""
     repo = _repo_root(ctx)
     wt = _data(ctx) / f"wt-{pid}"
     branch = f"evolve/{pid}"
-    if wt.exists():
-        return wt, branch
-    # Clone the local repo (cheap, isolated) rather than add a worktree to the live .git.
-    r = await _sh(ctx, f"git clone -q --no-hardlinks . {shlex.quote(str(wt))} 2>&1", repo)
-    if r.exit_code != 0:
-        # Fallback: plain copy if not a git repo. A failed clone can leave a half-made dir behind,
-        # which made copytree raise FileExistsError; runtime state and caches are never copied.
-        await asyncio.to_thread(_copy_tree, repo, wt, _never_copy(ctx, repo, wt))
-        await _sh(ctx, "git init -q && git add -A && git -c user.email=a@a -c user.name=avrone commit -qm base", wt)
-    await _sh(ctx, f"git checkout -q -b {shlex.quote(branch)}", wt)
+    lock = _WT_LOCKS.setdefault(str(wt), asyncio.Lock())
+    async with lock:
+        if wt.exists():
+            return wt, branch
+        tmp = wt.with_name(f".tmp-wt-{pid}-{uuid.uuid4().hex[:8]}")
+        try:
+            # Clone the local repo (cheap, isolated) rather than add a worktree to the live .git.
+            r = await _sh(ctx, f"git clone -q --no-hardlinks . {shlex.quote(str(tmp))} 2>&1", repo)
+            if r.exit_code != 0:
+                # Fallback: plain copy if not a git repo. A failed clone can leave a half-made dir
+                # behind (_copy_tree clears it); runtime state and caches are never copied.
+                await asyncio.to_thread(_copy_tree, repo, tmp, _never_copy(ctx, repo, tmp))
+                await _sh(ctx, "git init -q && git add -A && git -c user.email=a@a -c user.name=avrone commit -qm base", tmp)
+            await _sh(ctx, f"git checkout -q -b {shlex.quote(branch)}", tmp)
+            try:
+                os.rename(tmp, wt)
+            except OSError:
+                if not wt.exists():  # another process won the rename: use its clone
+                    raise
+        finally:
+            if tmp.exists():
+                await asyncio.to_thread(shutil.rmtree, tmp, True)
     return wt, branch
 
 
@@ -196,6 +216,16 @@ def commit_message(goal: Any) -> str:
     return shlex.quote(text)
 
 
+_GIT_SHORT = re.compile(r"(?i)git~\d+")
+
+
+def _is_git_dir_name(name: str) -> bool:
+    """`.git` as a case-insensitive (macOS default) or Windows filesystem sees it: `.GIT`, `.git.`,
+    `.git ` (trailing dots and spaces are dropped) and the 8.3 short name `GIT~1` all open .git."""
+    n = name.rstrip(". ").casefold()
+    return n == ".git" or bool(_GIT_SHORT.fullmatch(name.rstrip(". ")))
+
+
 def _in_repo(wt: Path, rel: str) -> Path:
     """Resolve an agent-given repo-relative path inside the clone. The old string-prefix check let
     `../wt-<pid>0/x` (a sibling clone whose name starts with this one's) through; .git is refused
@@ -209,7 +239,7 @@ def _in_repo(wt: Path, rel: str) -> Path:
         raise ValueError(f"path escapes repo: {rel}")
     if p == root:
         raise ValueError(f"path is the repo root, not a file: {rel!r}")
-    if p.relative_to(root).parts[0] == ".git":
+    if _is_git_dir_name(p.relative_to(root).parts[0]):
         raise ValueError(f"edits inside .git are not allowed: {rel}")
     return p
 

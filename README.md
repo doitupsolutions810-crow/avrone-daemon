@@ -81,6 +81,26 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.59: Round 66: restart stampede on the shared container, evolve worktree race, .git aliases. 5,419 tests + 19 integration
+
+- **Shared container restart stampede (`DockerRunner.run`):** when `avrone-env-*` died, every command
+  that hit it at once ran its own `docker rm -f` + `docker run --name <same>`. A later remover deleted the
+  container an earlier one had just started, and overlapping runs hit a name conflict. With 6 concurrent
+  commands, 5 failed. A restart lock plus a generation counter now means one restart per death: the rest
+  wait and retry. A later death still restarts, and a failed restart is reported, then retried by the
+  next command.
+- **Evolve worktree race (`_ensure_worktree`):** it checked `wt.exists()` and then cloned into it. Two
+  concurrent calls for one proposal cloned into the same dir, and the loser's plain-copy fallback
+  rmtree'd the winner's clone. A crash mid-build left a half-made `wt-<pid>` that later calls returned
+  forever. The clone is now built in `.tmp-wt-<pid>-<hex>` and renamed into place under a per-proposal
+  lock. A failed build leaves nothing behind.
+- **`.git` aliases (`_in_repo`):** `.GIT/config`, `.git./config`, `.git /config` and the 8.3 short name
+  `GIT~1/config` all open `.git` on a case-insensitive (macOS default) or Windows filesystem, and
+  `.git/config` can make git run commands (`core.fsmonitor`). These are refused now; `.gitignore`,
+  `.github/...` and similar names still pass.
+- Tests: `tests/test_round66_docker_restart_race.py` (3; the stampede test fails on v0.58) and
+  `tests/test_round66_evolve_worktree_race.py` (14; 10 fail on v0.58).
+
 ## v0.58: Round 65: job queue retention and backlog cap; queue_submit junk input; flaky stall tests made robust. 5,402 tests + 19 integration
 
 - **No retention:** finished jobs (done/dead, each up to 100 KB of result) were never deleted, so `jobs.db`

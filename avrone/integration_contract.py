@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import re
+import unicodedata
 from typing import Any
 
 from .greatscale import evidence_snapshot
@@ -26,11 +27,15 @@ class EvidenceContractError(ValueError):
 
 
 def _text(value: Any, field: str, limit: int) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+    if not isinstance(value, str) or not value or len(value) > limit:
         raise EvidenceContractError(f"{field} must be a non-empty string of at most {limit} chars")
-    if any(ord(ch) < 32 for ch in value):
-        raise EvidenceContractError(f"{field} contains control characters")
-    return value.strip()
+    if value != value.strip():
+        raise EvidenceContractError(f"{field} must not have leading or trailing whitespace")
+    # Machine identifiers must not contain C0/C1 controls, bidi controls, zero-width
+    # format characters, or surrogate code points. These can spoof logs and identities.
+    if any(unicodedata.category(ch) in {"Cc", "Cf", "Cs"} for ch in value):
+        raise EvidenceContractError(f"{field} contains a control or formatting character")
+    return value
 
 
 def _canonical(value: Any) -> bytes:

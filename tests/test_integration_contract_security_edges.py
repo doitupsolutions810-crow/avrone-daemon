@@ -95,3 +95,23 @@ def test_identity_mutation_without_digest_refresh_is_rejected(field, value):
     changed[field] = value
     assert changed["digest"] == original_digest
     assert verify_evidence_event(changed)[0] is False
+
+
+
+def test_canonical_digest_golden_vector_is_stable_across_implementations():
+    record = build_evidence_event(
+        source="golden",
+        run_id="golden-1",
+        check_id="check-1",
+        failures=1,
+        runs=4,
+    )
+    assert record["digest"] == "756e0fe4737fb0820345ea265960740f4ec9c44df8eaaf8ebac8d81aa8886b5e"
+    assert verify_evidence_event(record) == (True, "")
+
+
+def test_maximum_supported_trial_count_remains_finite_and_verifiable():
+    record = make(failures=1, runs=1_000_000_000)
+    assert verify_evidence_event(record) == (True, "")
+    assert 0 < record["evidence"]["detectInRuns"] < 1
+    assert record["evidence"]["runsFor95"] > 1_000_000_000

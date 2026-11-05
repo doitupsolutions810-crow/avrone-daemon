@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.42: Round 49: image tools, skills loader, shell runner timeouts, evolve listings. 5,140 tests + 19 integration
+
+54 of the 69 new tests failed on v0.41 before the fixes (52 failed outright, the 2 FIFO cases hung).
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| agentkit images | **`image_inspect` / `image_decode` on a FIFO (or `/dev/stdin`) hung the event loop inside `Image.open`**, stalling every agent and the API | regular files only, checked before opening | FIFO path returns an error in under 10 s |
+| agentkit images | non-image, empty, truncated, directory, missing, escaping and NUL paths raised raw exceptions; a 48 KB PNG declaring 400 Mpx raised `DecompressionBombError`; one just under PIL's limit (~179 Mpx) was decoded at ~0.5 GB per copy, and the 2x decode pass at 4x that | `MAX_IMAGE_PIXELS = 40,000,000`, `MAX_IMAGE_BYTES = 64 MB`, the 2x pass only under 4 Mpx; every failure is an `ERROR:` result | 13 bad paths x 2 tools |
+| agentkit images | decoding ran on the event loop; a one-colour image printed `entropy=-0.000` | work moved to `asyncio.to_thread`; entropy prints `0.000` | event loop keeps ticking during a slow inspect |
+| skills | a skill file that grew after `stat()` was read whole; 100k skill files were read and listed on every call | bounded read (`SKILL_MAX_BYTES + 1`); `MAX_SKILLS = 500`; "Available:" list clipped to 50 names | grow-after-stat, 800 skills |
+| runner | **`timeout=10**400` or `"5"` raised after the child was spawned, leaking the process and its pipe readers**; `inf` never timed out; NaN, negative and tiny values killed the command at once and called it a TIMEOUT | `_norm_timeout`: bad values fall back to the node default (or 120 s), capped at 24 h, integral values kept as ints | 11 values normalised, 7 junk timeouts still run `echo hi` |
+| runner | `CommandResult.text(-10)` returned the whole text uncut; `exit_label(None)` raised | limit clamped at 0; a non-int exit code reads as -1 | |
+| evolve | **one hostile file broke `evolve_list` / `evolve_status` for every agent**: deeply nested JSON (RecursionError), `iterations` as a dict or holding ints, a non-string `outcome`, `accepted` as a string, a str `ts` in the sort, a 10^30 `owner_pid` (OverflowError in `os.kill`), and an `UnboundLocalError` in the history writer's error path | loop files cleaned on read (`_clean_loop`); `loop_id` must be a string; `_pid_alive` rejects pids <= 0 and huge values | 8 hostile loop and meta files |
+| evolve | `loop_limits(10**400)` raised; a proposal could carry unlimited edits | overflow clamps to the cap; `MAX_EDITS = 200`, `MAX_EDITS_BYTES = 16 MB`, checked before cloning | 3 oversized proposals refused without a clone |
+
 ## v0.41: Round 48: memory store, OSINT rollup, presence tree from peers, agent kit. 5,071 tests + 19 integration
 
 25 of the 30 new tests failed on v0.40 before the fixes.

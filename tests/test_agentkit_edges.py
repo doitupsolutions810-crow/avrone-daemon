@@ -91,11 +91,10 @@ def test_image_inspect_flat_image_no_grid(tmp_path):
 
 def test_image_inspect_missing_and_not_an_image(tmp_path):
     c, _ = make_ctx(tmp_path)
-    with pytest.raises(FileNotFoundError):
-        run(agentkit.t_image_inspect(c, {"path": "nope.png"}))
+    # v0.42: errors come back as tool text instead of raw exceptions
+    assert run(agentkit.t_image_inspect(c, {"path": "nope.png"})).startswith("ERROR")
     (c.core.runner.workspace / "junk.png").write_bytes(b"not an image at all")
-    with pytest.raises(Exception):
-        run(agentkit.t_image_inspect(c, {"path": "junk.png"}))
+    assert "not a readable image" in run(agentkit.t_image_inspect(c, {"path": "junk.png"}))
 
 
 # ---------------------------------------------------------------- image_decode
@@ -221,6 +220,7 @@ def test_read_skill_oserror(tmp_path, monkeypatch):
     def boom(self):
         raise PermissionError("denied")
     monkeypatch.setattr(Path, "read_bytes", boom)
+    monkeypatch.setattr(Path, "open", lambda self, *a, **k: boom(self))
     assert agentkit._read_skill(f) is None
 
 

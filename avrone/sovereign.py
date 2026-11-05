@@ -8,13 +8,16 @@ otherwise in a local subprocess confined to the workspace directory.
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+import sys
 import re
 import signal
 import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import agentcontainer, agentfs
 from .config import Settings
@@ -58,7 +61,31 @@ def _head_tail(s: str, budget: int) -> str:
     return s[:head] + marker.format(len(s) - head - tail) + s[len(s) - tail:]
 
 
+MAX_COMMAND_TIMEOUT_S = 24 * 3600
+DEFAULT_COMMAND_TIMEOUT_S = 120
+
+
+def _norm_timeout(t: Any, default: Any = None) -> int | float:
+    """A usable timeout in seconds. Before: 10**400 or "5" raised AFTER the process was spawned
+    (the child and its pipe readers leaked), inf meant never time out, NaN/negative/tiny values
+    killed the command at once and reported it as a TIMEOUT."""
+    for v in (t, default, DEFAULT_COMMAND_TIMEOUT_S):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        try:
+            f = float(v)
+        except OverflowError:
+            return MAX_COMMAND_TIMEOUT_S
+        if math.isnan(f) or f <= 0:
+            continue
+        f = min(f, float(MAX_COMMAND_TIMEOUT_S))
+        return int(f) if f.is_integer() else f  # "timed out after 5s", as before
+    return DEFAULT_COMMAND_TIMEOUT_S
+
+
 def exit_label(code: int, timed_out: bool = False) -> str:
+    if not isinstance(code, int) or isinstance(code, bool):
+        code = -1
     if timed_out:
         return f"exit {code} TIMEOUT"
     if code < -1 and -code in _SIGNALS:
@@ -149,6 +176,12 @@ class CommandResult:
         """Model-facing view: the command echo is clipped (a heredoc can't eat the budget),
         terminal noise is cleaned, and when it must cut it keeps the head and the tail of each
         stream with stderr guaranteed a share, since the error is usually at the end."""
+        try:  # a negative limit used to return the whole text uncut
+            limit = max(0, int(limit))
+        except OverflowError:  # inf: no cut
+            limit = sys.maxsize
+        except (TypeError, ValueError):
+            limit = 6000
         cmd = self.cmd if len(self.cmd) <= CMD_ECHO_MAX else (
             self.cmd[:CMD_ECHO_MAX - 60] + f" ...[command clipped, {len(self.cmd)} chars]")
         label = exit_label(self.exit_code, self.timed_out)
@@ -202,6 +235,7 @@ class Runner:
 
     async def _exec(self, argv: list[str], cmd: str, timeout: int, cwd: Path | None = None,
                     env: dict[str, str] | None = None) -> CommandResult:
+        timeout = _norm_timeout(timeout, getattr(self.s, "command_timeout", None))
         if any("\x00" in a for a in argv):
             return CommandResult(cmd.replace("\x00", "\\0"), -1, "", "refused: command contains a NUL byte")
         try:
@@ -335,7 +369,7 @@ class DockerRunner(Runner):
 
     async def run(self, cmd: str, timeout: int | None = None, cwd: Path | None = None) -> CommandResult:
         agent_cwd = self._agent_cwd(cwd)
-        t = timeout or self.s.command_timeout
+        t = _norm_timeout(timeout, self.s.command_timeout)
         if agent_cwd is not None and agentcontainer.container_mode() == "persistent":
             # long-lived per-agent home container (only the agent dir mounted at /agent), reused
             pool = self._pool()

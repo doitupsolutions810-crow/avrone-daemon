@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import shlex
@@ -99,7 +100,7 @@ def _proposal(ctx: "AgentContext", pid: str) -> tuple[Path | None, dict[str, Any
         return None, None, None, f"ERROR: no proposal {pid}"
     try:
         meta = json.loads(mp.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         meta = None
     if not isinstance(meta, dict):
         return mp, None, None, f"ERROR: proposal {pid} metadata is unreadable"
@@ -191,6 +192,30 @@ def _new_pid(ctx: "AgentContext") -> str:
     return SAFE_ID.sub("-", f"{int(time.time())}-{ctx.name}-{uuid.uuid4().hex[:6]}")[:56]
 
 
+MAX_EDITS = 200
+MAX_EDITS_BYTES = 16 * 1024 * 1024
+
+
+def _edits_too_big(edits: Any) -> str:
+    if not isinstance(edits, list):
+        return "edits must be a list"
+    if len(edits) > MAX_EDITS:
+        return f"{len(edits)} edits; cap is {MAX_EDITS} per proposal"
+    total = 0
+    for e in edits:
+        c = e.get("content") if isinstance(e, dict) else None
+        if isinstance(c, str):
+            total += len(c)  # chars: a cheap upper-bound proxy, no encode of a huge string
+        elif c is not None:
+            try:
+                total += len(json.dumps(c))
+            except (TypeError, ValueError, RecursionError, OverflowError):
+                return "an edit's content is not text or JSON"
+        if total > MAX_EDITS_BYTES:
+            return f"edits hold more than {MAX_EDITS_BYTES} characters of content; cap per proposal"
+    return ""
+
+
 async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: str | None = None,
                         timeout: int = 900, extra_meta: dict[str, Any] | None = None,
                         confine_to: str | None = None) -> dict[str, Any]:
@@ -202,6 +227,9 @@ async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: s
     """
     pid = _new_pid(ctx)
     t0 = _now()
+    too_big = _edits_too_big(edits)
+    if too_big:  # checked before the clone: 100k edits or 1 GB of content used to be written to disk
+        return {"pid": pid, "error": too_big, "passed": False, "branch": None, "files": [], "duration_s": 0.0}
     wt, branch = await _ensure_worktree(ctx, pid)
     changed = []
     base_r = await _sh(ctx, "git rev-parse HEAD 2>/dev/null", wt, timeout=60)
@@ -355,7 +383,9 @@ def _attempt_row(a: dict[str, Any]) -> dict[str, Any]:
 
 def _clamp(v: Any, default: float, cap: float, lo: float = 1) -> float:
     try:
-        x = float(v) if v is not None else float(default)
+        x = float(v) if v is not None and not isinstance(v, bool) else float(default)
+    except OverflowError:  # 10**400 raised out of loop_limits
+        x = float(cap)
     except (TypeError, ValueError):
         x = float(default)
     if x != x:  # NaN
@@ -525,15 +555,31 @@ def _read_history(path: Path) -> list[dict[str, Any]]:
     for line in lines:
         try:
             row = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue  # a torn or corrupt line is skipped, not fatal
         if isinstance(row, dict) and row.get("loop_id"):
             out.append(row)
     return out
 
 
+def _its(m: dict[str, Any]) -> list[dict[str, Any]]:
+    """A loop's iterations, objects only (a hand-edited or torn loop file may hold anything)."""
+    its = m.get("iterations")
+    return [i for i in its if isinstance(i, dict)] if isinstance(its, list) else []
+
+
+def _num(v: Any, default: float = 0.0) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return default
+    try:
+        f = float(v)
+    except OverflowError:
+        return default
+    return f if math.isfinite(f) else default
+
+
 def _history_row(m: dict[str, Any]) -> dict[str, Any]:
-    its = m.get("iterations") or []
+    its = _its(m)
     acc = m.get("accepted") if isinstance(m.get("accepted"), dict) else None
     return {"loop_id": str(m.get("loop_id")), "goal": str(m.get("goal") or "")[:HISTORY_GOAL_CHARS],
             "status": m.get("status"), "stopped": m.get("stopped"), "mode": m.get("mode"),
@@ -558,6 +604,7 @@ def record_history(ctx: "AgentContext", loop_meta: dict[str, Any]) -> None:
 
 
 def _record_history_at(path: Path, loop_meta: dict[str, Any]) -> None:
+    tmp = None  # an error before the tmp file existed raised UnboundLocalError out of the handler
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         row = _history_row(loop_meta)
@@ -713,7 +760,7 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
     p = _loop_path(ctx, loop_id)
     try:
         raw = json.loads(p.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         raw = None
     if not isinstance(raw, dict):
         return {"error": f"ERROR: loop {loop_id} file is unreadable; cannot resume", "loop_id": None}
@@ -773,7 +820,7 @@ def _finish_abnormally(ctx: "AgentContext", loop_id: str, status: str, stopped: 
     p = _loop_path(ctx, loop_id)
     try:
         m = json.loads(p.read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         m = {"loop_id": loop_id, "iterations": []}
     if not isinstance(m, dict):
         m = {"loop_id": loop_id, "iterations": []}
@@ -798,8 +845,10 @@ async def evolve_wait(loop_id: str, timeout: float | None = None) -> dict[str, A
 
 def _pid_alive(pid: Any) -> bool:
     try:
+        if isinstance(pid, bool) or int(pid) <= 0:  # 0/-1 address process groups, not one process
+            return False
         os.kill(int(pid), 0)
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, OverflowError):
         return False
     return True
 
@@ -842,9 +891,10 @@ def reconcile_interrupted(settings) -> list[str]:
     for f in sorted(d.glob("*.json")):
         try:
             lp = json.loads(f.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
-        if not isinstance(lp, dict) or not lp.get("loop_id") or not _orphaned(lp):
+        if not isinstance(lp, dict) or not isinstance(lp.get("loop_id"), str) or not lp["loop_id"] \
+                or not _orphaned(lp):
             continue
         lp.update(status="interrupted", stopped="interrupted", resume_hint=_resume_hint(lp),
                   interrupted_at=time.time())
@@ -1050,14 +1100,13 @@ async def t_evolve_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     for f in sorted(_data(ctx).glob("*.json")):
         try:
             m = json.loads(f.read_text())
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
         if not isinstance(m, dict) or not all(k in m for k in ("pid", "passed", "goal", "files", "by")):
             continue  # a partial write or a foreign json file never breaks the listing
-        if not isinstance(m["files"], list):
-            m = dict(m, files=[])
+        m = dict(m, files=[str(x)[:200] for x in m["files"]] if isinstance(m["files"], list) else [])
         tag = f" loop={m['loop_id']}#{m.get('iteration')}" if m.get("loop_id") else ""
-        dur = f" {m['duration_s']:.1f}s" if isinstance(m.get("duration_s"), (int, float)) else ""
+        dur = f" {_num(m['duration_s']):.1f}s" if isinstance(m.get("duration_s"), (int, float)) else ""
         rows.append(f"{m['pid']} [{'PASS' if m['passed'] else 'FAIL'}] {str(m['goal'])[:70]} "
                     f"({', '.join(m['files'])}) by {m['by']}{dur}{tag}")
     loops = list_loops(ctx.core.settings)
@@ -1068,13 +1117,27 @@ async def t_evolve_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 def _loop_line(lp: dict[str, Any]) -> str:
-    its = lp.get("iterations", [])
+    its = _its(lp)
     acc = sum(1 for i in its if i.get("outcome") == "accepted")
     why = lp.get("stopped")
-    return (f"{lp['loop_id']} [{lp.get('status')}{'/' + why if why and why != lp.get('status') else ''}] "
-            f"{lp.get('goal', '')[:60]} iters={len(its)}/{lp.get('max_iters')} accepted={acc} "
-            f"rejected={len(its) - acc} {float(lp.get('duration_s') or 0):.1f}s/"
-            f"{float(lp.get('time_budget_s') or 0):.0f}s")
+    return (f"{str(lp.get('loop_id'))[:80]} [{lp.get('status')}{'/' + str(why) if why and why != lp.get('status') else ''}] "
+            f"{str(lp.get('goal') or '')[:60]} iters={len(its)}/{lp.get('max_iters')} accepted={acc} "
+            f"rejected={len(its) - acc} {_num(lp.get('duration_s')):.1f}s/"
+            f"{_num(lp.get('time_budget_s')):.0f}s")
+
+
+def _clean_loop(lp: dict[str, Any]) -> dict[str, Any]:
+    """A loop file as evolve_status / evolve_list read it. A hand-edited, torn or foreign file used
+    to raise out of every listing: iterations as a dict or holding ints, outcome not a string,
+    accepted not an object, a str ts or a huge owner_pid."""
+    its = []
+    for i in _its(lp):
+        its.append({**i, "iteration": i.get("iteration"), "pid": str(i.get("pid"))[:80],
+                    "outcome": str(i.get("outcome") or "unknown")[:20], "duration_s": _num(i.get("duration_s"))})
+    acc = lp.get("accepted")
+    acc = {**acc, "pid": str(acc.get("pid"))[:80], "branch": str(acc.get("branch"))[:200]} \
+        if isinstance(acc, dict) else None
+    return {**lp, "iterations": its, "accepted": acc, "goal": str(lp.get("goal") or "")}
 
 
 def list_loops(settings) -> list[dict[str, Any]]:
@@ -1086,11 +1149,11 @@ def list_loops(settings) -> list[dict[str, Any]]:
         for f in d.glob("*.json"):
             try:
                 lp = json.loads(f.read_text())
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 continue
-            if isinstance(lp, dict) and lp.get("loop_id"):
-                out.append(_effective(lp))
-    return sorted(out, key=lambda m: m.get("ts", 0))
+            if isinstance(lp, dict) and isinstance(lp.get("loop_id"), str) and lp["loop_id"]:
+                out.append(_clean_loop(_effective(lp)))
+    return sorted(out, key=lambda m: _num(m.get("ts")))  # a str ts raised TypeError in the sort
 
 
 async def t_evolve_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
@@ -1176,7 +1239,7 @@ def list_accepted(settings) -> list[dict[str, Any]]:
         for f in sorted(d.glob("*.json")):
             try:
                 m = json.loads(f.read_text())
-            except (OSError, ValueError):
+            except (OSError, ValueError, RecursionError):
                 continue
             if isinstance(m, dict) and m.get("passed") and isinstance(m.get("pid"), str):
                 out.append({k: m.get(k) for k in ("pid", "goal", "branch", "files", "by", "ts")})

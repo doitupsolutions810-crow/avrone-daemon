@@ -58,23 +58,60 @@ def _img_path(ctx: "AgentContext", p: str) -> Path:
 
 
 # ---------------------------------------------------------------- images
-async def t_image_inspect(ctx: "AgentContext", args: dict[str, Any]) -> str:
+MAX_IMAGE_PIXELS = 40_000_000     # inspect/decode refuse bigger images (a 48 KB PNG can be 400 Mpx)
+MAX_IMAGE_BYTES = 64 * 1024 * 1024
+DECODE_UPSCALE_MAX_PIXELS = 4_000_000  # the 2x pass only for small images (4x the pixels)
+
+
+def _open_image(ctx: "AgentContext", raw: Any):
+    """(path, PIL image) or an "ERROR: ..." string. Before: a FIFO or /dev/stdin path hung the event
+    loop inside Image.open; a non-image, empty, truncated or directory path raised a raw exception;
+    a 400 Mpx PNG of 48 KB raised DecompressionBombError, and one just under PIL's limit (~179 Mpx)
+    was decoded at ~0.5 GB per copy, with the 2x decode pass at 4x that."""
     from PIL import Image
-    if not isinstance(args.get("path"), str) or not args["path"].strip():
+    if not isinstance(raw, str) or not raw.strip():
         return "ERROR: path is required (an image file in your workspace)"
-    p = _img_path(ctx, args["path"])
-    im = Image.open(p)
+    try:
+        p = _img_path(ctx, raw)
+    except ValueError as e:
+        return f"ERROR: {e}"
+    try:
+        if not p.is_file():
+            return f"ERROR: {raw!r} is not a regular file"
+        size = p.stat().st_size
+    except OSError as e:
+        return f"ERROR: cannot read {raw!r}: {e.strerror or e}"
+    if size == 0:
+        return f"ERROR: {p.name} is empty"
+    if size > MAX_IMAGE_BYTES:
+        return f"ERROR: {p.name} is {size} bytes; cap is {MAX_IMAGE_BYTES}"
+    try:
+        im = Image.open(p)
+        w, h = im.size
+        if w <= 0 or h <= 0 or w * h > MAX_IMAGE_PIXELS:
+            im.close()
+            return f"ERROR: {p.name} is {w}x{h} ({w * h} px); cap is {MAX_IMAGE_PIXELS} px"
+        im.load()
+    except Image.DecompressionBombError:
+        return f"ERROR: {p.name} declares too many pixels (decompression bomb)"
+    except (OSError, ValueError, SyntaxError, EOFError) as e:  # UnidentifiedImageError is an OSError
+        return f"ERROR: {p.name} is not a readable image ({type(e).__name__}: {str(e)[:120]})"
+    return p, im
+
+
+def _inspect(p: Path, im) -> str:
     g = im.convert("L")
     hist = g.histogram()
-    total = sum(hist)
-    ent = -sum((h / total) * math.log2(h / total) for h in hist if h)
+    total = sum(hist) or 1
+    ent = -sum((h / total) * math.log2(h / total) for h in hist if h) + 0.0
+    ent = abs(ent) if ent == 0 else ent  # a one-colour image printed "-0.000"
     colors = im.convert("RGB").getcolors(maxcolors=1 << 16)
     top = sorted(colors, reverse=True)[:6] if colors else []
-    # estimate module size from run lengths along the middle row (barcode-ish images)
+    # estimate module size from run lengths along three rows (barcode-ish images)
     bw = g.point(lambda v: 255 if v > 127 else 0)
     w, h = bw.size
     runs: Counter[int] = Counter()
-    for y in (h // 3, h // 2, 2 * h // 3):
+    for y in sorted({h // 3, h // 2, 2 * h // 3}):
         row = [bw.getpixel((x, y)) for x in range(w)]
         n = 1
         for a, b in zip(row, row[1:]):
@@ -90,29 +127,55 @@ async def t_image_inspect(ctx: "AgentContext", args: dict[str, Any]) -> str:
             f"top colors: {[(c, rgb) for c, rgb in top]}\nestimated grid: {grid}")
 
 
-async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    try:
-        import zxingcpp
-    except ImportError:
-        return ("ERROR: zxing-cpp not installed. It is a pip package (not apt): "
-                "env_install {\"package\": \"zxing-cpp\", \"manager\": \"pip\"} then retry.")
+async def t_image_inspect(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    got = _open_image(ctx, (args or {}).get("path"))
+    if isinstance(got, str):
+        return got
+    p, im = got
+    try:  # off the event loop: a big image used to stall every other agent and the API for seconds
+        return await asyncio.to_thread(_inspect, p, im)
+    except (OSError, ValueError, MemoryError) as e:
+        return f"ERROR: could not inspect {p.name}: {type(e).__name__}"
+    finally:
+        im.close()
+
+
+def _decode(zxingcpp, p: Path, im) -> dict[tuple[str, str], str]:
     from PIL import Image
-    if not isinstance(args.get("path"), str) or not args["path"].strip():
-        return "ERROR: path is required (an image file in your workspace)"
-    p = _img_path(ctx, args["path"])
-    im = Image.open(p).convert("L")
+    g = im.convert("L")
     seen: dict[tuple[str, str], str] = {}
     for scale in (1.0, 0.5, 2.0, 0.25):
-        s = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))), Image.NEAREST)
+        if scale > 1 and g.width * g.height > DECODE_UPSCALE_MAX_PIXELS:
+            continue
+        s = g.resize((max(1, int(g.width * scale)), max(1, int(g.height * scale))), Image.NEAREST)
         for r in zxingcpp.read_barcodes(s, try_rotate=True, try_downscale=True):
             key = (str(r.format), r.text)
-            if key not in seen:
+            if key not in seen and len(seen) < 200:
                 pos = r.position
                 extra = getattr(r, "extra", None) or {}
                 ver = f" version={extra['Version']}" if isinstance(extra, dict) and extra.get("Version") else ""
                 seen[key] = (f"- {r.format.name}{ver} valid={r.valid} ec={getattr(r, 'ec_level', '?')} "
                              f"scale={scale} at ({pos.top_left.x},{pos.top_left.y})-({pos.bottom_right.x},{pos.bottom_right.y})"
                              f"\n  text[{len(r.text)}]: {r.text[:4000]}")
+    return seen
+
+
+async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    try:
+        import zxingcpp
+    except ImportError:
+        return ("ERROR: zxing-cpp not installed. It is a pip package (not apt): "
+                "env_install {\"package\": \"zxing-cpp\", \"manager\": \"pip\"} then retry.")
+    got = _open_image(ctx, (args or {}).get("path"))
+    if isinstance(got, str):
+        return got
+    p, im = got
+    try:
+        seen = await asyncio.to_thread(_decode, zxingcpp, p, im)
+    except (OSError, ValueError, MemoryError, RuntimeError) as e:
+        return f"ERROR: could not decode {p.name}: {type(e).__name__}"
+    finally:
+        im.close()
     _emit(ctx, "image.decode", path=str(p), found=len(seen))
     return f"{len(seen)} symbol(s) in {p.name}\n" + "\n".join(seen.values()) if seen else f"no symbols decoded in {p.name}"
 
@@ -121,6 +184,7 @@ async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
 SKILL_MAX_BYTES = 256_000
 SKILL_LOAD_CHARS = 12000
+MAX_SKILLS = 500
 
 
 def _skills_dir(ctx: "AgentContext") -> Path:
@@ -173,8 +237,12 @@ def _read_skill(f: Path) -> str | None:
     try:
         if not f.is_file() or f.stat().st_size > SKILL_MAX_BYTES:
             return None
-        return f.read_bytes().decode("utf-8", errors="replace")
-    except OSError:
+        with f.open("rb") as fh:  # bounded: a file that grew after stat() used to be read whole
+            data = fh.read(SKILL_MAX_BYTES + 1)
+        if len(data) > SKILL_MAX_BYTES:
+            return None
+        return data.decode("utf-8", errors="replace")
+    except (OSError, ValueError):
         return None
 
 
@@ -193,6 +261,8 @@ def _skills(ctx: "AgentContext") -> dict[str, tuple[str, Path]]:
     candidates = [(f.parent.name, f) for f in sorted(d.glob("*/SKILL.md"))] + \
                  [(f.stem, f) for f in sorted(d.glob("*.md"))]
     for name, f in candidates:
+        if len(found) >= MAX_SKILLS:  # 100k files used to be read (and listed) on every call
+            break
         if not _valid_skill_name(name) or name in found:
             continue
         try:
@@ -213,6 +283,11 @@ async def t_skill_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return "\n".join(f"- {n}: {d}" for n, (d, _) in sk.items()) or "no skills installed"
 
 
+def _names(sk: dict[str, Any], n: int = 50) -> str:
+    names = list(sk)
+    return ", ".join(names[:n]) + (f", ... (+{len(names) - n} more; skill_list)" if len(names) > n else "") or "none"
+
+
 async def t_skill_load(ctx: "AgentContext", args: dict[str, Any]) -> str:
     name = str((args or {}).get("name", "")).strip()
     if not name:
@@ -221,7 +296,7 @@ async def t_skill_load(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: invalid skill name {name!r} (letters, digits, '.', '_', '-' only; no paths)."
     sk = _skills(ctx)
     if name not in sk:
-        return f"ERROR: no skill {name!r}. Available: {', '.join(sk) or 'none'}"
+        return f"ERROR: no skill {name!r}. Available: {_names(sk)}"
     text = _read_skill(sk[name][1])
     if text is None:
         return f"ERROR: skill {name!r} could not be read."

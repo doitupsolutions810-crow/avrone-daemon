@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 
 import pytest
@@ -9,17 +10,19 @@ from avrone.integration_contract import (
     EvidenceContractError,
     build_evidence_event,
     verify_evidence_event,
+    _canonical,
 )
 
 
 def make(failures=0, runs=100, **kwargs):
-    return build_evidence_event(
-        source="property-suite",
-        run_id="property-run",
-        failures=failures,
-        runs=runs,
-        **kwargs,
-    )
+    args = {
+        "source": "property-suite",
+        "run_id": "property-run",
+        "failures": failures,
+        "runs": runs,
+    }
+    args.update(kwargs)
+    return build_evidence_event(**args)
 
 
 @pytest.mark.parametrize("runs", [1, 2, 3, 7, 10, 99, 100, 997, 1000])
@@ -105,8 +108,10 @@ def test_nested_unknown_fields_are_rejected_by_summary_recomputation():
     assert verify_evidence_event(forged)[0] is False
 
 
+
+
 @pytest.mark.parametrize("field", ["source", "run_id", "check_id", "capability_id", "human_root"])
-@pytest.mark.parametrize("value", [" padded ", "\\tleading", "trailing\\n"])
+@pytest.mark.parametrize("value", [" padded ", "\tleading", "trailing\n"])
 def test_builder_rejects_noncanonical_identifier_whitespace(field, value):
     kwargs = {field: value}
     if field == "human_root":
@@ -124,7 +129,7 @@ def test_verifier_rejects_rehashed_noncanonical_identifier():
     assert verify_evidence_event(record)[0] is False
 
 
-@pytest.mark.parametrize("value", ["\\x7f", "\\x85", "\\u202e", "\\u2066", "\\u200b", "\\ud800"])
+@pytest.mark.parametrize("value", ["\x7f", "\x85", "\u202e", "\u2066", "\u200b", "\ud800"])
 def test_builder_rejects_control_bidi_zero_width_and_surrogate_characters(value):
     with pytest.raises(EvidenceContractError):
         make(source="agent" + value)

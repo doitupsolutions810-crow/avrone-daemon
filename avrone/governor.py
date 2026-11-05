@@ -323,7 +323,9 @@ class NodeHealth:
         d = asdict(self)
         for k in ("load", "mem_pct", "disk_free_pct", "temp_c", "thermal_limit_pct"):
             if d[k] is not None:
-                d[k] = round(d[k], 2)
+                # +-inf drives the throttle as a real extreme, but strict JSON has no Infinity:
+                # /api/telemetry answered 500 while a sensor read inf
+                d[k] = round(d[k], 2) if math.isfinite(d[k]) else None
         return d
 
 
@@ -340,7 +342,7 @@ def _finite(v: Any, default: float) -> float:
     thermal guard: every comparison against NaN is False, so is_hot() could never fire)."""
     try:
         f = float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # 10**400 used to raise out of Governor()
         return default
     return f if math.isfinite(f) else default
 

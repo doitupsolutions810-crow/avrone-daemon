@@ -1265,10 +1265,15 @@ class FleetManager:
                "load": node_load(payload),
                "presence": payload.get("presence"),
                "health": sanitize_health(payload.get("health"))}
+        # strict JSON: a peer sending Infinity/NaN (Python's json accepts them) or bytes in
+        # capabilities/presence was stored as is, and every GET /api/fleet after that answered 500
         try:
-            size = len(json.dumps(rec, default=str))
+            json.dumps(rec, default=str)  # unencodable keys (a tuple) are still refused outright
         except (TypeError, ValueError, RecursionError):
             raise ValueError("node record is not JSON-serializable") from None
+        from .codex import jsonable
+        rec = jsonable(rec)
+        size = len(json.dumps(rec, default=str, allow_nan=False))
         if size > MAX_NODE_RECORD_BYTES:
             raise ValueError(f"node record is {size} bytes (max {MAX_NODE_RECORD_BYTES}): trim capabilities/presence")
         with self._lock:

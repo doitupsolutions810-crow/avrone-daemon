@@ -151,7 +151,11 @@ _BLOCKED_SUFFIXES = (
     "localtest.me", "lvh.me", "vcap.me", "lacolhost.com",
 )
 # public wildcard-DNS services that turn an address written in the name into an A record
-_IP_IN_NAME_SERVICES = ("nip.io", "sslip.io", "xip.io", "traefik.me", "nip.direct")
+_IP_IN_NAME_SERVICES = ("nip.io", "sslip.io", "xip.io", "traefik.me", "nip.direct",
+                        # DNS-rebinding test services: the address (hex or dotted) is in the name
+                        "rbndr.us", "1u.ms")
+# a dotted quad glued to other text inside the name: customer-10.0.0.1.nip.io, make-127.0.0.1-rr.1u.ms
+_GLUED_QUAD = re.compile(r"(?:^|[.-])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?=$|[.-])")
 _DASH_QUAD = re.compile(r"(?<![0-9])(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})(?![0-9])")
 _LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
 _TLD = re.compile(r"^(?:[a-z][a-z0-9-]*[a-z0-9]|[a-z]|xn--[a-z0-9-]+)$")
@@ -210,7 +214,24 @@ def _reject_private(host: str) -> str | None:
                     return f"ERROR: {host} embeds a private address; refused"
             except ValueError:
                 pass
+    for quad in _GLUED_QUAD.findall(h):
+        try:
+            if _non_public_ip(ipaddress.IPv4Address(".".join(str(int(x)) for x in quad))):
+                return f"ERROR: {host} embeds a private address; refused"
+        except ValueError:
+            pass
     if any(h == s or h.endswith("." + s) for s in _IP_IN_NAME_SERVICES):
+        # sslip.io/nip.io also read IPv6 with dashes for colons, "::" as "--": 0--1.sslip.io is ::1,
+        # fe80--1 link-local, ffff-7f00-1 nothing public. Only the uncompressed 8-group form was caught.
+        for label in labels:
+            if "-" not in label or not re.fullmatch(r"[0-9a-f-]+", label):
+                continue
+            try:
+                ip6 = ipaddress.IPv6Address(label.replace("-", ":"))
+            except ValueError:
+                continue
+            if _non_public_ip(ip6):
+                return f"ERROR: {host} embeds a private address; refused"
         for label in labels:
             for m in re.findall(r"(?<![0-9a-f])([0-9a-f]{8})(?![0-9a-f])", label):
                 if _non_public_ip(ipaddress.IPv4Address(int(m, 16))):

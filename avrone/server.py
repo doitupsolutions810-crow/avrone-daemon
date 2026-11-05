@@ -440,7 +440,8 @@ async def _verified(request: Request) -> dict:
 async def fleet_info(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
     f = _fleet()
-    return {**f.info(), "nodes": f.list_nodes()}
+    from .codex import jsonable
+    return jsonable({**f.info(), "nodes": f.list_nodes()})  # records saved before v0.40 may hold inf
 
 
 @app.post("/api/fleet/register")
@@ -575,7 +576,8 @@ async def api_osint_metrics(request: Request, x_admin_token: str | None = Header
 async def api_telemetry(request: Request, hours: float = 24, x_admin_token: str | None = Header(default=None)):
     require_local(request, x_admin_token)
     from .telemetry import telemetry
-    return telemetry(core(), hours * 3600)
+    from .codex import jsonable
+    return jsonable(telemetry(core(), hours * 3600))  # strict JSON whatever a sensor or log held
 
 
 @app.get("/api/map")

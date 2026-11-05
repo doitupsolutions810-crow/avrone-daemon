@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.40: Round 47: recon target smuggling, hostile MCP servers, governor/telemetry and fleet strict JSON. 5,041 tests + 5 integration
+
+29 of the 54 new tests failed on v0.39 before the fixes.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| recon | **private addresses hidden in names passed the up-front guard**: compressed IPv6 on sslip.io/nip.io (`0--1` = `::1`, `fe80--1`, `fc00--1`), dotted quads glued to text (`customer-10.0.0.1.nip.io`, `make-127.0.0.1-rr.1u.ms`, `a.10.0.0.1-x.example.com`), and the DNS-rebinding services `rbndr.us` / `1u.ms`. (Connecting tools still re-check the resolved address; this closes it before any DNS) | `_GLUED_QUAD` scan on every name; IPv6 dash labels parsed on IP-in-name services; `rbndr.us` and `1u.ms` added | 16 smuggled names x 5 forms (case, trailing dot, scheme, path, port) refused; 11 ordinary public names (`2a01-4f8-c17-b8f--2.sslip.io`, `dead--beef.example.com`, IDN) still pass; 2,400 seeded encodings (full-width, ideographic dots, zero-width, soft hyphen) of 22 private bases never pass; 3,000 junk strings never raise |
+| mcp | **a server paging tools without end put up to 100 x 32 MB of tools into the registry** (and every agent's tool docs) | `MAX_TOOLS_PER_SERVER = 512`, pagination stops there | endless-pages fake server: 512 tools, 2 requests |
+| mcp | **a schema with an unhashable `type` (`{"x":1}`, `[{"x":1}]`) raised and dropped the tool**; 100k properties were all rendered before the doc was cut to 300 chars | non-string types read as `any`; rendering stops at the limit; keys capped at 80 chars | 13 hostile schemas: every doc is at most 300 chars, every tool still registers |
+| governor | **a +-inf sensor reading made `/api/telemetry` answer 500** (strict JSON has no Infinity); `Governor(thermal_max_c=10**400)` raised OverflowError | `NodeHealth.as_dict` shows non-finite readings as null (the throttle still treats inf as the extreme); `_finite` catches OverflowError; telemetry passed through `jsonable` | inf/-inf/1e308/NaN sensors x 5 `hours` values: 200 and strict JSON; 900 seeded junk governors never raise |
+| fleet | **a peer registering `Infinity`/`NaN`/bytes/sets in capabilities or presence was stored as is, and every later `GET /api/fleet` answered 500** | node record passed through `jsonable` before the size check and save (unencodable keys are still refused, v0.32 contract); `/api/fleet` also sanitizes records saved by older versions | registry reloads as strict JSON |
+
 ## v0.39: Round 46: live WebSocket feed, bridge journal across processes, hostile plugins, non-ASCII tokens. 4,987 tests + 5 integration
 
 Every fix below was confirmed by running the new tests against v0.38 first, then fixing.

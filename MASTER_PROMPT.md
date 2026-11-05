@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.39.0)
+# AVRONE MASTER PROMPT (v0.40.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~4,987 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,041 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -98,7 +98,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 211 test files, offline by default
+├── tests/                  # 212 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -311,6 +311,18 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.40: Round 47: recon target smuggling, hostile MCP servers, governor/telemetry and fleet strict JSON. 5,041 tests + 5 integration
+
+29 of the 54 new tests failed on v0.39 before the fixes.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| recon | **private addresses hidden in names passed the up-front guard**: compressed IPv6 on sslip.io/nip.io (`0--1` = `::1`, `fe80--1`, `fc00--1`), dotted quads glued to text (`customer-10.0.0.1.nip.io`, `make-127.0.0.1-rr.1u.ms`, `a.10.0.0.1-x.example.com`), and the DNS-rebinding services `rbndr.us` / `1u.ms`. (Connecting tools still re-check the resolved address; this closes it before any DNS) | `_GLUED_QUAD` scan on every name; IPv6 dash labels parsed on IP-in-name services; `rbndr.us` and `1u.ms` added | 16 smuggled names x 5 forms (case, trailing dot, scheme, path, port) refused; 11 ordinary public names (`2a01-4f8-c17-b8f--2.sslip.io`, `dead--beef.example.com`, IDN) still pass; 2,400 seeded encodings (full-width, ideographic dots, zero-width, soft hyphen) of 22 private bases never pass; 3,000 junk strings never raise |
+| mcp | **a server paging tools without end put up to 100 x 32 MB of tools into the registry** (and every agent's tool docs) | `MAX_TOOLS_PER_SERVER = 512`, pagination stops there | endless-pages fake server: 512 tools, 2 requests |
+| mcp | **a schema with an unhashable `type` (`{"x":1}`, `[{"x":1}]`) raised and dropped the tool**; 100k properties were all rendered before the doc was cut to 300 chars | non-string types read as `any`; rendering stops at the limit; keys capped at 80 chars | 13 hostile schemas: every doc is at most 300 chars, every tool still registers |
+| governor | **a +-inf sensor reading made `/api/telemetry` answer 500** (strict JSON has no Infinity); `Governor(thermal_max_c=10**400)` raised OverflowError | `NodeHealth.as_dict` shows non-finite readings as null (the throttle still treats inf as the extreme); `_finite` catches OverflowError; telemetry passed through `jsonable` | inf/-inf/1e308/NaN sensors x 5 `hours` values: 200 and strict JSON; 900 seeded junk governors never raise |
+| fleet | **a peer registering `Infinity`/`NaN`/bytes/sets in capabilities or presence was stored as is, and every later `GET /api/fleet` answered 500** | node record passed through `jsonable` before the size check and save (unencodable keys are still refused, v0.32 contract); `/api/fleet` also sanitizes records saved by older versions | registry reloads as strict JSON |
+
 ## v0.39: Round 46: live WebSocket feed, bridge journal across processes, hostile plugins, non-ASCII tokens. 4,987 tests + 5 integration
 
 Every fix below was confirmed by running the new tests against v0.38 first, then fixing.
@@ -338,18 +350,6 @@ Every fix below was confirmed by running the new tests against v0.37 first (22 f
 | server | **`/api/terminal` with a lone surrogate in `cmd` answered 500** (the runner could not build the command line) | 422 before the runner is touched (a NUL keeps the v0.26 contract: exit -1 result; v0.39 restored it) | strict-JSON 422 tests |
 | fuzz | — | 4 processes drain 150 jobs from one SQLite file with no job run twice; expired-lease owner fenced from complete/fail/extend/release; poison job goes dead; corrupt rows never kill `claim()`; `replay()`/`runs()` survive binary, 3 MB, deeply nested, directory and symlink logs; `emit()` with NaN, cycles, a `repr` bomb, surrogates always writes one JSON line | `tests/test_round45_queue_codex_edges.py` (86 tests) |
 
-## v0.37: Round 44: filesystem escapes, hostile agent packs, several processes on one data dir. 4,885 tests + 5 integration
-
-All six process bugs below were confirmed by running the new tests against v0.36 first (6 failed), then fixed.
-
-| Lane | Finding | Mapping | Verification |
-|---|---|---|---|
-| fleet | **a captured signed request replayed to a SECOND worker process ran twice**: each process kept its own replay cache, and each save overwrote the other's nonces | nonce check + insert under `flock` on `fleet_nonces.json.lock`, folding in nonces other processes saved (re-read skipped while the file's mtime/size is unchanged) | worker A accepts, worker B refuses; 6 forked processes race one request x5 rounds: accepted exactly once each round; a third process started later refuses all 40 |
-| checkpoint | **two processes writing one checkpoint erased each other's steps** (whole-file last-writer-wins) | save re-reads the file under `flock` and applies only this process's written/deleted keys; a cleared scope is never resurrected | 3 forked writers x 40 steps: all 120 kept |
-| checkpoint | **`claim()` only saw jobs in its own process**, so two processes could resume one checkpoint at once | non-blocking `flock` on `<ckpt>.claim`, held for the run; the kernel frees it if the process dies | conflict across processes; free after release and after a hard crash (`os._exit`) |
-| paths | — | `agentfs.confine` and `tools._safe_path` vs seeded hostile paths (`..` variants, `~`, drive letters, UNC, NUL, full-width dots, RTL marks, lone surrogates) and real symlinks (dir link out, link to `/`, relative file link, self loop) | never resolves outside the root |
-| agentpack | — | 26 booby-trapped bundles (symlink, hardlink, device, FIFO, dir members, traversal, absolute, backslash, drive, control chars, case and NFC collisions, file-vs-dir, duplicate manifest, unlisted file, wrong hash, setuid mode, bad agent id/origin, memory tamper, not gzip, empty, truncated) + a 64 MB gzip bomb (refused in under 5 s, never inflated) + random byte flips | only `PackError`, never anything else |
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -361,4 +361,4 @@ All six process bugs below were confirmed by running the new tests against v0.36
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.39.0 checked out: 4,987 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.40.0 checked out: 5,041 passed, 99% coverage. Next: round <N+1> on <angle>."

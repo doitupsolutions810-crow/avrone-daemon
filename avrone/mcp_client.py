@@ -57,6 +57,10 @@ def _safe_part(s: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_\-.]", "_", str(s))[:64] or "_"
 
 
+# tools taken from one server: a hostile or buggy server paging 100 x 32 MB of tool entries used to
+# put millions of tools into the registry (and into every agent's tool docs)
+MAX_TOOLS_PER_SERVER = 512
+
 DEFAULT_MAX_RESPONSE, MIN_MAX_RESPONSE, HARD_MAX_RESPONSE = 32 * 1024 * 1024, 64 * 1024, 1024 * 1024 * 1024
 
 
@@ -545,6 +549,12 @@ class MCPClient:
                             and t["name"] not in names):  # a page repeated by the server lists once
                         names.add(t["name"])
                         tools.append(t)
+                        if len(tools) >= MAX_TOOLS_PER_SERVER:
+                            break
+            if len(tools) >= MAX_TOOLS_PER_SERVER:
+                log.warning("MCP server %s lists more than %d tools; the rest are ignored",
+                            self.name, MAX_TOOLS_PER_SERVER)
+                break
             cursor = res.get("nextCursor")
             if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
                 break  # a server repeating its cursor used to be asked 100 times for the same page
@@ -624,12 +634,15 @@ def args_doc_from_schema(schema: dict[str, Any] | None, limit: int = 300) -> str
         spec = spec if isinstance(spec, dict) else {}
         t = spec.get("type")
         if isinstance(t, list):
-            t = "|".join(_TYPE_MAP.get(x, str(x)) for x in t if x != "null") or "any"
+            t = "|".join(_TYPE_MAP.get(x, str(x)) if isinstance(x, str) else "any"
+                         for x in t[:8] if x != "null") or "any"
         elif isinstance(spec.get("enum"), list) and spec["enum"]:
             t = "|".join(json.dumps(v, default=str) for v in spec["enum"][:6])
-        else:
-            t = _TYPE_MAP.get(t, "any") if t else "any"
-        items.append(f'"{key}"{"" if key in required else "?"}: {t}')
+        else:  # a dict/list "type" (unhashable) used to raise and drop the whole tool
+            t = _TYPE_MAP.get(t, "any") if isinstance(t, str) and t else "any"
+        items.append(f'"{str(key)[:80]}"{"" if key in required else "?"}: {t}')
+        if sum(len(i) + 2 for i in items) > limit:
+            break  # 100k properties used to be rendered in full before the doc was cut to `limit`
     doc = "{" + ", ".join(items) + "}"
     if len(doc) > limit:
         doc = doc[: limit - 5].rsplit(",", 1)[0] + ", ...}"

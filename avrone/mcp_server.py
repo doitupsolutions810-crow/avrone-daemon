@@ -277,8 +277,20 @@ class AvroneMCPServer:
                     await runner.stop()
 
     async def _handle_safe(self, m: Any) -> None:
-        if not isinstance(m, dict) or "method" not in m:
-            return  # responses to requests we never send, or junk
+        if not isinstance(m, dict):
+            # JSON-RPC invalid requests must receive a response. A non-empty nested
+            # batch item (or scalar top-level value) is not a response message.
+            await self.send({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32600, "message": "Invalid Request"}})
+            return
+        if "method" not in m:
+            # We never issue outbound requests, so valid-looking responses are ignored;
+            # objects that are neither requests nor responses are invalid requests.
+            if "result" in m or "error" in m:
+                return
+            await self.send({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32600, "message": "Invalid Request"}})
+            return
         rid = m.get("id")
         is_request = "id" in m
         try:

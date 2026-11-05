@@ -1,5 +1,9 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
 jobs:
   test:
     runs-on: ubuntu-24.04    # pinned: ubuntu-latest migrated to Ubuntu 26 on 2026-10-19 (actions/runner-images#14748)
@@ -39,3 +43,13 @@ jobs:
             exit 1
           }
         env: { AVRONE_LLM_MODE: mock, AVRONE_RUNNER: local }
+
+  docker-verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build AVRONE image
+        run: docker build -t avrone:verify .
+      - name: Run Verify.sh inside image
+        run: |
+          docker run --rm --user 10001:10001 avrone:verify bash -c "cp /app/Verify.sh /tmp/Verify.sh 2>/dev/null || true; sed -i 's|cd \"\$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)\"|cd /app|' /tmp/Verify.sh; bash /tmp/Verify.sh"

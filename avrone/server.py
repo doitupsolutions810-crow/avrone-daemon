@@ -399,6 +399,14 @@ async def extensions():
 
 
 # ------------------------------------------------------------------ fleet
+OFF_LOOP_BODY_BYTES = 256 * 1024  # fleet bodies above this are hashed and parsed in a worker thread
+
+
+def _unauth_codes():
+    from .fleet import UNAUTH_CODES
+    return UNAUTH_CODES
+
+
 def _fleet():
     f = getattr(core(), "fleet", None)
     if f is None or not f.enabled:
@@ -411,9 +419,12 @@ async def _gateway(request: Request, kind: str) -> dict:
     from .fleet import GatewayRefused
     f = _fleet()
     body = await request.body()
+    args = (kind, request.method, request.url.path, body, {k.lower(): v for k, v in request.headers.items()})
     try:
-        return f.dispatch_gateway(kind, request.method, request.url.path, body,
-                                  {k.lower(): v for k, v in request.headers.items()})
+        if len(body) > OFF_LOOP_BODY_BYTES:
+            # hashing and parsing a 16 MB body took ~60 ms of event-loop time per request (round 71)
+            return await asyncio.to_thread(f.dispatch_gateway, *args)
+        return f.dispatch_gateway(*args)
     except GatewayRefused as e:
         if e.code == "bad_body":
             raise HTTPException(400, str(e)) from None
@@ -423,13 +434,20 @@ async def _gateway(request: Request, kind: str) -> dict:
 async def _verified(request: Request) -> dict:
     f = _fleet()
     body = await request.body()
+    big = len(body) > OFF_LOOP_BODY_BYTES
+    args = (request.method, request.url.path, body, {k.lower(): v for k, v in request.headers.items()})
     try:
-        f.verify(request.method, request.url.path, body, {k.lower(): v for k, v in request.headers.items()})
+        if big:
+            await asyncio.to_thread(f.verify, *args)
+        else:
+            f.verify(*args)
     except PermissionError as e:
+        if getattr(e, "code", None) in _unauth_codes():
+            f._audit_unauth(e.code, str(e), path=request.url.path)
         raise HTTPException(401, str(e)) from None
     import json as _json
     try:
-        payload = _json.loads(body or b"{}")
+        payload = await asyncio.to_thread(_json.loads, body or b"{}") if big else _json.loads(body or b"{}")
     except ValueError:
         raise HTTPException(400, "body must be JSON") from None
     if not isinstance(payload, dict):

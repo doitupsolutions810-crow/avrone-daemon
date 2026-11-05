@@ -551,12 +551,29 @@ def skew_text(ts_i: int, now: float) -> str:
     return f"the sender's clock is {abs(d)}s {side} this node's (window ±{WINDOW_S}s); sync clocks (NTP)"
 
 
+def _mac(token: str, method: str, path: str, ts: str, nonce: str, body_hash: str) -> str:
+    msg = "\n".join([method.upper(), canonical_path(path), ts, nonce, body_hash]).encode()
+    return hmac.new(token.encode(), msg, hashlib.sha256).hexdigest()
+
+
 def sign(token: str, method: str, path: str, body: bytes, ts: str | None = None, nonce: str | None = None) -> dict[str, str]:
     ts = ts or str(int(time.time()))
     nonce = nonce or secrets.token_hex(12)
-    msg = "\n".join([method.upper(), canonical_path(path), ts, nonce, hashlib.sha256(body).hexdigest()]).encode()
-    sig = hmac.new(token.encode(), msg, hashlib.sha256).hexdigest()
+    sig = _mac(token, method, path, ts, nonce, hashlib.sha256(body).hexdigest())
     return {"x-avrone-ts": ts, "x-avrone-nonce": nonce, "x-avrone-sig": sig}
+
+
+# Refusals that happen before the HMAC is checked (no token, malformed headers, bad signature) can
+# come from anyone who can reach the port. Each one used to write a full audit event to the codex
+# log (fleet.jsonl has no rotation) and fan out to every dashboard: a flood of 1M junk requests left
+# ~230 MB of identical "bad signature" lines. Above this many per minute they are counted instead,
+# and one fleet.refused.suppressed event per window reports how many and which codes.
+UNAUTH_CODES = frozenset({"no_token", "bad_timestamp", "bad_nonce", "bad_signature"})
+UNAUTH_AUDIT_WINDOW_S = 60.0
+
+
+def unauth_audit_per_min() -> int:
+    return _env_int("AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN", 60, 0, 1_000_000)
 
 
 _LAZY_LOCK_GUARD = threading.Lock()
@@ -1007,9 +1024,10 @@ class FleetManager:
         if not isinstance(sig, str) or not SIG_RE.fullmatch(sig.lower()):
             raise GatewayRefused("bad_signature", "bad signature")
         sig = sig.lower()  # hex is case-insensitive; some proxies and clients upper-case it
-        ok = hmac.compare_digest(sign(self.token, method, path, body, ts, nonce)["x-avrone-sig"], sig)
+        body_hash = hashlib.sha256(body).hexdigest()  # once: rotation used to hash a 16 MB body twice
+        ok = hmac.compare_digest(_mac(self.token, method, path, ts, nonce, body_hash), sig)
         prev = getattr(self, "prev_token", "")
-        if not ok and prev and hmac.compare_digest(sign(prev, method, path, body, ts, nonce)["x-avrone-sig"], sig):
+        if not ok and prev and hmac.compare_digest(_mac(prev, method, path, ts, nonce, body_hash), sig):
             ok = True
             self._audit("fleet.token.prev", path=path)  # someone still signs with the old token
         if not ok:
@@ -1064,6 +1082,48 @@ class FleetManager:
             self.core.codex.emit("fleet", event, self.node_id, **kw)
         except Exception as e:  # noqa: BLE001  -- auditing must never mask the decision
             log.warning("fleet audit %s failed: %s", event, e)
+
+    def _audit_unauth(self, code: str, reason: str, **kw: Any) -> None:
+        """Audit a pre-HMAC refusal, at most AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN per minute."""
+        with _LAZY_LOCK_GUARD:
+            lk = self.__dict__.get("_unauth_lock") or self.__dict__.setdefault("_unauth_lock", threading.Lock())
+        summary = None
+        with lk:
+            now = time.monotonic()
+            start = self.__dict__.get("_unauth_start")
+            if start is None or now - start >= UNAUTH_AUDIT_WINDOW_S or now < start:
+                summary = self._take_unauth_summary()
+                self._unauth_start, self._unauth_n = now, 0
+            self.refused_unauth = getattr(self, "refused_unauth", 0) + 1
+            self._unauth_n += 1
+            emit = self._unauth_n <= unauth_audit_per_min()
+            if not emit:
+                codes = self.__dict__.setdefault("_unauth_codes", {})
+                codes[code] = codes.get(code, 0) + 1
+        if summary:
+            self._audit("fleet.refused.suppressed", **summary)
+        if emit:
+            self._audit("fleet.refused", code=code, reason=reason, **kw)
+        elif self._unauth_n == unauth_audit_per_min() + 1:
+            log.warning("fleet: unauthenticated refusals above AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN (%d); "
+                        "counting the rest of this minute instead of auditing each", unauth_audit_per_min())
+
+    def _take_unauth_summary(self) -> dict[str, Any] | None:
+        codes = self.__dict__.pop("_unauth_codes", None)
+        if not codes:
+            return None
+        return {"suppressed": sum(codes.values()), "codes": dict(sorted(codes.items())),
+                "window_s": UNAUTH_AUDIT_WINDOW_S}
+
+    def flush_unauth_audit(self) -> None:
+        """Write the pending suppressed-refusal summary now (stop() calls it)."""
+        lk = self.__dict__.get("_unauth_lock")
+        if lk is None:
+            return
+        with lk:
+            summary = self._take_unauth_summary()
+        if summary:
+            self._audit("fleet.refused.suppressed", **summary)
 
     def _refuse(self, code: str, message: str, **kw: Any) -> GatewayRefused:
         self._audit("fleet.refused", code=code, reason=message, **kw)
@@ -1135,7 +1195,10 @@ class FleetManager:
         try:
             self.verify(method, path, body, headers)
         except GatewayRefused as e:
-            self._audit("fleet.refused", code=e.code, reason=str(e), kind=kind, path=path)
+            if e.code in UNAUTH_CODES:
+                self._audit_unauth(e.code, str(e), kind=kind, path=path)
+            else:
+                self._audit("fleet.refused", code=e.code, reason=str(e), kind=kind, path=path)
             raise
         if PRIVILEGED_HEADER in {k.lower() for k in headers}:
             msg = "privileged flag must be inside the signed payload, not a header"
@@ -1793,6 +1856,7 @@ class FleetManager:
             await self.queue.close()
         for t in list(self._bg):
             t.cancel()
+        self.flush_unauth_audit()
         if getattr(self, "_dirty", False):  # heartbeat refreshes still inside the save window
             try:
                 await asyncio.to_thread(self.flush)

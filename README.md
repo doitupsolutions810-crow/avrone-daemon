@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.64: Round 71: junk floods no longer fill the fleet audit log. 5,455 tests + 19 integration
+
+- **Unauthenticated audit flood.** Anyone who can reach the port can trigger a refusal before the HMAC check (no token, a malformed timestamp or nonce, a bad signature). Each one wrote a full `fleet.refused` event to the codex log, which never rotates, and sent it to every dashboard. 5,000 junk requests left 1.16 MB of identical lines, so 1M would leave about 230 MB. These refusals are now audited up to `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN` (default 60) a minute. Past that they are counted (`refused_unauth`), and one `fleet.refused.suppressed` event per window gives the count per code. `stop()` writes any pending summary. Refusals after authentication (stale, replay, allowlist, hops, capability) are still audited every time. 5,000 junk requests: 0.78 s and 1.16 MB before, 0.07 s and 14 KB after.
+- **`/api/fleet/register` now audits** its pre-HMAC refusals too, under the same limit. Before, it audited nothing.
+- **Token rotation hashed the body twice.** With `AVRONE_FLEET_TOKEN_PREV` set, `verify()` hashed the body once per token. It is now hashed once (`_mac`). A 16 MB body dropped from 21 ms to 10 ms.
+- **Big fleet bodies leave the event loop.** Bodies over 256 KB (`OFF_LOOP_BODY_BYTES`) are verified and parsed in a worker thread, both in the gateway and on the register path. Small bodies stay on the loop, so heartbeats don't hop threads.
+- Tests: `tests/test_round71_gateway_audit_flood.py` (7 tests, 5 fail on v0.63).
+
 ## v0.63: Round 70: a fleet join storm shares one registry write. 5,448 tests + 19 integration
 
 - **Join storm rewrote the whole registry once per peer.** Every new node saves `fleet.json` at once, and each save encoded every record with `indent=2` while holding the state lock. 256 concurrent joins of 60 KB records meant 256 full rewrites in a row, about 18 s.

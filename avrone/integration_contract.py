@@ -72,7 +72,10 @@ def build_evidence_event(*, source: str, run_id: str, failures: int, runs: int,
         raise EvidenceContractError("failures must be an integer")
     if isinstance(runs, bool) or not isinstance(runs, int):
         raise EvidenceContractError("runs must be an integer")
-    snapshot = evidence_snapshot(failures, runs)
+    try:
+        snapshot = evidence_snapshot(failures, runs)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise EvidenceContractError(str(exc)) from exc
     body = {
         "schema": SCHEMA,
         "source": source,

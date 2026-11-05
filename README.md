@@ -81,6 +81,25 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.58: Round 65: job queue retention and backlog cap; queue_submit junk input; flaky stall tests made robust. 5,402 tests + 19 integration
+
+- **No retention:** finished jobs (done/dead, each up to 100 KB of result) were never deleted, so `jobs.db`
+  only grew. `JobQueue.prune()` drops finished jobs older than `AVRONE_QUEUE_RETAIN_S` (7 days), then all
+  but the newest `AVRONE_QUEUE_KEEP_FINISHED` (5000). It runs every 100 enqueues and never touches
+  queued or running jobs. New index `jobs_finished(status, updated)`.
+- **No backlog cap:** an agent in a loop could queue without bound. `enqueue()` raises `QueueFull` at
+  `AVRONE_QUEUE_MAX_PENDING` (10,000). The count happens inside the insert's `BEGIN IMMEDIATE`, so two
+  queues on one file land exactly at the cap (60 concurrent enqueues, cap 20: 20 stored, 40 refused).
+- **`queue_submit`:** `int(args["priority"])` in the tool raised on `"x"`, NaN and `"1e400"`, and a
+  missing task raised `KeyError`. Numbers now go through `_num` (junk → default, clamped to ±2^62), an
+  empty or non-string task is refused, a task over 1 MB is refused before it is stored, and a full
+  queue returns `ERROR: queue full`.
+- **Flaky tests:** the round 57 `plain_copy` and round 58 agent-pack loop-stall tests failed under
+  full-suite load (GIL slices over 0.25 s while the off-loop call took seconds). They now pass when the
+  gap is under 0.25 s or under half the call's own time. A blocking call still fails, since its gap is
+  about its whole duration.
+- Tests: `tests/test_round65_queue_retention.py`, 19 tests; 16 fail on v0.57.
+
 ## v0.57: Round 64: fleet memory merge into a full namespace was quadratic. 5,382 tests + 19 integration
 
 - **`MemoryStore.merge_many` eviction:** each new key merged into a namespace at its cap scanned the whole

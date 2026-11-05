@@ -210,9 +210,14 @@ def test_plain_copy_clone_keeps_the_loop_responsive(tmp_path, monkeypatch):
                 n = time.monotonic(); gaps.append(n - last); last = n
         t = asyncio.create_task(tick())
         await asyncio.sleep(0.03)
+        t0 = time.monotonic()
         await evolve._ensure_worktree(ctx, "p1")
+        elapsed = time.monotonic() - t0
         stop = True
         await asyncio.sleep(0.02)
         t.cancel()
-        return max(gaps)
-    assert asyncio.run(go()) < 0.25
+        return max(gaps), elapsed
+    gap, elapsed = asyncio.run(go())
+    # blocking = a gap about as long as the clone; off-loop under suite load can exceed 0.25 s in
+    # GIL slices while the clone itself takes seconds (round 64 flake)
+    assert gap < 0.25 or gap < 0.5 * elapsed, (gap, elapsed)

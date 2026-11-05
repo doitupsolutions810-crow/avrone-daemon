@@ -1941,11 +1941,31 @@ async def t_agent_message(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return head + (f"\n{res['answer']}" if res.get("answer") else f" ({res.get('note') or res.get('run_id')})")
 
 
+QUEUE_TASK_MAX = 1_000_000
+
+
+def _num(v: Any, default: int) -> int:
+    if v is None or isinstance(v, bool):
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(f):
+        return default
+    return int(max(-2**62, min(2**62, f)))
+
+
 async def t_queue_submit(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = _fleet(ctx)
     if f.queue is None:
         return "ERROR: queue not running"
-    payload = {"task": str(args["task"]), "node": str(args.get("node", "auto")), "mode": str(args.get("mode", "squad")),
+    task = args.get("task")
+    if not isinstance(task, str) or not task.strip():
+        return "ERROR: task is required (a non-empty string)"
+    if len(task.encode("utf-8", "replace")) > QUEUE_TASK_MAX:
+        return f"ERROR: task is over {QUEUE_TASK_MAX} bytes; put the detail in a file and reference it"
+    payload = {"task": task, "node": str(args.get("node", "auto")), "mode": str(args.get("mode", "squad")),
                "n": args.get("n"), "from": f"{f.node_id}/{ctx.name}"}
     first = payload["node"].split("/", 1)[0]
     try:  # vet at submit time too, so a doomed job never enters the durable queue
@@ -1953,7 +1973,14 @@ async def t_queue_submit(ctx: "AgentContext", args: dict[str, Any]) -> str:
         f.check_outbound("run", f"spawn:{mode}", getattr(ctx.core, "fleet_hops", 0), first)
     except PermissionError as e:
         return f"ERROR: refused by fleet gateway: {e}"
-    jid = await f.queue.enqueue("run", payload, int(args.get("priority", 0)), int(args.get("max_attempts", 3)))
+    from .jobqueue import QueueFull
+    try:  # junk priority/max_attempts ("x", NaN, 1e400) used to raise ValueError out of the tool;
+        # enqueue() already clamps and defaults them
+        jid = await f.queue.enqueue("run", payload, _num(args.get("priority"), 0), _num(args.get("max_attempts"), 3))
+    except QueueFull as e:
+        return f"ERROR: {e}"
+    except (TypeError, ValueError) as e:  # unserializable "n"
+        return f"ERROR: job not queued: {e}"
     return f"queued job {jid} -> {payload['node']} (retries on failure; check with queue_status)"
 
 

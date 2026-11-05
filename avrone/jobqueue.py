@@ -24,6 +24,38 @@ RESULT_MAX = 100000
 ERROR_MAX = 4000
 PRIORITY_MAX = 2**62
 EXTEND_MAX_S = 7 * 86400  # one heartbeat can never park a job for longer than this
+# Retention (round 65). Finished jobs (done/dead, each up to RESULT_MAX of result) were never
+# deleted: the file only grew. Unfinished jobs had no cap: an agent in a loop could queue without
+# bound. Both are env-tunable; prune runs every PRUNE_EVERY enqueues and on demand.
+DEFAULT_MAX_PENDING, HARD_MAX_PENDING = 10_000, 1_000_000
+DEFAULT_KEEP_FINISHED, HARD_KEEP_FINISHED = 5_000, 1_000_000
+DEFAULT_RETAIN_S = 7 * 86400
+PRUNE_EVERY = 100
+
+
+class QueueFull(Exception):
+    """enqueue() refused: AVRONE_QUEUE_MAX_PENDING unfinished jobs already waiting."""
+
+
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    import os
+    try:
+        v = int(str(os.getenv(name, "")).strip() or default)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(lo, min(hi, v))
+
+
+def max_pending() -> int:
+    return _env_int("AVRONE_QUEUE_MAX_PENDING", DEFAULT_MAX_PENDING, 1, HARD_MAX_PENDING)
+
+
+def keep_finished() -> int:
+    return _env_int("AVRONE_QUEUE_KEEP_FINISHED", DEFAULT_KEEP_FINISHED, 0, HARD_KEEP_FINISHED)
+
+
+def retain_s() -> int:
+    return _env_int("AVRONE_QUEUE_RETAIN_S", DEFAULT_RETAIN_S, 0, 10 * 365 * 86400)
 
 
 def _encode_result(result: Any) -> str:
@@ -58,6 +90,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   created REAL, updated REAL, lease_until REAL DEFAULT 0, result TEXT, error TEXT
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, priority DESC, created);
+CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(status, updated);
 """
 
 
@@ -90,6 +123,7 @@ class JobQueue:
         # Worker down mid-claim could segfault the process.
         self._tlock = threading.Lock()
         self._closed = False
+        self._enqueued = 0
 
     def _txn(self, fn: Callable[[], Any]) -> Any:
         """Run fn inside BEGIN IMMEDIATE ... COMMIT: the write lock is taken BEFORE the read, so a
@@ -129,10 +163,38 @@ class JobQueue:
             tries = max(1, min(int(max_attempts), 1000))
         except (TypeError, ValueError, OverflowError):
             tries = 3
-        await self._run(lambda: self._db.execute(
-            "INSERT INTO jobs(id,kind,payload,status,priority,max_attempts,created,updated) VALUES(?,?,?,?,?,?,?,?)",
-            (jid, str(kind), body, "queued", prio, tries, now, now)))
+        cap = max_pending()
+
+        def _ins() -> None:
+            n = self._db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('queued','running')").fetchone()[0]
+            if n >= cap:
+                raise QueueFull(f"queue full: {n} unfinished jobs (AVRONE_QUEUE_MAX_PENDING={cap})")
+            self._db.execute(
+                "INSERT INTO jobs(id,kind,payload,status,priority,max_attempts,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+                (jid, str(kind), body, "queued", prio, tries, now, now))
+        await self._run(lambda: self._txn(_ins))
+        self._enqueued += 1
+        if self._enqueued % PRUNE_EVERY == 0:
+            try:
+                await self.prune()
+            except Exception:  # noqa: BLE001  (retention is housekeeping; never fail the enqueue)
+                log.warning("job queue prune failed", exc_info=True)
         return jid
+
+    async def prune(self, keep: int | None = None, older_than_s: float | None = None) -> int:
+        """Delete finished (done/dead) jobs older than the retention window, then all but the newest
+        `keep` finished ones. Unfinished jobs are never touched. Returns how many rows went."""
+        k = keep_finished() if keep is None else max(0, int(keep))
+        age = retain_s() if older_than_s is None else max(0.0, float(older_than_s))
+
+        def _p() -> int:
+            cut = time.time() - age
+            n = self._db.execute("DELETE FROM jobs WHERE status IN ('done','dead') AND updated<?", (cut,)).rowcount
+            n += self._db.execute(
+                "DELETE FROM jobs WHERE status IN ('done','dead') AND id NOT IN "
+                "(SELECT id FROM jobs WHERE status IN ('done','dead') ORDER BY updated DESC LIMIT ?)", (k,)).rowcount
+            return n
+        return await self._run(lambda: self._txn(_p))
 
     async def claim(self) -> dict[str, Any] | None:
         def _claim() -> Any:

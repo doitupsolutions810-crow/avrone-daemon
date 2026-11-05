@@ -22,6 +22,7 @@ breaks the run (the checkpoint is best effort).
 """
 from __future__ import annotations
 
+import math
 import hashlib
 import json
 import os
@@ -524,7 +525,11 @@ def _num(v: Any) -> float | None:
     """A finite number or None: a hand-edited "updated": "yesterday" used to crash list sorting."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v) if v == v and v not in (float("inf"), float("-inf")) else None
+    try:
+        f = float(v)
+    except OverflowError:  # "updated": 10**400 hand-edited
+        return None
+    return f if math.isfinite(f) else None
 
 
 def list_managed(data_dir: str | Path) -> list[dict[str, Any]]:

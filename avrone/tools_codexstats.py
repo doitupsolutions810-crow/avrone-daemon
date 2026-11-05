@@ -46,11 +46,14 @@ def _label(v: Any, n: int = 64) -> str:
 def _iso(ts: Any) -> str:
     try:
         f = float(ts)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # a 400-digit int ts
         return "?"
     if f != f or f in (float("inf"), float("-inf")) or f < 0:
         return "?"
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f))
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f))
+    except (OverflowError, ValueError, OSError):  # ts=1e308 / year > 9999 crashed codex_stats
+        return "?"
 
 
 def _log_path(ctx: "AgentContext") -> Path | None:

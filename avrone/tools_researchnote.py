@@ -94,8 +94,15 @@ def learn(data_dir: Any, text: str, run_id: str, topic: str = "", kind: str = "f
     return "learned", key
 
 
+def _no_surrogates(s: str) -> str:
+    """Lone surrogates -> U+FFFD, so the lesson store (UTF-8) can hold every note that was posted."""
+    return re.sub("[\ud800-\udfff]", "\ufffd", s)
+
+
 async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     raw = args.get("text")
+    if isinstance(raw, str):
+        raw = _no_surrogates(raw)
     if not isinstance(raw, str) or not raw.strip():
         return "ERROR: text is required (a non-empty string)"
     if len(raw) > RESEARCH_NOTE_MAX_TEXT:
@@ -105,7 +112,7 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if kind not in RESEARCH_NOTE_KINDS:
         return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
     topic = args.get("topic")
-    topic = "" if topic is None else re.sub(r"[\x00-\x1f\x7f]", " ", str(topic)).strip()
+    topic = "" if topic is None else re.sub(r"[\x00-\x1f\x7f]", " ", _no_surrogates(str(topic))).strip()
     if len(topic) > RESEARCH_NOTE_MAX_TOPIC:
         return f"ERROR: topic is longer than {RESEARCH_NOTE_MAX_TOPIC} chars"
     text = redact_text(raw.strip())

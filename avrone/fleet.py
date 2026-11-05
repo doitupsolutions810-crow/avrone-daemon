@@ -420,7 +420,11 @@ def sanitize_health(raw: Any) -> dict[str, Any] | None:
         v = raw.get(k)
         if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
             continue
-        out[k] = max(lo, min(hi, float(v)))
+        try:
+            f = float(v)
+        except OverflowError:  # a peer's heartbeat with a 400-digit int: raised from sanitize_health
+            f = float("inf") if v > 0 else float("-inf")
+        out[k] = max(lo, min(hi, f))
     st = raw.get("state")
     if st in HEALTH_STATES:
         out["state"] = st
@@ -1437,9 +1441,13 @@ class FleetManager:
 
         def h(n: dict[str, Any], k: str) -> float | None:
             v = (n.get("health") if isinstance(n.get("health"), dict) else {}).get(k)
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
                 return None
-            return float(v)
+            try:
+                f = float(v)  # math.isfinite(10**400) itself raised OverflowError
+            except OverflowError:
+                return None
+            return f if math.isfinite(f) else None
         # Never pick a peer that is itself hot: one that reports state hot/throttled, or a temp at
         # or over this node's thermal max. (The old code fell back to the hot peers when no cool
         # one existed, bouncing agents from one overheating node to another.)

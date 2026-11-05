@@ -81,6 +81,25 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.45: Round 52: every tool under hostile args, peer presence rendering, paths, timestamps. 5,228 tests + 19 integration
+
+29 new tests. 24 failed on v0.44; 1 of those failed only because it uses a name added in this round (`check_path_text`), so 23 bugs are confirmed. A seeded fuzz now drives every registered tool that does not spawn a process or reach the network (`FUZZ_SEED`, `FUZZ_ITERS`), and none may answer with a raw Python exception. Separately, every HTTP endpoint was hit with junk query params and bodies, and none returned a 5xx; no code changed for that.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| presence | **peer names could forge directory rows.** `fleet_agents` printed peer-supplied agent names, roles, tasks, hostnames and service values raw, so a name with a newline added fake `[node]` rows the model reads as real, and a 5 MB `tools` value was rendered whole. `render()` also raised KeyError on rows missing `route`/`env` | each field is one line (control chars, U+2028/9 stripped) and clipped; partial rows render | forged-newline snapshot gives one `[`-row and output under 5 KB |
+| presence | `find_agent("edge/")` and `"/"` resolved to an agent named `""` | an empty name is a `LookupError` | |
+| file tools | a lone surrogate or a component over 255 bytes surfaced as raw `UnicodeEncodeError` / `OSError: [Errno 36]` from `read_file`, `write_file`, `edit_file`, `artifact_save` | `check_path_text()` in `_safe_path` and `fsunify.resolve` refuses with a plain message (`MAX_NAME_BYTES` 255) | |
+| artifact_save | surrogate content raised after open(), leaving an empty artifact; dict content was saved as a Python repr; locale encoding | `write_content` + atomic UTF-8 write, like `write_file` | |
+| bridge | `bridge_reply`/`bridge_post` with `refs` 1.5, 7 or true raised `TypeError` | non-list refs are treated as one ref (sets still work), so the reply gets "refs is required" | |
+| research_note | a surrogate in the text raised in `lesson_key` *after* the post was made, so the agent saw ERROR, retried, and posted twice | surrogates become U+FFFD before posting; `lesson_key` hashes with surrogatepass | one post, lesson learned |
+| memory / codex | `memory_peek` and `codex_stats` crashed on a record with `ts` 1e308 (year > 9999) or a 400-digit int; `memstore._ts` raised `OverflowError` on the int | read as `?` / 0 | |
+| codex_search | log lines printed `kind`, `agent` and `tool` whole: a 1 MB tool name or a newline in an agent name came out raw | one line, clipped to 80/120 chars | |
+| great_scale | `h` or `alpha` as a 400-digit int raised raw `OverflowError` | plain range error | |
+| telemetry / fleet | **a 400-digit integer `ts` in a run log 500'd `/api/telemetry`** (`json.loads` accepts it; `float()` raises). The same `float()` sat on peer data: heartbeat health (`sanitize_health`, migration's `h()`), relayed bridge posts, `fleet_status`/`router_status`, and checkpoint `updated` | each reads as default/None (health clamps to its range) | a log with a 400-digit ts gives 200 |
+
+Contract changes: an `artifact_save` dict/list `content` is now written as JSON (it was a Python repr). A path with a component over 255 bytes or a lone surrogate is refused before any filesystem call.
+
 ## v0.44: Round 51: agent home containers, osint_domain sections, MCP streams and config. 5,199 tests + 19 integration
 
 31 new tests. 25 failed on v0.43; 4 of those failed only because they use names added in this round (`MAX_GUARD_SECS`, `parse_inspect`), so 21 bugs are confirmed. On v0.43 the 500-server config test really spawned 500 processes.

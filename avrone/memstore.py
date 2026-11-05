@@ -59,7 +59,10 @@ def _ts(v: Any) -> float:
     mixed str/float raised TypeError on every later save."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return 0.0
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:  # a hand-edited 400-digit integer ts
+        return 0.0
     return f if math.isfinite(f) else 0.0
 
 DEFAULT_MAX_ENTRIES, HARD_MAX_ENTRIES = 500, 5000

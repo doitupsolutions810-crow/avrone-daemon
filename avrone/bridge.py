@@ -105,7 +105,10 @@ def _remote_ts(ts: Any) -> float:
     """A relayed post's ts: finite, non-bool number, else now."""
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         return time.time()
-    ts = float(ts)
+    try:
+        ts = float(ts)
+    except OverflowError:  # a peer relayed ts as a 400-digit int
+        return time.time()
     return ts if math.isfinite(ts) and ts > 0 else time.time()
 
 
@@ -267,7 +270,10 @@ class Bridge:
         body = _clip(text)
         if not body:
             raise BridgeError("text is required")
-        refs_l = _refs(list(refs) if refs is not None and not isinstance(refs, str) else refs)
+        if refs is not None and not isinstance(refs, (str, list, tuple)):
+            # refs=1.5 / true / {"a": 1} raised TypeError ('float' object is not iterable) from list()
+            refs = list(refs) if isinstance(refs, (set, frozenset)) else [refs]
+        refs_l = _refs(refs)
         with self._lock:
             unknown = [r for r in refs_l if r not in self._posts]
             if unknown and self.path is not None:
@@ -563,7 +569,9 @@ def _norm(text: str) -> str:
 
 def lesson_key(text: str) -> str:
     import hashlib
-    return "l-" + hashlib.sha1(_norm(text).encode()).hexdigest()[:16]
+    # surrogatepass: a lone surrogate (cut emoji) raised UnicodeEncodeError here, AFTER research_note
+    # had already posted, so the agent saw ERROR, retried, and the note was posted twice
+    return "l-" + hashlib.sha1(_norm(text).encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 def _words(text: str) -> set[str]:

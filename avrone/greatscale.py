@@ -151,6 +151,8 @@ async def t_great_scale(ctx: "AgentContext", args: dict[str, Any]) -> str:
             out = evidence_snapshot(f, r, float(alpha))
             if str(args.get("format", "text")).lower() != "json":
                 return _fmt(out)
+    except OverflowError:  # h or alpha = a 400-digit int: math.isfinite/float() raised it raw
+        return "ERROR: number out of range: h must be in [0, 1], alpha in (0, 1)"
     except ValueError as e:
         return f"ERROR: {e}"
     return json.dumps(out, sort_keys=True)

@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -171,6 +172,8 @@ def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
     """Resolve 'Builder-3' or 'router/edge/Builder-3' to (route, agent_name)."""
     if "/" in ref:
         route, name = ref.rsplit("/", 1)
+        if not name:  # "edge/" or "/" resolved to an agent named "" (a tell to nobody)
+            raise LookupError(f"no agent name in {ref!r}; give route/name")
         if not any(r["route"] == route for r in rows):
             raise LookupError(f"no node at route {route!r}")
         return route, name
@@ -185,20 +188,37 @@ def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
     return pick[0]
 
 
+_CTRL = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]+")
+
+
+def _one(v: Any, n: int = 120) -> str:
+    """A peer-supplied field as one short line. Agent names, hostnames and service values come
+    from peers' presence: a name with a newline forged extra [node] rows in fleet_agents output,
+    and a 10 MB `tools` value was rendered whole."""
+    text = _CTRL.sub(" ", "" if v is None else str(v))
+    return text[:n]
+
+
 def render(rows: list[dict[str, Any]], only_live: bool = False) -> str:
     out = []
     for r in rows:
-        env = r.get("env") or {}
-        dev, run, svc = env.get("device", {}), env.get("runner", {}), env.get("services", {})
-        nets = "; ".join(f"{i['name']} {','.join(i['addrs'])}" for i in env.get("networks", []) if i.get("addrs"))
-        cont = run.get("container") or {}
-        out.append(f"[{r['route'] or '(this node)'}] node={r['node_id']} {r['status']} device={dev.get('hostname')} "
-                   f"({dev.get('os')}) runner={run.get('kind')}{' container=' + str(cont.get('name')) if cont else ''}")
+        env = _d(r.get("env"))
+        dev, run, svc = _d(env.get("device")), _d(env.get("runner")), _d(env.get("services"))
+        nets = "; ".join(f"{_one(i.get('name'), 64)} {','.join(_one(x, 64) for x in i.get('addrs', [])[:32])}"
+                         for i in (env.get("networks") or [])[:32] if isinstance(i, dict) and i.get("addrs"))
+        cont = _d(run.get("container"))
+        out.append(f"[{_one(r.get('route'), 300) or '(this node)'}] node={_one(r.get('node_id'))} {_one(r.get('status'), 32)} "
+                   f"device={_one(dev.get('hostname'), 64)} ({_one(dev.get('os'), 64)}) runner={_one(run.get('kind'), 32)}"
+                   f"{' container=' + _one(cont.get('name'), 64) if cont else ''}")
         if nets:
-            out.append(f"   networks: {nets}" + (f"; container {','.join(cont.get('addrs', []))}" if cont.get("addrs") else ""))
+            caddrs = cont.get("addrs") if isinstance(cont.get("addrs"), list) else []
+            out.append(f"   networks: {nets}" + (f"; container {','.join(_one(x, 64) for x in caddrs[:32])}" if caddrs else ""))
         if svc:
-            out.append(f"   services: url={svc.get('public_url')} tools={svc.get('tools')} mcp={svc.get('mcp_servers')} model={svc.get('model')}")
-        ags = [a for a in r["agents"] if a.get("status") == "working" or not only_live]
+            out.append(f"   services: url={_one(svc.get('public_url'), 300)} tools={_one(svc.get('tools'), 32)} "
+                       f"mcp={_one(svc.get('mcp_servers'), 32)} model={_one(svc.get('model'), 80)}")
+        ags = [a for a in (r.get("agents") or []) if isinstance(a, dict)
+               and (a.get("status") == "working" or not only_live)]
         for a in ags:
-            out.append(f"   - {a['name']} ({a.get('role')}) {a.get('status')} run={a.get('run_id')}: {str(a.get('task') or '')[:80]}")
+            out.append(f"   - {_one(a.get('name'))} ({_one(a.get('role'), 60)}) {_one(a.get('status'), 32)} "
+                       f"run={_one(a.get('run_id'), 80)}: {_one(a.get('task'), 80)}")
     return "\n".join(out)

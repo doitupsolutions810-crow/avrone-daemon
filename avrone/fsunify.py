@@ -95,11 +95,11 @@ def parent_root(ctx: "AgentContext") -> Path | None:
 
 def resolve(ctx: "AgentContext", raw: Any, tool: str) -> Resolved:
     """Resolve a tool path for `ctx` (see module doc). Raises ValueError on refusal."""
-    from .tools import _safe_path
+    from .tools import _safe_path, check_path_text
 
     ws = workspace(ctx)
     root = agent_root(ctx)
-    s = str(raw if raw is not None else "").strip()
+    s = check_path_text(str(raw if raw is not None else "").strip())
     if root is None:
         return Resolved(_safe_path(ws, s), ws, False, False)
     try:

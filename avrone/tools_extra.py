@@ -643,9 +643,13 @@ async def t_artifact_save(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = _safe_path(base, name)
     if p == base:
         return "ERROR: bad artifact name"
-    content = str(args.get("content", ""))
+    # write_content: lone surrogates -> U+FFFD, dict/list -> JSON. A surrogate used to raise
+    # UnicodeEncodeError AFTER open(), leaving an empty artifact behind; write_text also used the
+    # locale encoding. Written atomically, as UTF-8, like write_file.
+    from .tools import atomic_write_bytes, write_content
+    content = write_content(args.get("content", ""))
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content)
+    atomic_write_bytes(p, content.encode("utf-8"))
     rel = _rel(ctx, p)
     size = p.stat().st_size
     _emit(ctx, "artifact", path=rel, bytes=size)
@@ -789,12 +793,18 @@ def _codex_line(ev: dict[str, Any], run_id: str) -> str:
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(float(ev.get("ts", 0))))
     except (TypeError, ValueError, OverflowError, OSError):
         ts = "?"
-    tool = f" tool={data['tool']}" if data.get("tool") else ""
+    tool = f" tool={_line1(data['tool'], 80)}" if data.get("tool") else ""
     rest = {k: v for k, v in data.items() if k != "tool"}
     snippet = re.sub(r"\s+", " ", json.dumps(rest, default=str))
     if len(snippet) > 240:
         snippet = snippet[:240] + "..."
-    return f"[{run_id}] {ts}Z {ev.get('kind', '?')} {ev.get('agent', '?')}{tool} {snippet}"
+    # kind/agent/tool are whatever the log holds: a 4 MB tool name or a newline in an agent name used
+    # to come out whole (or as a forged extra result line)
+    return f"[{run_id}] {ts}Z {_line1(ev.get('kind', '?'), 80)} {_line1(ev.get('agent', '?'), 120)}{tool} {snippet}"
+
+
+def _line1(v: Any, n: int) -> str:
+    return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", str(v))[:n]
 
 
 async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:

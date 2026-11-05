@@ -19,6 +19,7 @@ is capped at FLEET_STATUS_MAX_CHARS. Nothing here writes, spawns, signs or touch
 """
 from __future__ import annotations
 
+import math
 import json
 import re
 import time
@@ -58,9 +59,13 @@ def _int(v: Any, default: int, lo: int, hi: int) -> int | None:
 
 
 def _num(v: Any) -> float | None:
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v)
+    try:
+        f = float(v)
+    except OverflowError:  # a peer-reported 400-digit int
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _settings(f: Any) -> dict[str, str]:

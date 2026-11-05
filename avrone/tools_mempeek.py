@@ -52,11 +52,14 @@ def _secretish(v: str) -> bool:
 def _iso(ts: Any) -> str:
     try:
         f = float(ts)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # a 400-digit int ts raised OverflowError
         return "?"
     if f != f or f in (float("inf"), float("-inf")) or f <= 0:
         return "?"
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f))
+    try:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f))
+    except (OverflowError, ValueError, OSError):  # ts=1e308 / year > 9999 crashed memory_peek
+        return "?"
 
 
 def _clean(s: str, n: int) -> str:

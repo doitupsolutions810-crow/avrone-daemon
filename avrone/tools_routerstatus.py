@@ -20,6 +20,7 @@ ROUTER_STATUS_MAX_CHARS. Nothing here calls a model, touches the network, or cha
 """
 from __future__ import annotations
 
+import math
 import json
 import re
 import time
@@ -36,9 +37,13 @@ _UNSAFE_RE = re.compile(r"[^A-Za-z0-9_.:/@+\-]")
 
 
 def _num(v: Any) -> float | None:
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v in (float("inf"), float("-inf")):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v)
+    try:
+        f = float(v)
+    except OverflowError:  # a peer-reported 400-digit int
+        return None
+    return f if math.isfinite(f) else None
 
 
 def _label(v: Any, secrets: list[str], n: int = 96) -> str:

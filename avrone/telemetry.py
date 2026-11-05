@@ -29,7 +29,10 @@ def _finite(v: Any, default: float = 0.0) -> float:
     """v as a finite float; bools, strings, NaN, inf and junk read as default."""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return default
-    f = float(v)
+    try:
+        f = float(v)
+    except OverflowError:  # a 400-digit int ts in a run log 500'd /api/telemetry
+        return default
     return f if math.isfinite(f) else default
 
 

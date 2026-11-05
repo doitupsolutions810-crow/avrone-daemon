@@ -219,8 +219,28 @@ class ToolRegistry:
         return out
 
 
+MAX_NAME_BYTES = 255  # one path component (NAME_MAX on Linux/macOS)
+
+
+def check_path_text(rel: Any) -> str:
+    """A path an agent gave, refused with a plain message when the OS could never hold it.
+
+    A lone surrogate (cut emoji) or a 300-char file name used to surface as raw
+    'UnicodeEncodeError: utf-8 codec ...' / 'OSError: [Errno 36] File name too long' from
+    read_file, write_file, edit_file and artifact_save."""
+    s = str(rel)
+    if re.search("[\ud800-\udfff]", s):
+        raise ValueError("path contains an invalid character (a lone UTF-16 surrogate)")
+    if "\x00" in s:
+        raise ValueError("path contains a NUL byte")
+    for part in s.replace("\\", "/").split("/"):
+        if len(part.encode("utf-8")) > MAX_NAME_BYTES:
+            raise ValueError(f"path component is {len(part.encode('utf-8'))} bytes; the limit is {MAX_NAME_BYTES}")
+    return s
+
+
 def _safe_path(root: Path, rel: str) -> Path:
-    p = (root / str(rel).lstrip("/")).resolve()
+    p = (root / check_path_text(rel).lstrip("/")).resolve()
     if not p.is_relative_to(root.resolve()):
         raise ValueError("path escapes the workspace")
     return p

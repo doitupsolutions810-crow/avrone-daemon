@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.46: Round 53: catastrophic regexes, MCP wire encoding, fallback specs, python/evolve/git inputs. 5,243 tests + 19 integration
+
+15 new tests. 13 failed on v0.45; 3 of those fail only on a name or limit added this round (`wire_safe`, the 2000-char pattern cap), so 10 failing tests confirm 6 distinct bugs. The all-tools fuzz from round 52 was rerun with nested (depth 150), wide (5000 keys, 50,000 items) and 1 MB values over every tool, fleet tools included, for 4 more seeds; the process-spawning tools were probed one hostile field at a time.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| search_files | **one regex froze the whole node.** Python `re` holds the GIL and cannot be interrupted: `(a+)+b` against a line of 28 a's blocked the event loop for ~17 s (32 a's: minutes), stalling every agent, the HTTP API and fleet heartbeats | the scan runs in a child process (`avrone/searchproc.py`) with a deadline (`SEARCH_TIMEOUT_S` 20); hits stream back, so partial results survive a timeout; the child is killed; patterns over 2000 chars are refused | a 50 ms ticker keeps ticking during a ReDoS search; timeout keeps earlier hits |
+| MCP | **NaN, inf or a lone surrogate in a model's tool arguments** (Python's `json.loads` accepts all three) raised raw `ValueError`/`UnicodeEncodeError` from httpx over HTTP, and over stdio sent a bare `NaN` token, which is invalid JSON-RPC | `wire_safe()` on `tools/call` arguments: NaN/inf become null, surrogates become U+FFFD, tuples/sets become lists | strict stdio server (rejects NaN) echoes nulls |
+| gateway | `AVRONE_LLM_FALLBACKS` turned model ids with NUL, newlines or 5000 chars into upstreams that failed every call, repeated a duplicated spec, and had no cap | model and lead ids must be 1 to 200 visible ASCII chars; duplicates dropped; at most `MAX_FALLBACKS` (16) | |
+| python | a surrogate in `code` raised after the snippet file was created, outside the cleanup, so the file leaked; the snippet was written in the locale encoding | `write_content` + UTF-8 write | no `snippet_*.py` left; `café ✓` prints |
+| evolve | `edits=[1]` or an edit with no path/content was found only after cloning the repo (~16 s, an `evolve/<pid>` branch left behind) | `_edits_shape_error` runs before the clone | the clone is never called |
+| git | a 1 MB `args` string was split and handed to git (~10 s) | `MAX_GIT_ARGS_CHARS` 16,000 | |
+
+Also checked, no change needed: `agentfs.agent_dir` with a file where the dir should be is caught by the caller, and MCP config with junk `args`/`env` fails only that server.
+
 ## v0.45: Round 52: every tool under hostile args, peer presence rendering, paths, timestamps. 5,228 tests + 19 integration
 
 29 new tests. 24 failed on v0.44; 1 of those failed only because it uses a name added in this round (`check_path_text`), so 23 bugs are confirmed. A seeded fuzz now drives every registered tool that does not spawn a process or reach the network (`FUZZ_SEED`, `FUZZ_ITERS`), and none may answer with a raw Python exception. Separately, every HTTP endpoint was hit with junk query params and bodies, and none returned a 5xx; no code changed for that.

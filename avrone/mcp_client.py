@@ -86,6 +86,28 @@ def clamp_timeout(v: Any, default: float = 60.0) -> float:
     return max(1.0, min(3600.0, f))
 
 
+def wire_safe(v: Any) -> Any:
+    """Tool arguments as strict, UTF-8-encodable JSON. Python's json.loads accepts NaN/Infinity and
+    lone surrogates, so a model's tool call can carry them: over HTTP httpx raised a raw ValueError
+    ("Out of range float values") or UnicodeEncodeError, and over stdio a bare NaN token reached the
+    server (invalid JSON-RPC: many servers drop or crash on it). NaN/inf -> null, surrogates ->
+    U+FFFD, tuple/set -> list (via codex.jsonable, depth-capped)."""
+    from .codex import jsonable
+
+    def fix(x: Any) -> Any:
+        if isinstance(x, str):
+            return _SURR_RE.sub("\ufffd", x)
+        if isinstance(x, dict):
+            return {fix(k): fix(y) for k, y in x.items()}
+        if isinstance(x, list):
+            return [fix(y) for y in x]
+        return x
+    return fix(jsonable(v))
+
+
+_SURR_RE = re.compile("[\ud800-\udfff]")
+
+
 def coerce_args(v: Any) -> list[str]:
     """mcp.json "args". A string used to be split into single characters ("-y srv" ran
     `cmd - y   s r v`); a string is now split like a shell would, a scalar becomes one arg."""
@@ -594,7 +616,7 @@ class MCPClient:
         return tools
 
     async def call_tool(self, tool: str, arguments: dict[str, Any] | None = None) -> str:
-        res = await self._request("tools/call", {"name": tool, "arguments": arguments or {}},
+        res = await self._request("tools/call", {"name": tool, "arguments": wire_safe(arguments or {})},
                                   timeout=self.timeout)
         if not isinstance(res, dict):
             return "(no content)" if res is None else f"ERROR (from MCP tool {self.name}/{tool}): " \

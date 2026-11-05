@@ -15,6 +15,7 @@ import asyncio
 import json
 import os
 import re
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,6 +23,8 @@ from typing import Any
 import httpx
 
 from .config import PROVIDERS, resolve_provider
+
+log = logging.getLogger("avrone.gateway")
 
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 
@@ -100,8 +103,24 @@ def parse_upstreams(settings: Any, env: dict[str, str] | None = None) -> list[Up
             name, url, mdl, key = resolve_provider(provider, None, model.strip() or None, None, env)
         except ValueError:
             continue
-        ups.append(Upstream(name, url, mdl, key, lead.strip()))
+        lead = lead.strip()
+        # A model id travels in every request body, the status page and the logs: one with a NUL,
+        # newline or 5000 chars (a pasted blob, a broken template) used to become an upstream that
+        # failed every call and filled /api/gateway. The same spec twice made two upstreams.
+        if not _MODEL_RE.fullmatch(mdl) or (lead and not _MODEL_RE.fullmatch(lead)):
+            log.warning("AVRONE_LLM_FALLBACKS: skipping %s spec with an invalid model id", name)
+            continue
+        if any(u.provider == name and u.model == mdl and u.lead_model == lead for u in ups):
+            continue
+        if len(ups) > MAX_FALLBACKS:
+            log.warning("AVRONE_LLM_FALLBACKS: more than %d fallbacks; the rest are ignored", MAX_FALLBACKS)
+            break
+        ups.append(Upstream(name, url, mdl, key, lead))
     return ups
+
+
+MAX_FALLBACKS = 16
+_MODEL_RE = re.compile(r"[\x21-\x7e]{1,200}")
 
 
 class Gateway:

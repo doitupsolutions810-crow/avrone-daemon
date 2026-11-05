@@ -216,6 +216,23 @@ def _edits_too_big(edits: Any) -> str:
     return ""
 
 
+def _edits_shape_error(edits: Any) -> str | None:
+    """A malformed edit list, refused before the clone. edits=[1] or an edit without a path used to
+    be found only after cloning the whole repo (~16 s, and an evolve/<pid> branch left behind)."""
+    if not isinstance(edits, list):
+        return "edits must be a list of {path, content} objects"
+    for e in edits:
+        if not isinstance(e, dict):
+            return f"each edit must be an object with path and content, got {type(e).__name__}"
+        if "path" not in e:
+            return "edit is missing 'path'"
+        if not isinstance(e["path"], str) or not e["path"].strip():
+            return "bad path: each edit's path must be a non-empty string"
+        if e.get("content") is None:
+            return f"edit for {e['path'][:200]} has no content (whole-file text is required)"
+    return None
+
+
 async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: str | None = None,
                         timeout: int = 900, extra_meta: dict[str, Any] | None = None,
                         confine_to: str | None = None) -> dict[str, Any]:
@@ -227,7 +244,7 @@ async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: s
     """
     pid = _new_pid(ctx)
     t0 = _now()
-    too_big = _edits_too_big(edits)
+    too_big = _edits_too_big(edits) or _edits_shape_error(edits)
     if too_big:  # checked before the clone: 100k edits or 1 GB of content used to be written to disk
         return {"pid": pid, "error": too_big, "passed": False, "branch": None, "files": [], "duration_s": 0.0}
     wt, branch = await _ensure_worktree(ctx, pid)

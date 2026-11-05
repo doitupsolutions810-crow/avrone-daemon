@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.45.0)
+# AVRONE MASTER PROMPT (v0.46.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,228 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,243 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -75,6 +75,7 @@ Avrone/
 │   ├── plugins.py               Plugin system.
 │   ├── presence.py              Presence: where every agent is, down to the node, container, host, networks and services.
 │   ├── recon.py                 Advanced reconnaissance (v0.10): deeper, still bounded, authorized-only recon.
+│   ├── searchproc.py            search_files' scan, run in a child process so a pathological regex cannot freeze the node.
 │   ├── server.py                Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD).
 │   ├── sovereign.py             Sovereign OS: the environment agents live and work in.
 │   ├── telemetry.py             Telemetry + System Map: AVRONE traces its own nodes.
@@ -98,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 217 test files, offline by default
+├── tests/                  # 218 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -311,6 +312,21 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.46: Round 53: catastrophic regexes, MCP wire encoding, fallback specs, python/evolve/git inputs. 5,243 tests + 19 integration
+
+15 new tests. 13 failed on v0.45; 3 of those fail only on a name or limit added this round (`wire_safe`, the 2000-char pattern cap), so 10 failing tests confirm 6 distinct bugs. The all-tools fuzz from round 52 was rerun with nested (depth 150), wide (5000 keys, 50,000 items) and 1 MB values over every tool, fleet tools included, for 4 more seeds; the process-spawning tools were probed one hostile field at a time.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| search_files | **one regex froze the whole node.** Python `re` holds the GIL and cannot be interrupted: `(a+)+b` against a line of 28 a's blocked the event loop for ~17 s (32 a's: minutes), stalling every agent, the HTTP API and fleet heartbeats | the scan runs in a child process (`avrone/searchproc.py`) with a deadline (`SEARCH_TIMEOUT_S` 20); hits stream back, so partial results survive a timeout; the child is killed; patterns over 2000 chars are refused | a 50 ms ticker keeps ticking during a ReDoS search; timeout keeps earlier hits |
+| MCP | **NaN, inf or a lone surrogate in a model's tool arguments** (Python's `json.loads` accepts all three) raised raw `ValueError`/`UnicodeEncodeError` from httpx over HTTP, and over stdio sent a bare `NaN` token, which is invalid JSON-RPC | `wire_safe()` on `tools/call` arguments: NaN/inf become null, surrogates become U+FFFD, tuples/sets become lists | strict stdio server (rejects NaN) echoes nulls |
+| gateway | `AVRONE_LLM_FALLBACKS` turned model ids with NUL, newlines or 5000 chars into upstreams that failed every call, repeated a duplicated spec, and had no cap | model and lead ids must be 1 to 200 visible ASCII chars; duplicates dropped; at most `MAX_FALLBACKS` (16) | |
+| python | a surrogate in `code` raised after the snippet file was created, outside the cleanup, so the file leaked; the snippet was written in the locale encoding | `write_content` + UTF-8 write | no `snippet_*.py` left; `café ✓` prints |
+| evolve | `edits=[1]` or an edit with no path/content was found only after cloning the repo (~16 s, an `evolve/<pid>` branch left behind) | `_edits_shape_error` runs before the clone | the clone is never called |
+| git | a 1 MB `args` string was split and handed to git (~10 s) | `MAX_GIT_ARGS_CHARS` 16,000 | |
+
+Also checked, no change needed: `agentfs.agent_dir` with a file where the dir should be is caught by the caller, and MCP config with junk `args`/`env` fails only that server.
+
 ## v0.45: Round 52: every tool under hostile args, peer presence rendering, paths, timestamps. 5,228 tests + 19 integration
 
 29 new tests. 24 failed on v0.44; 1 of those failed only because it uses a name added in this round (`check_path_text`), so 23 bugs are confirmed. A seeded fuzz now drives every registered tool that does not spawn a process or reach the network (`FUZZ_SEED`, `FUZZ_ITERS`), and none may answer with a raw Python exception. Separately, every HTTP endpoint was hit with junk query params and bodies, and none returned a 5xx; no code changed for that.
@@ -345,23 +361,6 @@ Contract changes: an `artifact_save` dict/list `content` is now written as JSON 
 | mcp_client | **SSE lines were buffered without a cap.** httpx `aiter_lines` waits for a newline, and only `data:` bytes counted toward `AVRONE_MCP_MAX_RESPONSE_BYTES`, so 2.5 MB with no newline, or a huge `event:` or comment line, was held whole | own LF/CRLF/CR line splitter capped at the response limit (a CR at a chunk edge waits for its LF) | 3 hostile streams refused; 3 line-ending styles split mid-CRLF still parse |
 | mcp_client | `mcp.json` as a FIFO hung startup; a 50 MB or 100k-deep config was read and parsed whole; 10,000 servers were all spawned at once | regular file, at most 1 MB, deep nesting refused, at most 64 servers (`MAX_SERVERS`); the manager reports `_config` instead of spawning | FIFO returns in under 5 s; 500-server config spawns nothing |
 
-## v0.43: Round 50: hostile model providers, codex listing/replay, CLI arguments. 5,168 tests + 19 integration
-
-17 of the 28 new tests failed on v0.42 before the fixes. The 6,000-body seeded provider fuzz passed on v0.42 too: the gateway's ordinary junk handling held, and the failures were all in depth, size and argument edges.
-
-| Lane | Finding | Mapping | Verification |
-|---|---|---|---|
-| gateway | **a 200 body nested 200k deep (plain JSON, SSE, or inside tool-call `arguments`) escaped `chat()` as a raw `RecursionError`**, not `LLMError`, so callers expecting LLM failures crashed | caught as a permanent failure for that upstream (fails over) | 4 nested bodies, each an `LLMError` |
-| gateway | **response bodies were buffered whole**: a 300 MB gzip stream (a few hundred KB on the wire) was inflated in memory, and a 200 MB `content` string became the agent's reply | streamed read capped at `MAX_RESPONSE_BYTES = 32 MB` (decoded); over the cap fails over; `Retry-After` and status still read | 3 MB body and 20 MB gzip bomb refused at a 1 MB cap; a small gzip reply still works; 429 then 200 still retries |
-| gateway | `temperature=10**400` raised `OverflowError` before the request; `True` was sent as 1.0 | junk temperature uses the 0.7 default | 7 junk temperatures |
-| gateway | `clean_text(None/int/list)` raised `TypeError` | non-text read as `str()` | |
-| codex | **a FIFO named `<run>.jsonl` in `runs/` hung `runs()` and `replay()`** (and `/api/runs`) in `open()` | regular files only | both return within 5 s |
-| codex | `runs()` returned 4 MB prompts (a 50-run listing was a 200 MB response) and non-string prompts; `runs("abc")`, `replay(limit=inf)` raised | prompts clipped to 2,000 chars and coerced to text; limits read as whole numbers 1..cap | 7 junk limits |
-| cli | `--max-steps -5` gave every agent zero turns (silent empty answers); `10**9` meant no cap | clamped to 1..200 (`MAX_CLI_STEPS`) | |
-| cli | `evolve --json PATH` treated PATH as a flag: printed JSON, never wrote the file | writes PATH like every other command | file written, plain listing printed |
-| cli | `--first-answer-file` on a FIFO or `/dev/stdin` hung; a 2 GB file was read whole | regular file, at most 1 MB | FIFO, dir, oversize refused |
-| evolve | accepted proposals with `files` as a string or holding `null` crashed the CLI listing; `passed: "yes"` counted as accepted | `files` coerced to strings; only `passed: true` counts | |
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -373,4 +372,4 @@ Contract changes: an `artifact_save` dict/list `content` is now written as JSON 
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.45.0 checked out: 5,228 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.46.0 checked out: 5,243 passed, 99% coverage. Next: round <N+1> on <angle>."

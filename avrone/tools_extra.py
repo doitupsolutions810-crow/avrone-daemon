@@ -23,8 +23,10 @@ import os
 import re
 import shlex
 import shutil
+import sys
 import time
 import uuid
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -188,7 +190,10 @@ async def t_web_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
 async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not _setting(ctx, "agents_can_shell", True):
         return "ERROR: code execution is disabled for agents (AVRONE_AGENTS_CAN_SHELL=false)."
-    code = str(args.get("code", ""))
+    # write_content: a lone surrogate used to raise UnicodeEncodeError from write_text AFTER the
+    # snippet file was created (outside the try, so it was never unlinked)
+    from .tools import write_content
+    code = write_content(args.get("code", "")) if isinstance(args.get("code"), str) else str(args.get("code", ""))
     if not code.strip():
         return "ERROR: code is required"
     runner = ctx.core.runner
@@ -197,7 +202,7 @@ async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
         # run with cwd = own agent dir; the snippet lives there too so it is reachable from
         # the local runner, `docker exec -w /workspace/agents/<id>` and the isolated /agent mount
         f = root / f".snippet_{uuid.uuid4().hex[:10]}.py"
-        f.write_text(code)
+        f.write_text(code, encoding="utf-8")
         try:
             res = await runner.run(f"python3 {shlex.quote(f.name)}", cwd=root)
         finally:
@@ -206,7 +211,7 @@ async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
     tmp = _ws(ctx) / ".avrone" / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
     f = tmp / f"snippet_{uuid.uuid4().hex[:10]}.py"
-    f.write_text(code)
+    f.write_text(code, encoding="utf-8")
     try:
         res = await ctx.core.runner.run(f"python3 {shlex.quote(_rel(ctx, f))}")
     finally:
@@ -260,40 +265,69 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+SEARCH_TIMEOUT_S = 20.0
+
+
 async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     pattern = str(args.get("pattern", ""))
     if not pattern:
         return "ERROR: pattern is required"
+    if len(pattern) > 2000:
+        return "ERROR: pattern is longer than 2000 chars"
     try:
-        rx = re.compile(pattern)
-    except re.error as e:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # FutureWarning "possible nested set" on [[ patterns
+            re.compile(pattern)
+    except (re.error, RecursionError, OverflowError) as e:
         return f"ERROR: bad regex: {e}"
     r = fsunify.resolve(ctx, str(args.get("path", "") or "."), "search_files")
     root = r.path
     if not root.exists():
         return f"ERROR: {args.get('path')} not found"
-    cap, hits, scanned = 200, [], 0
-    files = [root] if root.is_file() else _iter_files(root, fsunify.skip_dirs(ctx, r))
-    for f in files:
-        if scanned > 5000 or len(hits) >= cap:
-            break
-        scanned += 1
-        try:
-            if f.stat().st_size > 1_000_000:
+    cap = 200
+    # The scan runs in a child process with a deadline (see avrone.searchproc): `re` cannot be
+    # interrupted and holds the GIL, so (a+)+b on a long line of a's used to freeze the whole node.
+    req = {"pattern": pattern, "root": str(root), "skip_dirs": sorted(SKIP_DIRS),
+           "skip_paths": sorted(str(x) for x in fsunify.skip_dirs(ctx, r)), "cap": cap}
+    hits: list[str] = []
+    timed_out = False
+    pkg_parent = str(Path(__file__).resolve().parent.parent)
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", f"import sys; sys.path.insert(0, {pkg_parent!r}); "
+                              "from avrone.searchproc import main; main()",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+
+    async def collect() -> None:
+        assert proc.stdin and proc.stdout
+        proc.stdin.write(json.dumps(req).encode())
+        await proc.stdin.drain()
+        proc.stdin.close()
+        async for raw in proc.stdout:
+            try:
+                m = json.loads(raw)
+            except ValueError:
                 continue
-            data = f.read_bytes()
-        except OSError:
-            continue
-        if b"\0" in data[:4096]:
-            continue
-        for no, line in enumerate(data.decode(errors="replace").splitlines(), 1):
-            if rx.search(line):
-                hits.append(f"{fsunify.display(ctx, f)}:{no}: {line.strip()[:300]}")
-                if len(hits) >= cap:
-                    break
+            if isinstance(m, dict) and "path" in m:
+                hits.append(f"{fsunify.display(ctx, Path(m['path']))}:{m.get('line')}: {m.get('text', '')}")
+    try:
+        await asyncio.wait_for(collect(), SEARCH_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        timed_out = True
+    finally:
+        if proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+        await proc.wait()
+    if proc.returncode not in (0, None) and not timed_out and not hits:
+        err = (await proc.stderr.read()).decode(errors="replace").strip().splitlines() if proc.stderr else []
+        return f"ERROR: search failed: {err[-1][:300] if err else proc.returncode}"
+    if timed_out:
+        note = (f"...[search stopped after {SEARCH_TIMEOUT_S:g}s: the pattern is too slow on this text "
+                f"(nested quantifiers like (a+)+ take exponential time); simplify it]")
+        return ("\n".join(hits[:cap]) + "\n" if hits else "") + note
     if not hits:
         return f"No matches for /{pattern}/."
-    out = "\n".join(hits)
+    out = "\n".join(hits[:cap])
     if len(hits) >= cap:
         out += f"\n...[capped at {cap} matches]"
     return out
@@ -478,10 +512,15 @@ def _is_force_push(argv: list[str]) -> bool:
     return False
 
 
+MAX_GIT_ARGS_CHARS = 16_000
+
+
 async def t_git(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not _setting(ctx, "agents_can_shell", True):
         return "ERROR: git is disabled for agents (AVRONE_AGENTS_CAN_SHELL=false)."
     raw = str(args.get("args", "")).strip()
+    if len(raw) > MAX_GIT_ARGS_CHARS:  # a 1 MB args string was split and handed to git (~10 s)
+        return f"ERROR: args is longer than {MAX_GIT_ARGS_CHARS} chars"
     if raw.startswith("git "):
         raw = raw[4:]
     try:

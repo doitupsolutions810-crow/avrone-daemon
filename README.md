@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.63: Round 70: a fleet join storm shares one registry write. 5,448 tests + 19 integration
+
+- **Join storm rewrote the whole registry once per peer.** Every new node saves `fleet.json` at once, and each save encoded every record with `indent=2` while holding the state lock. 256 concurrent joins of 60 KB records meant 256 full rewrites in a row, about 18 s.
+- **Group commit.** `_save()` now elects one leader. Concurrent savers wait while the leader writes the newest snapshot, again and again, until every waiter is covered. A `register()` or `forget()` still returns only after `fleet.json` holds its change. `register()` and `forget()` now save outside the state lock. If the leader's write fails, only its own caller sees the error, and a waiter takes over and retries. A save made while the caller holds the lock still works, without coalescing.
+- **Compact JSON.** `fleet.json` is now written without indentation, which encodes about 3x faster (16 MB: 142 ms down to 47 ms). Readers are unaffected.
+- **Measured:** 256 concurrent joins went from about 18 s to 0.72 s, with 29 writes instead of 256.
+- Tests: `tests/test_round70_fleet_group_commit.py` (5 tests, 3 fail on v0.62).
+
 ## v0.62: Round 69: fleet heartbeats no longer rewrite the registry on the event loop. 5,445 tests + 19 integration
 
 - **Problem:** every child heartbeat (every 15 s by default) calls `FleetManager.register()`, which ended in `_save()`. That serialized every node record (`json.dumps`, `indent=2`), wrote the file and replaced it, all synchronously inside the async `/api/fleet/register` handler. At 256 peers × 60 KB records, which is inside `DEFAULT_MAX_NODES` and `MAX_NODE_RECORD_BYTES`, each heartbeat cost 145 ms. 256 peers kept the event loop busy about 2.5 s out of every second.

@@ -717,21 +717,51 @@ class FleetManager:
         return {}
 
     def _save(self) -> None:
-        # temp file + os.replace: a concurrent or interrupted save never leaves a torn fleet.json
-        # (a torn file made the next FleetManager() raise at startup)
-        with self._lock:
-            text = json.dumps({"node_id": self.node_id, "nodes": self.nodes}, indent=2)
-            tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        """Write the registry. Group commit: concurrent savers (a join storm of to_thread
+        registrations) wait for one leader, which keeps writing the newest snapshot until it has
+        covered every request; a saver returns only once a snapshot that includes its change is
+        on disk. Before (round 70) every registration serialized and rewrote the whole growing
+        file itself (indent=2, 3x slower than compact): 256 joins of 60 KB records took ~18 s.
+        temp file + os.replace: a concurrent or interrupted save never leaves a torn fleet.json."""
+        lock = self._lock
+        cond = self.__dict__.get("_save_cond")
+        if cond is None:
+            cond = self.__dict__.setdefault("_save_cond", threading.Condition(lock))
+        with lock:
+            self._save_ver = v = getattr(self, "_save_ver", 0) + 1
+            while getattr(self, "_save_busy", False) and getattr(self, "_saved_ver", 0) < v:
+                cond.wait()  # releases the (re-entrant) lock fully while the leader writes
+            if getattr(self, "_saved_ver", 0) >= v:
+                return
+            self._save_busy = True
+        try:
+            while True:
+                with lock:
+                    target = self._save_ver
+                    text = json.dumps({"node_id": self.node_id, "nodes": self.nodes}, separators=(",", ":"))
+                self._write_registry(text)
+                with lock:
+                    self._saved_ver = target
+                    self._saved_at, self._dirty = time.monotonic(), False
+                    cond.notify_all()
+                    if self._save_ver == target:
+                        return
+        finally:
+            with lock:
+                self._save_busy = False
+                cond.notify_all()  # on failure a waiter becomes the next leader and retries
+
+    def _write_registry(self, text: str) -> None:
+        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(text)
+            os.replace(tmp, self.path)
+        except BaseException:
             try:
-                tmp.write_text(text)
-                os.replace(tmp, self.path)
-                self._saved_at, self._dirty = time.monotonic(), False
-            except BaseException:
-                try:
-                    tmp.unlink()
-                except OSError:
-                    pass
-                raise
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
     def flush(self) -> None:
         """Write heartbeat refreshes still held back by FLEET_SAVE_DEBOUNCE_S."""
@@ -1391,10 +1421,12 @@ class FleetManager:
             # copy-on-write: readers iterating self.nodes.values() never see it change size mid-loop
             self.nodes = {**nodes, nid: rec}
             refresh = existing is not None and existing.get("url") == url  # a plain heartbeat
-            if refresh and time.monotonic() - getattr(self, "_saved_at", float("-inf")) < FLEET_SAVE_DEBOUNCE_S:
+            save = not (refresh and time.monotonic() - getattr(self, "_saved_at", float("-inf"))
+                        < FLEET_SAVE_DEBOUNCE_S)
+            if not save:
                 self._dirty = True  # flushed by the next save past the window, or by stop()
-            else:
-                self._save()
+        if save:
+            self._save()  # outside the state lock, so concurrent joins share one write
         self.core.codex.emit("fleet", "fleet.join", self.node_id, node=nid, url=url)
         return {"ok": True, "parent": self.node_id}
 
@@ -1412,7 +1444,7 @@ class FleetManager:
                 raise PermissionError(f"{nid} is online and would rejoin on its next heartbeat; "
                                       "remove it from AVRONE_FLEET_ALLOW first")
             self.nodes = {k: v for k, v in self.nodes.items() if k != nid}
-            self._save()
+        self._save()
         self._audit("fleet.forget", node=nid, status=status)
         return {"node": nid, "status": status}
 

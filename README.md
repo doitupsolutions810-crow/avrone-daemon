@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.44: Round 51: agent home containers, osint_domain sections, MCP streams and config. 5,199 tests + 19 integration
+
+31 new tests. 25 failed on v0.43; 4 of those failed only because they use names added in this round (`MAX_GUARD_SECS`, `parse_inspect`), so 21 bugs are confirmed. On v0.43 the 500-server config test really spawned 500 processes.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| agentcontainer | **another workspace's container could be adopted or deleted.** Two AVRONE instances on one host with the same node id and agent role compute the same name `avrone-agent-<node>-<role>`. A running container from the other workspace was adopted, so this agent ran with *their* `/agent` mounted. A stopped one was `rm -f`'d | `docker inspect` now also reports the host dir mounted at `/agent`; a different dir raises `ForeignContainer` (no adopt, no rm) and points at `AVRONE_NODE_ID`. Older output with no mount is accepted as before | running and stopped foreign containers: only `inspect` runs; own container (running and stopped) behaves as before |
+| agentcontainer | `launcher(timeout=inf / -inf / 10**400)` raised `OverflowError` | guard capped at 7 days (`MAX_GUARD_SECS`) | 7 junk timeouts |
+| agentcontainer | explicit mem/cpu values of NaN, 0, -1, inf or junk reached docker verbatim (`--cpus nan`; `--memory 0m` means unlimited); 10**400 raised | invalid values use the configured default; valid ones are clamped to MIN..MAX | 6 pairs |
+| agentcontainer | `idle=NaN` never reaped (every comparison False); negative reaped on every call | junk falls back to `AVRONE_AGENT_IDLE_SECS` | |
+| osint | **a raising sub-probe sank the whole `osint_domain` profile** (the docstring promised the opposite); a `None` CT result crashed on `.splitlines()`; a 5 MB section went out whole | each section is caught as `ERROR: ...`, coerced to text and clipped at 20,000 chars | raising, None and 5 MB probes give one bounded profile |
+| osint | `osint_metrics` listed every distinct kind (5,000 junk kinds made a 5,000-line report) | top 30 kinds and refused tools, plus "... N more" | 5,000 kinds: under 60 lines |
+| mcp_client | **SSE lines were buffered without a cap.** httpx `aiter_lines` waits for a newline, and only `data:` bytes counted toward `AVRONE_MCP_MAX_RESPONSE_BYTES`, so 2.5 MB with no newline, or a huge `event:` or comment line, was held whole | own LF/CRLF/CR line splitter capped at the response limit (a CR at a chunk edge waits for its LF) | 3 hostile streams refused; 3 line-ending styles split mid-CRLF still parse |
+| mcp_client | `mcp.json` as a FIFO hung startup; a 50 MB or 100k-deep config was read and parsed whole; 10,000 servers were all spawned at once | regular file, at most 1 MB, deep nesting refused, at most 64 servers (`MAX_SERVERS`); the manager reports `_config` instead of spawning | FIFO returns in under 5 s; 500-server config spawns nothing |
+
 ## v0.43: Round 50: hostile model providers, codex listing/replay, CLI arguments. 5,168 tests + 19 integration
 
 17 of the 28 new tests failed on v0.42 before the fixes. The 6,000-body seeded provider fuzz passed on v0.42 too: the gateway's ordinary junk handling held, and the failures were all in depth, size and argument edges.

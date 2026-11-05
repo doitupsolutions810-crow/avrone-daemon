@@ -60,6 +60,18 @@ def _num(name: str, default: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _clamp_num(v: Any, default: Any, lo: float, hi: float, cast: Callable[[float], Any]) -> Any:
+    """An explicit mem/cpu value: NaN, 0, negative, junk or huge used to reach docker verbatim
+    ("--cpus nan", "--memory 0m" = unlimited, OverflowError on inf)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if f != f or f <= 0:
+        return default
+    return cast(max(lo, min(hi, f)))
+
+
 def mem_mb() -> int:
     return int(_num("AVRONE_AGENT_MEM_MB", DEFAULT_MEM_MB, MIN_MEM_MB, MAX_MEM_MB))
 
@@ -88,8 +100,8 @@ def hardening_args(allow_network: bool, mem: int | None = None, cpu: float | Non
     bounded memory/cpu/pids, no network unless allowed)."""
     args = ["--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--pids-limit", str(PIDS_LIMIT),
-            "--memory", f"{mem_mb() if mem is None else int(mem)}m",
-            "--cpus", str(cpus() if cpu is None else cpu)]
+            "--memory", f"{mem_mb() if mem is None else _clamp_num(mem, mem_mb(), MIN_MEM_MB, MAX_MEM_MB, int)}m",
+            "--cpus", str(cpus() if cpu is None else _clamp_num(cpu, cpus(), MIN_CPUS, MAX_CPUS, lambda v: round(v, 2)))]
     if not allow_network:
         args += ["--network", "none"]
     return args
@@ -119,6 +131,7 @@ GUARD = ('t=$0; c=$1; if command -v bash >/dev/null 2>&1; then i=bash; f=-lc; el
          '&& timeout -s KILL 5 true >/dev/null 2>&1; then exec timeout -s KILL "$t" "$i" "$f" "$c"; fi; '
          'exec "$i" "$f" "$c"')
 DEADLINE_SLACK = 2
+MAX_GUARD_SECS = 7 * 86400
 
 
 def launcher(cmd: str, timeout: float | None = None) -> list[str]:
@@ -126,8 +139,8 @@ def launcher(cmd: str, timeout: float | None = None) -> list[str]:
     if timeout is None:
         return ["bash", "-lc", cmd]
     try:
-        secs = int(float(timeout))
-    except (TypeError, ValueError):
+        secs = int(min(float(timeout), MAX_GUARD_SECS))  # inf / 10**400 raised OverflowError here
+    except (TypeError, ValueError, OverflowError):
         secs = 0
     return ["sh", "-c", GUARD, str(max(0, secs) + DEADLINE_SLACK if secs > 0 else 0), cmd]
 
@@ -151,11 +164,35 @@ def exec_argv(name: str, cmd: str, timeout: float | None = None) -> list[str]:
 
 
 def inspect_argv(name: str) -> list[str]:
-    return ["docker", "inspect", "-f", "{{.State.Running}}", name]
+    # Running state, then the host dir mounted at /agent: a same-named container can belong to a
+    # different workspace (two AVRONE instances on one host share node id + agent role).
+    fmt = ("{{.State.Running}}|{{range .Mounts}}{{if eq .Destination \"%s\"}}{{.Source}}{{end}}{{end}}"
+           % agentfs.CONTAINER_AGENT_MOUNT)
+    return ["docker", "inspect", "-f", fmt, name]
+
+
+def parse_inspect(stdout: Any) -> tuple[bool, str]:
+    """(running, mounted host dir or "") from inspect_argv's output. Older output (just "true")
+    reports no mount, which is accepted as before."""
+    text = str(stdout or "").strip().splitlines()
+    first = text[0] if text else ""
+    state, _, src = first.partition("|")
+    return state.strip().lower() == "true", src.strip()
+
+
+class ForeignContainer(RuntimeError):
+    """A container with this agent's name mounts some other directory."""
 
 
 def rm_argv(name: str) -> list[str]:
     return ["docker", "rm", "-f", name]
+
+
+def _same_dir(src: str, d: Path) -> bool:
+    try:
+        return Path(src).resolve() == Path(d).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return src == str(d)
 
 
 Exec = Callable[[list[str], int], Awaitable[Any]]  # (argv, timeout) -> CommandResult-like
@@ -189,7 +226,14 @@ class AgentContainerPool:
 
     @property
     def idle_after(self) -> float:
-        return idle_secs() if self._idle is None else float(self._idle)
+        if self._idle is None:
+            return idle_secs()
+        try:
+            v = float(self._idle)
+        except (TypeError, ValueError, OverflowError):
+            return idle_secs()
+        # NaN never reaped anything (every comparison False); negative reaped on every call
+        return idle_secs() if v != v or v < 0 else min(v, 7 * 86400.0)
 
     def run_argv(self, agent_dir: Path) -> list[str]:
         d = Path(agent_dir).resolve()
@@ -208,7 +252,13 @@ class AgentContainerPool:
                 home.last_used, home.uses = now, home.uses + 1
                 return name
             res = await self._exec(inspect_argv(name), 30)
-            running = getattr(res, "exit_code", 1) == 0 and "true" in str(getattr(res, "stdout", "")).lower()
+            exists = getattr(res, "exit_code", 1) == 0
+            running, src = parse_inspect(getattr(res, "stdout", "")) if exists else (False, "")
+            if exists and src and not _same_dir(src, d):
+                # Before: adopted (running) or rm -f'd (stopped) whatever held the name, so this
+                # agent ran with another workspace's /agent mounted, or deleted its container.
+                raise ForeignContainer(f"container {name} mounts {src!r}, not {str(d)!r}: it belongs to "
+                                       f"another workspace on this host; set AVRONE_NODE_ID to tell them apart")
             if not running:
                 await self._exec(rm_argv(name), 30)  # a stopped leftover with that name; ignore errors
                 res = await self._exec(self.run_argv(d), 300)

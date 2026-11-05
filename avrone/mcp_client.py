@@ -355,7 +355,7 @@ class HTTPTransport(_Transport):
             if "text/event-stream" in ctype:
                 data_lines: list[str] = []
                 size = 0
-                async for line in r.aiter_lines():
+                async for line in _capped_lines(r, cap):
                     if line.startswith(":"):
                         continue  # comment / keep-alive
                     field, colon, value = line.partition(":")
@@ -446,6 +446,37 @@ class HTTPTransport(_Transport):
                 await self._client.delete(self.url, headers=self._hdrs(), timeout=5)
         await self._client.aclose()
         self._client = None
+
+
+async def _capped_lines(r: httpx.Response, cap: int):
+    """SSE lines (LF, CRLF or CR endings), none longer than `cap` bytes. httpx's aiter_lines buffers
+    until a newline, and only `data:` bytes were counted, so a server streaming 1 GB with no newline
+    (or one huge `event:` or comment line) was held whole in memory."""
+    buf = bytearray()
+    scanned = 0
+    async for chunk in r.aiter_bytes():
+        buf += chunk
+        while True:
+            lf, cr = buf.find(b"\n", scanned), buf.find(b"\r", scanned)
+            ends = [i for i in (lf, cr) if i >= 0]
+            if not ends:
+                scanned = len(buf)
+                if len(buf) > cap:
+                    raise MCPError(f"MCP event line larger than {cap} bytes (AVRONE_MCP_MAX_RESPONSE_BYTES)")
+                break
+            cut = min(ends)
+            if buf[cut] == 13 and cut + 1 == len(buf):
+                scanned = cut  # a CR at the chunk edge: wait for a possible LF
+                break
+            step = 2 if buf[cut] == 13 and buf[cut + 1:cut + 2] == b"\n" else 1
+            if cut > cap:
+                raise MCPError(f"MCP event line larger than {cap} bytes (AVRONE_MCP_MAX_RESPONSE_BYTES)")
+            line = bytes(buf[:cut])
+            del buf[:cut + step]
+            scanned = 0
+            yield line.decode("utf-8", errors="replace")
+    if buf:
+        yield bytes(buf).rstrip(b"\r").decode("utf-8", errors="replace")
 
 
 def _match_response(payload: str, want_id: int) -> dict | None:
@@ -654,12 +685,28 @@ def load_config(path: str | os.PathLike | None = None) -> dict[str, dict[str, An
     p = Path(path or os.getenv("AVRONE_MCP_CONFIG", "./mcp.json"))
     if not p.exists():
         return {}
-    data = json.loads(p.read_text() or "{}")
+    if not p.is_file():  # a FIFO here blocked server startup forever in read_text()
+        raise ValueError(f"MCP config {str(p)!r} is not a regular file")
+    with p.open("rb") as f:
+        raw = f.read(MAX_CONFIG_BYTES + 1)
+    if len(raw) > MAX_CONFIG_BYTES:
+        raise ValueError(f"MCP config is larger than {MAX_CONFIG_BYTES} bytes")
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace") or "{}")
+    except RecursionError as e:
+        raise ValueError("MCP config is nested too deeply") from e
     servers = data.get("mcpServers", data.get("servers", {})) if isinstance(data, dict) else {}
     if not isinstance(servers, dict):
         raise ValueError(f"mcpServers must be an object of servers, not {type(servers).__name__}")
-    return {str(k): v for k, v in servers.items()
-            if isinstance(v, dict) and not v.get("disabled")}
+    out = {str(k): v for k, v in servers.items()
+           if isinstance(v, dict) and not v.get("disabled")}
+    if len(out) > MAX_SERVERS:  # 10k entries used to spawn 10k server processes at once
+        raise ValueError(f"MCP config lists {len(out)} servers; at most {MAX_SERVERS} are allowed")
+    return out
+
+
+MAX_CONFIG_BYTES = 1024 * 1024
+MAX_SERVERS = 64
 
 
 # --------------------------------------------------------------------------- manager

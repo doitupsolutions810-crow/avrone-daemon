@@ -32,6 +32,22 @@ if TYPE_CHECKING:
     from .trinity import AgentContext
 
 
+MAX_SECTION_CHARS = 20_000
+
+
+async def _section(fn, ctx: "AgentContext", args: dict[str, Any]) -> str:
+    """One sub-probe's text, never an exception; clipped so one section cannot swamp the profile."""
+    try:
+        out = await fn(ctx, args)
+    except Exception as e:  # noqa: BLE001 - one failed section never sinks the profile
+        return f"ERROR: {type(e).__name__}: {str(e)[:200]}"
+    if not isinstance(out, str):
+        out = "" if out is None else str(out)
+    if len(out) > MAX_SECTION_CHARS:
+        out = out[:MAX_SECTION_CHARS] + f"\n... [clipped {len(out) - MAX_SECTION_CHARS} chars]"
+    return out
+
+
 async def t_osint_domain(ctx: "AgentContext", args: dict[str, Any]) -> str:
     """One structured public-footprint profile of a domain: DNS, CT subdomains, TLS, HTTP."""
     # kill switch, target syntax, _reject_private and allowlist; refusals are audited
@@ -40,10 +56,12 @@ async def t_osint_domain(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return err
     report: dict[str, Any] = {"host": host}
     # Each section degrades independently: a failure in one does not sink the profile.
-    report["dns"] = await recon.t_dns_enum(ctx, {"host": host, "types": ["A", "AAAA", "MX", "NS", "TXT"]})
-    report["tls"] = await recon.t_tls_inspect(ctx, {"host": host})
-    report["http"] = await recon.t_http_fingerprint(ctx, {"host": host})
-    ct = await recon.t_cert_transparency(ctx, {"host": host})
+    # Before: the comment promised this, but a raising probe (or one returning None) sank the whole
+    # profile with a raw exception, and a None CT result crashed on .splitlines().
+    report["dns"] = await _section(recon.t_dns_enum, ctx, {"host": host, "types": ["A", "AAAA", "MX", "NS", "TXT"]})
+    report["tls"] = await _section(recon.t_tls_inspect, ctx, {"host": host})
+    report["http"] = await _section(recon.t_http_fingerprint, ctx, {"host": host})
+    ct = await _section(recon.t_cert_transparency, ctx, {"host": host})
     report["subdomains"] = ct
     try:
         ctx.core.codex.emit(ctx.run_id, "osint.domain", ctx.name, host=host)
@@ -62,6 +80,7 @@ async def t_osint_domain(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 MAX_EVENT_LINE = 1024 * 1024
+MAX_KINDS_SHOWN = 30
 
 
 def _iter_lines(p: Path):
@@ -135,13 +154,16 @@ async def t_osint_metrics(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not kinds and not refused:
         return "no recon/OSINT activity recorded yet"
     lines = [f"recon/OSINT metrics across {runs} run logs", "", "by tool:"]
-    lines += [f"  {k}: {n}" for k, n in kinds.most_common()]
+    lines += [f"  {k}: {n}" for k, n in kinds.most_common(MAX_KINDS_SHOWN)]
+    if len(kinds) > MAX_KINDS_SHOWN:  # 100k distinct junk kinds used to become a 100k-line report
+        lines.append(f"  ... {len(kinds) - MAX_KINDS_SHOWN} more kinds")
     lines += ["", "top targets:"]
     lines += [f"  {h}: {n}" for h, n in hosts.most_common(10)]
     lines += ["", f"total probes: {sum(kinds.values())}"]
     if refused:
         lines += [f"refused by guardrails: {sum(refused.values())} "
-                  f"({', '.join(f'{t}: {n}' for t, n in refused.most_common())})"]
+                  f"({', '.join(f'{t}: {n}' for t, n in refused.most_common(MAX_KINDS_SHOWN))}"
+                  f"{', ...' if len(refused) > MAX_KINDS_SHOWN else ''})"]
     return "\n".join(lines)
 
 

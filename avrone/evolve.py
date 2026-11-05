@@ -132,11 +132,53 @@ async def _ensure_worktree(ctx: "AgentContext", pid: str) -> tuple[Path, str]:
     if r.exit_code != 0:
         # Fallback: plain copy if not a git repo. A failed clone can leave a half-made dir behind,
         # which made copytree raise FileExistsError; runtime state and caches are never copied.
-        shutil.rmtree(wt, ignore_errors=True)
-        shutil.copytree(repo, wt, symlinks=True, ignore=shutil.ignore_patterns(*COPY_IGNORE))
+        await asyncio.to_thread(_copy_tree, repo, wt, _never_copy(ctx, repo, wt))
         await _sh(ctx, "git init -q && git add -A && git -c user.email=a@a -c user.name=avrone commit -qm base", wt)
     await _sh(ctx, f"git checkout -q -b {shlex.quote(branch)}", wt)
     return wt, branch
+
+
+def _never_copy(ctx: "AgentContext", repo: Path, wt: Path) -> set[Path]:
+    """Dirs a plain-copy clone must skip wherever they sit: the node's data dir (it holds the evolve
+    dir, so with data_dir inside the repo under any name but "data" the copy recursed into its own
+    destination until paths hit ENAMETOOLONG) and the agents' workspace (every agent's files, GBs)."""
+    out = {wt.resolve(), _data(ctx).resolve()}
+    for name in ("data_dir", "workspace"):
+        v = getattr(getattr(ctx.core, "settings", None), name, None)
+        if isinstance(v, (str, Path)) and str(v):
+            out.add(Path(v).resolve())
+    return out
+
+
+def _copy_tree(repo: Path, wt: Path, skip: set[Path]) -> None:
+    """copytree for a repo that is not a git checkout (a release zip). Runs in a worker thread (a big
+    tree froze the event loop); FIFOs, sockets and devices are skipped (copying a FIFO blocks
+    forever on open); a failed copy removes its half-made dir instead of leaving it behind."""
+    import stat as _stat
+    base_ignore = shutil.ignore_patterns(*COPY_IGNORE)
+
+    def ignore(d: str, names: list[str]) -> set[str]:
+        out = set(base_ignore(d, names))
+        for n in names:
+            p = Path(d) / n
+            try:
+                st = p.lstat()
+            except OSError:
+                out.add(n)
+                continue
+            if _stat.S_ISLNK(st.st_mode):
+                continue  # copied as a link (symlinks=True), never followed
+            if not (_stat.S_ISREG(st.st_mode) or _stat.S_ISDIR(st.st_mode)):
+                out.add(n)
+            elif _stat.S_ISDIR(st.st_mode) and p.resolve() in skip:
+                out.add(n)
+        return out
+    shutil.rmtree(wt, ignore_errors=True)
+    try:
+        shutil.copytree(repo, wt, symlinks=True, ignore=ignore)
+    except BaseException:
+        shutil.rmtree(wt, ignore_errors=True)
+        raise
 
 
 COPY_IGNORE = (".git", "data", "agents", "*.egg-info", "__pycache__", ".pytest_cache", ".venv", "venv",

@@ -380,7 +380,23 @@ class HTTPTransport(_Transport):
 
     async def connect(self) -> None:
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(DEFAULT_TIMEOUT, connect=15),
-                                         follow_redirects=True)
+                                         follow_redirects=True,
+                                         event_hooks={"request": [self._strip_cross_origin]})
+
+    def _origin(self, url: Any) -> tuple[str, str, int | None]:
+        u = httpx.URL(str(url))
+        return u.scheme, u.host, u.port or {"http": 80, "https": 443}.get(u.scheme)
+
+    async def _strip_cross_origin(self, request: httpx.Request) -> None:
+        """A redirect to another origin got every configured header: httpx drops Authorization on
+        such hops, but an X-Api-Key (and the session id) went to whatever host the server named."""
+        if self._origin(request.url) == self._origin(self.url):
+            return
+        drop = {k.lower() for k in self.headers} | {"mcp-session-id", "authorization", "cookie",
+                                                    "proxy-authorization"}
+        for k in list(request.headers.keys()):
+            if k.lower() in drop:
+                del request.headers[k]
 
     def _hdrs(self) -> dict[str, str]:
         h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",

@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.50: Round 57: MCP HTTP credentials on cross-origin redirects, evolve plain-copy clones. 5,294 tests + 19 integration
+
+- **MCP HTTP redirect leak:** `HTTPTransport` followed redirects with every configured header. httpx drops `Authorization` on a cross-origin hop, but an `X-Api-Key` (any custom credential header) and the `Mcp-Session-Id` went to whatever host the server's `Location` named. A request hook now strips configured headers, the session id, cookies and auth headers whenever a hop leaves the configured origin (scheme, host, port; an https to http downgrade counts). Same-origin redirects (`/mcp` to `/mcp/`) keep them.
+- **Evolve plain-copy clone:** a node deployed from a release zip is not a git checkout, so every proposal clone uses the copytree fallback. With `data_dir` inside the repo under any name but `data`, the copy recursed into its own destination until ENAMETOOLONG and left the half-made tree behind. It also copied every agent's workspace and ran on the event loop. The copy now skips the data dir, evolve dir and agent workspace, skips FIFOs, sockets and devices, runs in a worker thread, and removes a failed clone.
+- **Probed clean:** a raw-socket MCP server that drips one byte per 0.5 s, sends endless SSE keep-alives, a 2 GB gzip bomb (refused at the 32 MB cap), a malformed chunk header, a 60 MB SSE line with no newline, or never answers. Each ends within the tool timeout. All-tools fuzz seeds 14 and 15: clean.
+- Tests: `tests/test_round57_mcp_http_redirect_edges.py` (11 tests).
+
 ## v0.49: Round 56: hostile stdio MCP servers, one-rewrite fleet memory merge, memory tools off the loop. 5,283 tests + 19 integration
 
 10 new tests. 9 of them fail on v0.48. Two of those call the new `merge_many`, so 7 confirm 5 bugs on behavior alone. I wrote fake MCP servers that stop reading their input, flood stderr, or die with a 12 MB stderr line, and timed memory and fleet memory paths against stores of 120k to 200k lines.

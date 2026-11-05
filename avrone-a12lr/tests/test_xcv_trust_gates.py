@@ -64,6 +64,7 @@ def is_authorized(
     cap: dict[str, Any] | None,
     receipt: dict[str, Any] | None,
     verifier_key: str = "trusted-verifier",
+    known_commits: set[str] | None = None,
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
 
@@ -78,6 +79,8 @@ def is_authorized(
     # Gate 2: provenance
     if not snap["source_commit"] or len(snap["source_commit"]) < 7:
         reasons.append("source_commit_missing")
+    elif known_commits is not None and snap["source_commit"] not in known_commits:
+        reasons.append("source_commit_unknown")
     if not snap["artifact_digest"] or len(snap["artifact_digest"]) < 8:
         reasons.append("artifact_digest_missing")
 
@@ -95,6 +98,9 @@ def is_authorized(
             reasons.append("capability_wrong_operation")
         if not cap.get("signature_valid"):
             reasons.append("capability_signature_invalid")
+        # Attenuation: reduced scope must not be exceeded
+        if cap.get("attenuated") and cap.get("scope_exceeded"):
+            reasons.append("capability_scope_exceeded")
 
     # Gate 4: execution receipt
     if receipt is None:
@@ -197,6 +203,71 @@ def test_edge_06_all_trust_context_false_pristine_math_denies():
     assert snap["E_Q"] == snap["A_Q"] - abs(snap["signed_C"])
 
 
+# ── Five harder edge cases ─────────────────────────────────────────────────
+
+def test_edge_07_cross_envelope_receipt_replay_denies():
+    """Receipt bound to snapshot A presented against snapshot B."""
+    snap_a = make_snapshot(h=0.5)
+    snap_b = make_snapshot(h=0.3)
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap_a), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap_b, cap, receipt)
+    assert not ok
+    assert "receipt_envelope_mismatch" in reasons
+
+
+def test_edge_08_destructive_operation_outside_allowlist_denies():
+    snap = make_snapshot()
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "delete", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "capability_wrong_operation" in reasons
+
+
+def test_edge_09_attenuated_cap_scope_exceeded_denies():
+    snap = make_snapshot()
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True,
+           "attenuated": True, "scope_exceeded": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "capability_scope_exceeded" in reasons
+
+
+def test_edge_10_partial_trust_context_mixed_denies():
+    """One false gate in an otherwise-clean trust_context must still deny."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": False,
+        "receipt_chained": True,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_capability_scoped_false" in reasons
+    assert len([r for r in reasons if r.startswith("trust_context_")]) == 1
+
+
+def test_edge_11_source_commit_absent_from_repo_history_denies():
+    snap = make_snapshot(source_commit="0" * 40)  # plausible-looking but unknown
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(
+        snap, cap, receipt, known_commits={"c725fd1" * 5}
+    )
+    assert not ok
+    assert "source_commit_unknown" in reasons
+
+
 # ── Control ────────────────────────────────────────────────────────────────
 
 def test_control_all_gates_pass_authorizes():
@@ -204,7 +275,9 @@ def test_control_all_gates_pass_authorizes():
     cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
            "operation": "accept", "signature_valid": True}
     receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
-    ok, reasons = is_authorized(snap, cap, receipt)
+    ok, reasons = is_authorized(
+        snap, cap, receipt, known_commits={"c725fd1" * 5}
+    )
     assert ok
     assert reasons == []
 

@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.60: Round 67: symlink loops in agent and workspace paths. 5,431 tests + 19 integration
+
+- **Symlink loops leaked host paths:** on Python 3.12, `Path.resolve()` raises
+  `RuntimeError("Symlink loop from '<absolute host path>'")` (3.13 raises `OSError` ELOOP).
+  `agentfs.confine`, `is_agent_dir`, `agent_dir`, `agents_root` and `tools._safe_path` did not catch it.
+- An agent that planted `l1 -> l2 -> l1` got `ERROR: RuntimeError: Symlink loop from '/srv/.../ws/agents/x/l1'`
+  back from `read_file`, `write_file`, `edit_file` and `image_inspect`. That leaked the host's absolute
+  workspace path, skipped the `agentfs.denied` audit, and `DockerRunner._agent_cwd` raised a raw
+  `RuntimeError` out of `runner.run`.
+- **Fix:** new `agentfs.resolve()` raises `AgentFSError("path has a symlink loop")`, and every
+  confinement resolve goes through it. `_safe_path` raises the same plain `ValueError`, and
+  `is_agent_dir` returns `False`.
+- **Probed clean:** listing, search and grep tools on trees with `sub/up -> ..` cycles and links to `/etc`.
+- **Tests:** `tests/test_round67_symlink_loops.py` (12 tests, 11 fail on v0.59).
+
 ## v0.59: Round 66: restart stampede on the shared container, evolve worktree race, .git aliases. 5,419 tests + 19 integration
 
 - **Shared container restart stampede (`DockerRunner.run`):** when `avrone-env-*` died, every command

@@ -24,6 +24,7 @@ Options (env, read at call time so config.py needs no change):
 """
 from __future__ import annotations
 
+import errno
 import os
 import re
 from pathlib import Path
@@ -38,6 +39,17 @@ _BAD = re.compile(r"[^a-z0-9_-]+")
 
 class AgentFSError(ValueError):
     """An agent path that is invalid or would escape its confinement."""
+
+
+def resolve(p: Path | str) -> Path:
+    """Path.resolve() that turns a symlink loop or an unresolvable path into AgentFSError. Python
+    3.12 raises RuntimeError("Symlink loop from '/abs/host/path'") and 3.13 OSError(ELOOP): either
+    reached the model as a raw error naming the host's absolute workspace path, unaudited."""
+    try:
+        return Path(p).resolve()
+    except (RuntimeError, OSError) as e:
+        loop = isinstance(e, RuntimeError) or getattr(e, "errno", None) == errno.ELOOP
+        raise AgentFSError("path has a symlink loop" if loop else "path cannot be resolved") from None
 
 
 def _truthy(v: str | None, default: bool) -> bool:
@@ -66,7 +78,7 @@ def sanitize_agent_id(raw: object) -> str:
 
 
 def agents_root(workspace: Path) -> Path:
-    return Path(workspace).resolve() / AGENTS_SUBDIR
+    return resolve(workspace) / AGENTS_SUBDIR
 
 
 def agent_dir(workspace: Path, agent_id: object, create: bool = True) -> Path:
@@ -74,7 +86,7 @@ def agent_dir(workspace: Path, agent_id: object, create: bool = True) -> Path:
 
     Raises AgentFSError if the result would not sit directly under workspace/agents
     (e.g. a symlink planted there pointing elsewhere)."""
-    ws = Path(workspace).resolve()
+    ws = resolve(workspace)
     root = ws / AGENTS_SUBDIR
     sid = sanitize_agent_id(agent_id)
     if root.is_symlink():
@@ -85,8 +97,8 @@ def agent_dir(workspace: Path, agent_id: object, create: bool = True) -> Path:
     if create:
         root.mkdir(parents=True, exist_ok=True)
         p.mkdir(mode=0o700, exist_ok=True)
-    rp = p.resolve()
-    if rp.parent != root.resolve() or not rp.is_relative_to(ws):
+    rp = resolve(p)
+    if rp.parent != resolve(root) or not rp.is_relative_to(ws):
         raise AgentFSError("agent dir escapes the workspace")
     return rp
 
@@ -96,10 +108,10 @@ def is_agent_dir(workspace: Path, path: Path | None) -> bool:
     if path is None:
         return False
     try:
-        rp = Path(path).resolve()
-    except OSError:
+        rp = resolve(path)
+        root = agents_root(workspace)
+    except AgentFSError:
         return False
-    root = agents_root(workspace)
     return rp.parent == root and sanitize_agent_id(rp.name) == rp.name
 
 
@@ -107,7 +119,7 @@ def confine(base: Path, rel: object) -> Path:
     """Resolve a RELATIVE path inside `base`; reject absolute paths, '..' and escapes."""
     raw = str(rel if rel is not None else "").strip()
     if not raw or raw in {".", "./"}:
-        return Path(base).resolve()
+        return resolve(base)
     if "\x00" in raw:
         raise AgentFSError("path contains a NUL byte")
     if raw.startswith(("/", "\\", "~")) or re.match(r"^[A-Za-z]:", raw) or Path(raw).is_absolute():
@@ -115,8 +127,8 @@ def confine(base: Path, rel: object) -> Path:
     parts = re.split(r"[\\/]+", raw)
     if any(part == ".." for part in parts):
         raise AgentFSError("'..' is not allowed in agent paths")
-    b = Path(base).resolve()
-    p = (b / raw).resolve()
+    b = resolve(base)
+    p = resolve(b / raw)
     if not p.is_relative_to(b):
         raise AgentFSError("path escapes your agent dir")
     return p

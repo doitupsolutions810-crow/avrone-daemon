@@ -289,8 +289,14 @@ def check_path_text(rel: Any) -> str:
 
 
 def _safe_path(root: Path, rel: str) -> Path:
-    p = (root / check_path_text(rel).lstrip("/")).resolve()
-    if not p.is_relative_to(root.resolve()):
+    try:
+        p = (root / check_path_text(rel).lstrip("/")).resolve()
+        r = root.resolve()
+    except RuntimeError:  # 3.12 symlink loop; its message names the host's absolute path
+        raise ValueError("path has a symlink loop") from None
+    except OSError as e:
+        raise ValueError("path has a symlink loop" if e.errno == __import__("errno").ELOOP else "path cannot be resolved") from None
+    if not p.is_relative_to(r):
         raise ValueError("path escapes the workspace")
     return p
 

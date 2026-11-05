@@ -1,0 +1,39 @@
+--- a/avrone/greatscale.py
++++ b/avrone/greatscale.py
+@@ -88,7 +88,7 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
+     return max(1, math.ceil(math.log(alpha) / math.log(1 - p) - 1e-12))
+ 
+ 
+-def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:
+-    """Map `failures` out of `runs` independent executions of one check into the Great Scale."""
++def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05,
++                      trust_context: dict[str, bool] | None = None) -> dict[str, Any]:
++    """Map `failures` out of `runs` independent executions of one check into the Great Scale.
++
++    Optional `trust_context` (Descent XCV): records the presence/validity of independent
++    trust gates (source commit, artifact digest, signature, capability, execution receipt,
++    numerical gates, domain assumptions). Purely additive and default-off — it is
++    recorded for audit, never used to decide scientific or authorization outcomes.
++    A perfect geometric snapshot with a missing capability is NOT authorized.
++    """
+     if isinstance(failures, bool) or isinstance(runs, bool):
+         raise ValueError("failures and runs must be integers")
+     failures, runs = int(failures), int(runs)
+@@ -115,6 +117,20 @@ def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, A
+         "singleRunDetect": p, "detectInRuns": 1 - (1 - p) ** runs,
+         "runsFor95": runs_to_detect(p, alpha),
+     }
++    if trust_context is not None:
++        if not isinstance(trust_context, dict):
++            raise ValueError("trust_context must be a dict")
++        allowed = ("source_commit", "artifact_digest", "signature_verified",
++                   "capability_valid", "execution_receipt", "numerical_gates_passed",
++                   "domain_assumptions_valid")
++        for k in trust_context:
++            if k not in allowed:
++                raise ValueError(f"unknown trust_context key: {k}")
++        out["trust_context"] = {k: bool(trust_context[k]) for k in trust_context}
++        out["trust_gates_present"] = len(trust_context) > 0
++        out["all_trust_gates_pass"] = (all(trust_context.values())
++                                       if trust_context else False)
+     return out

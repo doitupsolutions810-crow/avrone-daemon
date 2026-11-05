@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.62: Round 69: fleet heartbeats no longer rewrite the registry on the event loop. 5,445 tests + 19 integration
+
+- **Problem:** every child heartbeat (every 15 s by default) calls `FleetManager.register()`, which ended in `_save()`. That serialized every node record (`json.dumps`, `indent=2`), wrote the file and replaced it, all synchronously inside the async `/api/fleet/register` handler. At 256 peers × 60 KB records, which is inside `DEFAULT_MAX_NODES` and `MAX_NODE_RECORD_BYTES`, each heartbeat cost 145 ms. 256 peers kept the event loop busy about 2.5 s out of every second.
+- **Fix:** a heartbeat refresh (a known node at the same url) now saves at most once per `FLEET_SAVE_DEBOUNCE_S` (5 s). New nodes, url changes and `forget()` still save immediately, so membership stays durable. `stop()` flushes anything pending, and the new `flush()` does the same on demand. The handler now runs `register()` with `asyncio.to_thread`. A heartbeat costs 0.5 ms at the same bounds.
+- **Contract change:** a refresh can take up to 5 s to reach `fleet.json`. Peers resend it every heartbeat, so a crash inside that window loses nothing. `test_robust_v022_async` now calls `flush()` before it reads the file.
+- **Tests:** `tests/test_round69_fleet_register_save.py`, 7 tests; 4 fail on v0.61.
+
 ## v0.61: Round 68: fleet replay cache O(1) per request (journal). 5,438 tests + 19 integration
 
 - **Problem:** `FleetManager.verify()` runs synchronously inside the async gateway handlers. Every accepted request pruned the whole nonce dict and rewrote `fleet_nonces.json` in full, so its cost grew with the cache: 0.8 ms per request at 1k live nonces, 8 ms at 10k, 42 ms at 50k and 85 ms near the 100k cap. A busy or hostile signed peer could saturate the event loop at roughly 100 requests per second.

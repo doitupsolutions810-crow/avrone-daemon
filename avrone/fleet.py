@@ -136,6 +136,12 @@ NONCE_JOURNAL_MIN = 1024
 # rewriting fleet.json (quadratic), with megabytes of capabilities/presence per record.
 DEFAULT_MAX_NODES, HARD_MAX_NODES = 256, 4096
 MAX_NODE_RECORD_BYTES = 64 * 1024
+# A heartbeat refresh (known node, same url) rewrites fleet.json at most this often; a new node, a
+# url change and forget() still save at once (membership is durable), and stop() flushes. A peer
+# resends its refresh every heartbeat, so a crash inside the window loses nothing. Before (round 69) every heartbeat rewrote the
+# whole registry on the event loop: 145 ms per heartbeat at 256 peers x 60 KB, so 256 peers on the
+# default 15 s heartbeat kept the loop busy ~2.5 s of every second.
+FLEET_SAVE_DEBOUNCE_S = 5.0
 
 
 def max_nodes() -> int:
@@ -719,12 +725,18 @@ class FleetManager:
             try:
                 tmp.write_text(text)
                 os.replace(tmp, self.path)
+                self._saved_at, self._dirty = time.monotonic(), False
             except BaseException:
                 try:
                     tmp.unlink()
                 except OSError:
                     pass
                 raise
+
+    def flush(self) -> None:
+        """Write heartbeat refreshes still held back by FLEET_SAVE_DEBOUNCE_S."""
+        if getattr(self, "_dirty", False):
+            self._save()
 
     def status_of(self, n: dict[str, Any]) -> str:
         age = time.time() - _finite(n.get("last_seen", 0) if isinstance(n, dict) else 0, 0.0)
@@ -1378,7 +1390,11 @@ class FleetManager:
                     raise PermissionError(f"fleet registry full ({cap} peers; AVRONE_FLEET_MAX_NODES)")
             # copy-on-write: readers iterating self.nodes.values() never see it change size mid-loop
             self.nodes = {**nodes, nid: rec}
-            self._save()
+            refresh = existing is not None and existing.get("url") == url  # a plain heartbeat
+            if refresh and time.monotonic() - getattr(self, "_saved_at", float("-inf")) < FLEET_SAVE_DEBOUNCE_S:
+                self._dirty = True  # flushed by the next save past the window, or by stop()
+            else:
+                self._save()
         self.core.codex.emit("fleet", "fleet.join", self.node_id, node=nid, url=url)
         return {"ok": True, "parent": self.node_id}
 
@@ -1745,6 +1761,11 @@ class FleetManager:
             await self.queue.close()
         for t in list(self._bg):
             t.cancel()
+        if getattr(self, "_dirty", False):  # heartbeat refreshes still inside the save window
+            try:
+                await asyncio.to_thread(self.flush)
+            except OSError as e:
+                log.warning("could not save fleet.json on stop: %s", e)
 
     def pick(self, target: str) -> dict[str, Any]:
         if target in ("", "auto"):

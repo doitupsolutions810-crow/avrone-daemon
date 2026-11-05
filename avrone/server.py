@@ -449,7 +449,9 @@ async def fleet_info(x_admin_token: str | None = Header(default=None)):
 async def fleet_register(request: Request):
     payload = await _verified(request)
     try:
-        return _fleet().register(payload)
+        # off the loop: a registration copies, validates and (outside the save window) rewrites
+        # the whole registry
+        return await asyncio.to_thread(_fleet().register, payload)
     except PermissionError as e:
         raise HTTPException(403, str(e)) from None
     except ValueError as e:

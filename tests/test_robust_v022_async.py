@@ -232,6 +232,7 @@ def test_concurrent_heartbeats_and_listing_same_node_id(tmp_path, monkeypatch):
             res = await asyncio.gather(*(beat(r * 100 + i) for i in range(10)), *(read() for _ in range(10)))
             assert all(x == {"ok": True, "parent": "parent"} for x in res[:10])
             assert fm.nodes["kid"]["load"] == r * 100 + 9  # last writer in schedule order
+            fm.flush()  # v0.62: heartbeat refreshes are debounced (FLEET_SAVE_DEBOUNCE_S)
             assert json.loads(fm.path.read_text())["nodes"]["kid"]["load"] == r * 100 + 9
     run(main())
 

@@ -77,3 +77,13 @@ call, full squad + Lead merge); `llama3.2:3b` valid + tool use. On real hardware
 class model (strongest open family on BFCL-v4 tool calling, Apache-2.0) via
 `AVRONE_PROVIDER=ollama`. `tools/model_bench.py` + `.github/workflows/model-bench.yml` re-score
 candidates.
+
+## CI Status Check — 2026-11-05 (descent/xcv-trust-gates)
+
+- **Verify.sh**: present in repo tree (sha bb14698d8645d3281234701376820ec60feffdff).
+- **docker-verify job**: present in `.github/workflows/ci.yml` (runs docker build + Verify.sh inside image).
+- Most recent CI run on `descent/xcv-trust-gates` (run 42062034930, head sha cb076bcde32f82b34be53d2cf0338f643c9696ea, commit "fix(verify): align Verify.sh with real test paths and greatscale.py signatures (Descent XCV)"): status completed, conclusion failure.
+- Jobs (docker-verify, test (3.11), test (3.12)): all completed in ~3 seconds with **runner_id: 0**, **runner_name: ""** (blank), labels ubuntu-24.04.
+- This matches the known account-wide no-runner / provisioning fault (before checkout). **Not treated as a code failure.** No logs examined for test/lint reasons; no code changes pushed.
+- Same pattern observed on recent `main` CI runs (e.g. 42055121861): runner_id 0, blank name, rapid failure.
+- Recommendation: pause this automation until GitHub Actions runners provision correctly for the account. No force-push or branch deletion performed.

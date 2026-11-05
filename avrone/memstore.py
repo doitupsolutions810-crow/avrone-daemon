@@ -30,6 +30,7 @@ so a crash mid-write leaves either the old or the new file, never a torn one.
 """
 from __future__ import annotations
 
+import heapq
 import json
 import math
 import os
@@ -154,6 +155,54 @@ class MemoryRefused(ValueError):
     """A save refused by a cap or a bad key/namespace."""
 
 
+class _Oldest:
+    """Per-namespace min-heap of (ts, insertion order, key, record) for one merge_many call.
+
+    Eviction and the "older than everything kept" check each scanned the whole namespace per
+    incoming entry: a 4000-entry fleet merge into a full 5000-key namespace took 6.7 s holding the
+    store lock (quadratic). Entries go stale when their key is replaced or evicted; they are
+    dropped lazily (`space.get(key) is rec`). Ties on ts break by dict order, as min() did."""
+
+    def __init__(self) -> None:
+        self._heaps: dict[str, list[tuple[float, int, int, str, dict[str, Any]]]] = {}
+        self._seq: dict[str, dict[str, int]] = {}
+        self._next: dict[str, int] = {}
+        self._uniq = 0  # keeps tuples from ever comparing the record dicts (same ts, same key)
+
+    def _heap(self, ns: str, space: dict[str, dict[str, Any]]) -> list[tuple[float, int, int, str, dict[str, Any]]]:
+        h = self._heaps.get(ns)
+        if h is None:
+            seq = {k: i for i, k in enumerate(space)}
+            h = [(_ts(r.get("ts", 0)), seq[k], 0, k, r) for k, r in space.items()]
+            heapq.heapify(h)
+            self._heaps[ns], self._seq[ns], self._next[ns] = h, seq, len(seq)
+        return h
+
+    def _top(self, ns: str, space: dict[str, dict[str, Any]]) -> tuple[float, int, int, str, dict[str, Any]]:
+        h = self._heap(ns, space)
+        while h and space.get(h[0][3]) is not h[0][4]:
+            heapq.heappop(h)
+        return h[0]
+
+    def min_ts(self, ns: str, space: dict[str, dict[str, Any]]) -> float:
+        return self._top(ns, space)[0]
+
+    def pop(self, ns: str, space: dict[str, dict[str, Any]]) -> str:
+        top = self._top(ns, space)
+        heapq.heappop(self._heaps[ns])
+        self._seq[ns].pop(top[3], None)
+        return top[3]
+
+    def put(self, ns: str, space: dict[str, dict[str, Any]], key: str, rec: dict[str, Any]) -> None:
+        h = self._heap(ns, space)
+        seq = self._seq[ns]
+        if key not in seq:  # a replaced key keeps its dict position, so it keeps its order too
+            seq[key] = self._next[ns]
+            self._next[ns] += 1
+        self._uniq += 1
+        heapq.heappush(h, (_ts(rec.get("ts", 0)), seq[key], self._uniq, key, rec))
+
+
 class MemoryStore:
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -261,9 +310,10 @@ class MemoryStore:
             raise MemoryRefused("namespace is required")
 
     def _put_locked(self, spaces: dict[str, dict[str, dict[str, Any]]], rec: dict[str, Any],
-                    pending: list[dict[str, Any]]) -> bool:
+                    pending: list[dict[str, Any]], oldest: "_Oldest | None" = None) -> bool:
         """Apply one record to the folded view; returns True when the file must be rewritten
-        (an eviction happened). Raises MemoryRefused on the namespace cap."""
+        (an eviction happened). Raises MemoryRefused on the namespace cap. `oldest` (merge_many)
+        finds the key to evict from a heap instead of a scan of the namespace."""
         ns, key = rec["ns"], rec["key"]
         if ns not in spaces and len(spaces) >= max_namespaces():
             raise MemoryRefused(f"namespace cap reached ({max_namespaces()}, AVRONE_MEMORY_MAX_NAMESPACES)")
@@ -271,10 +321,13 @@ class MemoryStore:
         evicted = False
         if key not in space:
             while len(space) >= max_entries():
-                oldest = min(space, key=lambda k: space[k].get("ts", 0))
-                del space[oldest]
+                victim = oldest.pop(ns, space) if oldest is not None else \
+                    min(space, key=lambda k: space[k].get("ts", 0))
+                del space[victim]
                 evicted = True
         space[key] = rec
+        if oldest is not None:
+            oldest.put(ns, space, key, rec)
         pending.append(rec)
         return evicted
 
@@ -312,6 +365,7 @@ class MemoryStore:
             spaces = self._fold(records)
             pending: list[dict[str, Any]] = []
             evicted = False
+            oldest = _Oldest()
             for ns, e in ((n, x) for n, items in groups.items() for x in items):
                 if not isinstance(e, dict):
                     stats["rejected"] += 1
@@ -341,14 +395,14 @@ class MemoryStore:
                 # itself older than everything kept, it would evict a newer key and then be the
                 # next one evicted, so it was counted "merged" while the store lost a newer memory.
                 if have is None and len(space) >= max_entries() and space and \
-                        ts <= min(_ts(r.get("ts", 0)) for r in space.values()):
+                        ts <= oldest.min_ts(ns, space):
                     stats["skipped"] += 1
                     continue
                 rec = {"ns": ns, "key": key, "value": value, "ts": ts, **meta}
                 if e.get("agent"):
                     rec["agent"] = str(e["agent"])[:100]
                 try:
-                    evicted = self._put_locked(spaces, rec, pending) or evicted
+                    evicted = self._put_locked(spaces, rec, pending, oldest) or evicted
                 except MemoryRefused:
                     stats["rejected"] += 1
                     continue

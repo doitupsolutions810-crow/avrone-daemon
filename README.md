@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.57: Round 64: fleet memory merge into a full namespace was quadratic. 5,382 tests + 19 integration
+
+- **`MemoryStore.merge_many` eviction:** each new key merged into a namespace at its cap scanned the whole
+  namespace twice, once for the "older than everything kept" check and once to pick the eviction victim.
+  With `AVRONE_MEMORY_MAX_ENTRIES=5000`, a 4000-entry fleet merge took 6.7 s while holding the store lock,
+  so every save, recall and other merge on the node waited. A per-call min-heap (`_Oldest`, lazy
+  deletion, ties broken by dict order as `min()` did) brings it to ~0.06 s. A seeded property test
+  checks resulting stores and stats against the old scanning algorithm exactly.
+- **ReDoS sweep, extended:** all 146 inline `re.*(literal)` calls were timed against 32 repeated units.
+  No new backtracking issue was found. The three hits were `match`/`fullmatch` used only at a fixed position.
+  Probe: `/workspace/work/regexscan2.py`.
+- **Probed, no change:** `memory_recall`/`memory_list` (off loop, bounded by the entry cap), `fleet_status`
+  and `router_status` JSON row-drop loops (50 and 20 rows max), bridge `export`.
+- Tests: `tests/test_round64_memory_merge_evict.py`, 12 tests; 11 fail on v0.56.
+
 ## v0.56: Round 63: ReDoS in the secret redactor every CodeX event passes through. 5,370 tests + 19 integration
 
 A sweep of all 68 module-level regexes against long repeated units (`a.`, `a-`, `token`, `http://`, ...)

@@ -56,6 +56,23 @@ async def _pump(q: asyncio.Queue[Event]) -> None:
         print(_event_line(ev), file=sys.stderr, flush=True)
 
 
+MAX_CLI_STEPS = 200
+MAX_ANSWER_FILE_BYTES = 1024 * 1024
+
+
+def _read_answer_file(path: str) -> str:
+    """--first-answer-file: a regular file of at most 1 MB. A FIFO (or /dev/stdin with nothing
+    piped) blocked forever, /dev/zero never finished, and a 2 GB file was read whole."""
+    p = Path(path)
+    if not p.is_file():
+        raise ValueError(f"--first-answer-file {path!r} is not a regular file")
+    with p.open("rb") as f:
+        data = f.read(MAX_ANSWER_FILE_BYTES + 1)
+    if len(data) > MAX_ANSWER_FILE_BYTES:
+        raise ValueError(f"--first-answer-file is larger than {MAX_ANSWER_FILE_BYTES} bytes")
+    return data.decode("utf-8", errors="replace")
+
+
 def _write_json(path: str | None, data: Any) -> None:
     if path:
         Path(path).write_text(json.dumps(data, indent=2, default=str))
@@ -63,8 +80,9 @@ def _write_json(path: str | None, data: Any) -> None:
 
 async def _run(args: argparse.Namespace) -> int:
     settings = Settings()
-    if getattr(args, "max_steps", None):
-        settings.max_steps = args.max_steps
+    if getattr(args, "max_steps", None) is not None:
+        # --max-steps -5 used to give every agent zero turns (silent empty answers); 10**9 meant no cap
+        settings.max_steps = max(1, min(MAX_CLI_STEPS, args.max_steps))
     core, cleanups = await build_core(settings, extras=not args.no_extras)
     pump = None
     q = None
@@ -98,8 +116,8 @@ async def _run(args: argparse.Namespace) -> int:
         if args.cmd == "evolve":
             from .evolve import list_accepted
             rows = list_accepted(core.settings)
-            print(json.dumps(rows, indent=2, default=str) if args.json else
-                  ("\n".join(f"{r['pid']} {r['branch']}  {r['goal']}  ({', '.join(r['files'])})" for r in rows)
+            _write_json(args.json, rows)  # --json PATH was treated as a flag: rows printed, PATH never written
+            print(("\n".join(f"{r['pid']} {r['branch']}  {r['goal']}  ({', '.join(r['files'])})" for r in rows)
                    or "no accepted proposals"))
             return 0
 
@@ -123,7 +141,7 @@ async def _run(args: argparse.Namespace) -> int:
         else:  # deep
             first = args.first_answer
             if args.first_answer_file:
-                first = Path(args.first_answer_file).read_text()
+                first = _read_answer_file(args.first_answer_file)
             # Only pass rounds when asked, so cores without the knob keep working.
             rounds = clamp_deep_rounds(args.rounds)
             kw = {"rounds": rounds} if rounds is not None else {}

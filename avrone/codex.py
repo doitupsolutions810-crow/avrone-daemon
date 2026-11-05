@@ -143,6 +143,20 @@ def replay_limit() -> int:
     return max(1, min(HARD_REPLAY_EVENTS, n))
 
 
+RUNS_PROMPT_CHARS = 2000
+
+
+def _whole(v: Any, default: int, cap: int) -> int:
+    """A count from a caller: junk ("abc", NaN, inf, None, bool) reads as `default`; 1..cap."""
+    if isinstance(v, bool):
+        return default
+    try:
+        n = int(v)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    return max(1, min(cap, n))
+
+
 def iter_lines(f, max_line: int = MAX_LINE_BYTES):
     """Lines of a text file, each read at most max_line chars at a time; an overlong line yields
     None (and is skipped through in chunks), so a 1 GB line never sits in memory."""
@@ -273,8 +287,11 @@ class Codex:
 
     def runs(self, limit: int = 50) -> list[dict[str, Any]]:
         stamped = []
+        limit = _whole(limit, 50, 10_000)
         for p in self.log_dir.glob("*.jsonl"):
             try:  # a log can vanish between listing and stat (cleanup, concurrent delete)
+                if not p.is_file():  # a FIFO named x.jsonl blocked the listing forever in open()
+                    continue
                 stamped.append((p.stat().st_mtime, p))
             except OSError:
                 continue
@@ -291,7 +308,9 @@ class Codex:
                 continue
             data = start.get("data")
             prompt = data.get("prompt", "") if isinstance(data, dict) else ""
-            out.append({"run_id": p.stem, "started": start.get("ts"), "prompt": prompt})
+            prompt = prompt if isinstance(prompt, str) else ("" if prompt is None else str(prompt))
+            # a 4 MB prompt per run made a 50-run listing a 200 MB response
+            out.append({"run_id": p.stem, "started": start.get("ts"), "prompt": prompt[:RUNS_PROMPT_CHARS]})
         return out
 
     def replay(self, run_id: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -300,10 +319,10 @@ class Codex:
         hides the rest of the audit log. Streams the file: a 200 MB log used to be read whole and
         parsed whole (1.4 GB RSS for one request)."""
         p = self.log_dir / f"{log_name(run_id)}.jsonl"
-        if not p.exists() or not p.resolve().is_relative_to(self.log_dir.resolve()):
-            return []
+        if not p.is_file() or not p.resolve().is_relative_to(self.log_dir.resolve()):
+            return []  # is_file: a FIFO hung the replay request in open()
         from collections import deque
-        n = replay_limit() if limit is None else max(1, int(limit))
+        n = replay_limit() if limit is None else _whole(limit, replay_limit(), HARD_REPLAY_EVENTS)
         keep: deque[dict[str, Any]] = deque(maxlen=n)
         total = 0
         try:

@@ -81,6 +81,23 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.43: Round 50: hostile model providers, codex listing/replay, CLI arguments. 5,168 tests + 19 integration
+
+17 of the 28 new tests failed on v0.42 before the fixes. The 6,000-body seeded provider fuzz passed on v0.42 too: the gateway's ordinary junk handling held, and the failures were all in depth, size and argument edges.
+
+| Lane | Finding | Mapping | Verification |
+|---|---|---|---|
+| gateway | **a 200 body nested 200k deep (plain JSON, SSE, or inside tool-call `arguments`) escaped `chat()` as a raw `RecursionError`**, not `LLMError`, so callers expecting LLM failures crashed | caught as a permanent failure for that upstream (fails over) | 4 nested bodies, each an `LLMError` |
+| gateway | **response bodies were buffered whole**: a 300 MB gzip stream (a few hundred KB on the wire) was inflated in memory, and a 200 MB `content` string became the agent's reply | streamed read capped at `MAX_RESPONSE_BYTES = 32 MB` (decoded); over the cap fails over; `Retry-After` and status still read | 3 MB body and 20 MB gzip bomb refused at a 1 MB cap; a small gzip reply still works; 429 then 200 still retries |
+| gateway | `temperature=10**400` raised `OverflowError` before the request; `True` was sent as 1.0 | junk temperature uses the 0.7 default | 7 junk temperatures |
+| gateway | `clean_text(None/int/list)` raised `TypeError` | non-text read as `str()` | |
+| codex | **a FIFO named `<run>.jsonl` in `runs/` hung `runs()` and `replay()`** (and `/api/runs`) in `open()` | regular files only | both return within 5 s |
+| codex | `runs()` returned 4 MB prompts (a 50-run listing was a 200 MB response) and non-string prompts; `runs("abc")`, `replay(limit=inf)` raised | prompts clipped to 2,000 chars and coerced to text; limits read as whole numbers 1..cap | 7 junk limits |
+| cli | `--max-steps -5` gave every agent zero turns (silent empty answers); `10**9` meant no cap | clamped to 1..200 (`MAX_CLI_STEPS`) | |
+| cli | `evolve --json PATH` treated PATH as a flag: printed JSON, never wrote the file | writes PATH like every other command | file written, plain listing printed |
+| cli | `--first-answer-file` on a FIFO or `/dev/stdin` hung; a 2 GB file was read whole | regular file, at most 1 MB | FIFO, dir, oversize refused |
+| evolve | accepted proposals with `files` as a string or holding `null` crashed the CLI listing; `passed: "yes"` counted as accepted | `files` coerced to strings; only `passed: true` counts | |
+
 ## v0.42: Round 49: image tools, skills loader, shell runner timeouts, evolve listings. 5,140 tests + 19 integration
 
 54 of the 69 new tests failed on v0.41 before the fixes (52 failed outright, the 2 FIFO cases hung).

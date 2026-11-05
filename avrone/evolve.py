@@ -1241,6 +1241,10 @@ def list_accepted(settings) -> list[dict[str, Any]]:
                 m = json.loads(f.read_text())
             except (OSError, ValueError, RecursionError):
                 continue
-            if isinstance(m, dict) and m.get("passed") and isinstance(m.get("pid"), str):
-                out.append({k: m.get(k) for k in ("pid", "goal", "branch", "files", "by", "ts")})
+            if isinstance(m, dict) and m.get("passed") is True and isinstance(m.get("pid"), str):
+                row = {k: m.get(k) for k in ("pid", "goal", "branch", "files", "by", "ts")}
+                # files as a str/int/[1, null] crashed the CLI's ", ".join and the /api/evolve view
+                row["files"] = [str(x)[:200] for x in row["files"]] if isinstance(row["files"], list) else []
+                row["goal"] = "" if row["goal"] is None else str(row["goal"])
+                out.append(row)
     return out

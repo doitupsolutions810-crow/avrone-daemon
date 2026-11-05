@@ -133,7 +133,7 @@ class Gateway:
         if is_loopback_url(url):
             kw["trust_env"] = False  # a local Ollama/LM Studio is never reached through HTTP(S)_PROXY
         async with httpx.AsyncClient(**kw) as client:
-            r = await client.post(url, headers=headers, json=body)
+            r = await _bounded_post(client, url, headers, body, up.provider)
         if r.status_code in RETRY_STATUS:
             raise _Retry(f"{up.provider} {r.status_code}: {r.text[:300]}", r)
         if r.status_code >= 400:
@@ -146,6 +146,8 @@ class Gateway:
             if e.permanent:
                 raise _Permanent(f"{up.provider} 200: {e}") from e
             raise _Retry(f"{up.provider} 200: {e}", r) from e
+        except RecursionError as e:  # absurdly nested JSON: escaped chat() as a raw RecursionError
+            raise _Permanent(f"{up.provider} 200: response JSON nested too deeply") from e
         except (KeyError, IndexError, ValueError, TypeError, AttributeError) as e:
             raise _Retry(f"{up.provider} bad response: {r.text[:200]}", r) from e
         content = content_text(content)
@@ -154,7 +156,10 @@ class Gateway:
         # gpt-oss on Ollama: the action sometimes comes back as a parsed native tool call with
         # empty content. AVRONE's actions are JSON text, so rewrite it into that form instead of
         # handing the agent an empty reply.
-        synth = tool_calls_as_action(msg.get("tool_calls"), choice.get("finish_reason"))
+        try:
+            synth = tool_calls_as_action(msg.get("tool_calls"), choice.get("finish_reason"))
+        except RecursionError as e:  # tool-call arguments nested 100k deep
+            raise _Permanent(f"{up.provider} 200: tool-call arguments nested too deeply") from e
         if synth:
             return synth
         if content.strip():
@@ -399,11 +404,14 @@ _SURROGATE = re.compile(r"[\ud800-\udfff]")
 _NAME_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-def clean_text(text: str) -> str:
-    """Make text safe to JSON-encode as UTF-8 and to tokenize: lone surrogates (from bytes
+def clean_text(text: Any) -> str:
+    """Non-text input reads as its str() (a None/int/list used to raise TypeError in the regex).
+    Make text safe to JSON-encode as UTF-8 and to tokenize: lone surrogates (from bytes
     decoded with surrogateescape, or a cut emoji) become U+FFFD instead of raising
     UnicodeEncodeError inside httpx; NUL bytes are dropped (llama.cpp/Ollama and many proxies
     choke on them)."""
+    if not isinstance(text, str):
+        text = "" if text is None else str(text)
     if _SURROGATE.search(text):
         text = _SURROGATE.sub("\ufffd", text)
     if "\x00" in text:
@@ -462,9 +470,11 @@ def sanitize_messages(messages: Any) -> list[dict[str, Any]]:
 
 
 def safe_temperature(t: Any, default: float = 0.7) -> float:
+    if isinstance(t, bool):
+        return default
     try:
         v = float(t)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # 10**400 raised before the request was sent
         return default
     if v != v or v in (float("inf"), float("-inf")):
         return default
@@ -507,7 +517,7 @@ def _sse_message(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
             break
         try:
             chunk = json.loads(data)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         if isinstance(chunk, dict) and chunk.get("error") is not None:
             raise _UpstreamError(_error_text(chunk["error"]),
@@ -576,6 +586,31 @@ def extract_choice(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(msg, dict):
         raise TypeError("message is not an object")
     return choice, msg
+
+
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
+
+
+async def _bounded_post(client: httpx.AsyncClient, url: str, headers: dict[str, str], body: Any,
+                        provider: str) -> httpx.Response:
+    """POST and read at most MAX_RESPONSE_BYTES of the (decoded) body. Before: the whole body was
+    buffered, so a 300 MB gzip stream (a few hundred KB on the wire) was inflated in memory, and a
+    200 MB "content" string was handed to the agent as its reply."""
+    if not hasattr(client, "stream"):  # a minimal stand-in client (tests, shims): plain post, then cap
+        r = await client.post(url, headers=headers, json=body)
+        if len(r.content) > MAX_RESPONSE_BYTES:
+            raise _Permanent(f"{provider} {r.status_code}: response larger than {MAX_RESPONSE_BYTES} bytes")
+        return r
+    async with client.stream("POST", url, headers=headers, json=body) as resp:
+        buf = bytearray()
+        async for chunk in resp.aiter_bytes():
+            buf += chunk
+            if len(buf) > MAX_RESPONSE_BYTES:
+                raise _Permanent(f"{provider} {resp.status_code}: response larger than "
+                                 f"{MAX_RESPONSE_BYTES} bytes; not read further")
+        hdrs = [(k, v) for k, v in resp.headers.multi_items()
+                if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")]
+        return httpx.Response(resp.status_code, headers=hdrs, content=bytes(buf), request=resp.request)
 
 
 class _Retry(RuntimeError):

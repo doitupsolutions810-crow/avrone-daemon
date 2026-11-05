@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.55: Round 62: edit_file's loose match fixed (corrupting overlaps, quadratic scan). 5,345 tests + 19 integration
+
+- **replace_all corrupted files.** The trailing-whitespace fallback found OVERLAPPING matches and spliced them in reverse. Example: `"a\na\na\n"` with old `"a\na  "` became `"B\n"`, losing a line. It is now non-overlapping, left to right, like `str.replace` (`"B\na\n"`), and the "matches N times" count agrees with it.
+- **Quadratic scan on the event loop.** `_loose_span` compared line by line: 60k lines with a 3000-line `old` took 13.3 s. It is now one `str.find` over the right-stripped text, realigned on line starts: 0.02 s. A seeded property test checks it against the reference algorithm (2,400 random cases).
+- **Miss hints:** `_nearest_hint` ran difflib over every full line (100k lines: 3.8 s; 2000 lines of 5000 chars: 4.3 s). Lines are now clipped to 200 chars, and only the first 20,000 distinct lines are compared.
+- `edit_file` now runs `off_loop`, and refuses files over `EDIT_MAX_BYTES` (32 MB), pointing to shell instead.
+- Tests: `tests/test_round62_edit_file_loose_match.py` (15 tests, 13 fail on v0.54).
+
 ## v0.54: Round 61: agent-dir walks off the event loop. 5,330 tests + 19 integration
 
 - **Every write into an agent dir froze the node.** `quota_write` (behind `fs_write`, and behind `write_file`/`edit_file` inside an agent dir) walks the whole agent dir with lstat to check the quota. On a 100k-file dir (one npm or pip install gets there), that was ~0.26 s per write on the loop, under a `threading.Lock`. It now runs in a worker thread, and the per-dir lock still serialises check plus write (6 concurrent 300 KB writes under a 1 MB quota: exactly 3 land).

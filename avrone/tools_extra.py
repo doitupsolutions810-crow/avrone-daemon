@@ -357,7 +357,12 @@ def _rstrip_lines(s: str) -> str:
 
 def _loose_span(text: str, old: str) -> list[tuple[int, int]]:
     """Spans of `text` whose lines equal `old`'s lines up to trailing whitespace. Line-aligned
-    only (old must cover whole lines), so it can never splice into the middle of a line."""
+    only (old must cover whole lines), so it can never splice into the middle of a line.
+
+    Non-overlapping, left to right like str.replace: overlapping spans used to be spliced in
+    reverse with replace_all, eating lines ("a\\na\\na" with old "a\\na " became one line).
+    Searched with str.find on the right-stripped text: the old line-by-line compare was
+    O(lines x old lines) on the event loop (60k lines x 3000-line old: 13 s)."""
     olines = [ln.rstrip() for ln in old.strip("\n").split("\n")]
     if not any(olines):
         return []
@@ -366,27 +371,62 @@ def _loose_span(text: str, old: str) -> list[tuple[int, int]]:
     for ln in lines:
         starts.append(pos)
         pos += len(ln) + 1
-    k, spans = len(olines), []
-    for i in range(len(lines) - k + 1):
-        if all(lines[i + j].rstrip() == olines[j] for j in range(k)):
-            end = starts[i + k - 1] + len(lines[i + k - 1])
-            spans.append((starts[i], end))
+    rlines = [ln.rstrip() for ln in lines]
+    rstarts, pos = [], 0
+    for ln in rlines:
+        rstarts.append(pos)
+        pos += len(ln) + 1
+    rtext = "\n".join(rlines)
+    needle = "\n".join(olines)
+    k, spans, at = len(olines), [], 0
+    import bisect
+    while len(spans) < MAX_LOOSE_SPANS:
+        idx = rtext.find(needle, at)
+        if idx < 0:
+            break
+        end = idx + len(needle)
+        i = bisect.bisect_left(rstarts, idx)
+        if i < len(rstarts) and rstarts[i] == idx and (end == len(rtext) or rtext[end] == "\n"):
+            spans.append((starts[i], starts[i + k - 1] + len(lines[i + k - 1])))
+            at = end + 1  # next match starts on a later line: never overlapping
+        else:
+            nxt = rtext.find("\n", idx)  # realign on the next line start
+            if nxt < 0:
+                break
+            at = nxt + 1
     return spans
 
 
+MAX_LOOSE_SPANS = 100_000
+HINT_MAX_LINES = 20_000
+HINT_LINE_CHARS = 200
+EDIT_MAX_BYTES = 32 * 1024 * 1024
+
+
 def _nearest_hint(text: str, old: str) -> str:
+    """Closest line for a miss. difflib over every line was seconds on a big file (100k lines:
+    3.8 s; 2000 lines of 5000 chars: 4.3 s), so lines are clipped and the first HINT_MAX_LINES
+    distinct ones compared."""
     import difflib
-    first = next((ln.strip() for ln in old.split("\n") if ln.strip()), "")
+    first = next((ln.strip() for ln in old.split("\n") if ln.strip()), "")[:HINT_LINE_CHARS]
     if not first:
         return ""
     lines = text.split("\n")
-    best = difflib.get_close_matches(first, [ln.strip() for ln in lines], n=1, cutoff=0.6)
+    seen: dict[str, int] = {}
+    for i, ln in enumerate(lines):
+        key = ln.strip()[:HINT_LINE_CHARS]
+        if key and key not in seen:
+            seen[key] = i
+            if len(seen) >= HINT_MAX_LINES:
+                break
+    best = difflib.get_close_matches(first, list(seen), n=1, cutoff=0.6)
     if not best:
         return ""
-    idx = next(i for i, ln in enumerate(lines) if ln.strip() == best[0])
+    idx = seen[best[0]]
     return f"; closest line is {idx + 1}: {lines[idx].strip()[:120]!r} (read_file the file and copy the exact text)"
 
 
+@off_loop  # reads, matches and rewrites the whole file
 async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
     """Exact, unique replace, hardened (round 25): bytes outside the edit survive untouched
     (a latin-1 or mixed file was silently rewritten with U+FFFD everywhere before), CRLF files
@@ -411,6 +451,13 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: 'old' must be a non-empty string"
     if old == new:
         return "ERROR: 'old' and 'new' are identical; nothing to change"
+    try:
+        size = p.stat().st_size
+    except OSError:
+        size = 0
+    if size > EDIT_MAX_BYTES:
+        return (f"ERROR: {raw_path} is {size} bytes; edit_file handles up to {EDIT_MAX_BYTES} bytes, "
+                "use shell (sed, python) for bigger files")
     data = p.read_bytes()
     name = fsunify.display(ctx, p)
     if b"\x00" in data[:8192]:
@@ -452,7 +499,7 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
     blob = out.encode("utf-8", "surrogateescape")
     if r.in_agent:
         from .agentfs_tools import quota_write
-        await asyncio.to_thread(quota_write, ctx, r.root, p, blob, False, "edit_file")  # walks the agent dir
+        quota_write(ctx, r.root, p, blob, tool="edit_file")  # (this tool already runs off the loop)
     else:
         atomic_write_bytes(p, blob)
     plural = "replacement" if count == 1 else "replacements"

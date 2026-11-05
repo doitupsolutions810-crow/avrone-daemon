@@ -65,6 +65,10 @@ def build_evidence_event(*, source: str, run_id: str, failures: int, runs: int,
         human_root = _text(human_root, "human_root", MAX_REF)
     if provenance_depth > 0 and human_root is None:
         raise EvidenceContractError("positive provenance_depth requires an explicit human_root")
+    if isinstance(failures, bool) or not isinstance(failures, int):
+        raise EvidenceContractError("failures must be an integer")
+    if isinstance(runs, bool) or not isinstance(runs, int):
+        raise EvidenceContractError("runs must be an integer")
     snapshot = evidence_snapshot(failures, runs)
     body = {
         "schema": SCHEMA,

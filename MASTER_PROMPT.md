@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.51.0)
+# AVRONE MASTER PROMPT (v0.52.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,306 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,310 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 223 test files, offline by default
+├── tests/                  # 224 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +312,12 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.52: Round 59: learning bridge off the event loop. 5,310 tests + 19 integration
+
+- **Every squad and deep run froze the node for the memory parse.** With asyncio's slow-callback detector on and a 200k-line memory store, each squad and each deep wave logged a ~1.0 s blocked step. Profiling put all of it in `Trinity._lessons_block` (bridge `lessons_block` loads and folds the whole store to find the lessons). Lessons are on by default, so every run stalled the API, WebSockets and fleet heartbeats. The end-of-run `_distill` save ran on the loop too. Both now run via `asyncio.to_thread`; the same workload logs no slow callbacks at 0.1 s.
+- Probed clean: all-tools fuzz seeds 20-23, governor parsers against junk cgroup, meminfo, vm_stat and pmset text.
+- Tests: `tests/test_round59_lessons_off_loop.py` (4 tests, 3 fail on v0.51).
+
 ## v0.51: Round 58: admin endpoints and agent-pack tools off the event loop. 5,306 tests + 19 integration
 
 - **Live-node stall probe** (uvicorn, `/api/status` pinged every 20 ms during each call):
@@ -330,20 +336,6 @@ landed and the suite is green. End with what is still open.
 - **Probed clean:** a raw-socket MCP server that drips one byte per 0.5 s, sends endless SSE keep-alives, a 2 GB gzip bomb (refused at the 32 MB cap), a malformed chunk header, a 60 MB SSE line with no newline, or never answers. Each ends within the tool timeout. All-tools fuzz seeds 14 and 15: clean.
 - Tests: `tests/test_round57_mcp_http_redirect_edges.py` (11 tests).
 
-## v0.49: Round 56: hostile stdio MCP servers, one-rewrite fleet memory merge, memory tools off the loop. 5,283 tests + 19 integration
-
-10 new tests. 9 of them fail on v0.48. Two of those call the new `merge_many`, so 7 confirm 5 bugs on behavior alone. I wrote fake MCP servers that stop reading their input, flood stderr, or die with a 12 MB stderr line, and timed memory and fleet memory paths against stores of 120k to 200k lines.
-
-| Lane | Finding | Mapping |
-|---|---|---|
-| MCP stdio send | `stdin.drain()` had no deadline. A server that stopped reading its input (2 MB tool args) hung the call **forever**, past the request timeout. It also held the write lock, so every later call to that server hung too | the send counts against the request timeout. A half-written line drops the connection (the server is killed), and a call queued behind a stuck write fails with nothing sent. `SEND_TIMEOUT_S` (30 s) covers notifications |
-| MCP stdio stderr | stderr was read line by line. The first line over the stream limit raised inside a `suppress()`, and the drain stopped for good. The pipe then filled and the server blocked on its next stderr write | stderr is read in 64 KB chunks, and kept lines are clipped to `STDERR_LINE_CHARS` (2000) |
-| MCP exit error | the "process exited" error quoted the last stderr line whole (12 MB) | clipped to 300 chars; a request after the server closed stdout fails at once |
-| fleet memory merge | `receive_memory` merged one namespace at a time. Each pass re-read and rewrote the whole store: 32 namespaces over 200k lines took **24 s**, on the event loop | `MemoryStore.merge_many` does one read and one rewrite (0.76 s), and `/api/fleet/memory` runs it via `asyncio.to_thread` |
-| memory tools | `memory_save` and `lesson_forget` read the whole store and took its file lock on the loop. `memory_sync` read it on the loop too (a 0.85 s stall) | the first two are `off_loop`; `memory_sync` reads through `to_thread` (0.13 s) |
-
-Memory sync was also fuzzed with junk records (string, list, bool, inf and missing `ts`; NaN values; list keys; foreign namespaces; a 10 MB key). It handled every case cleanly.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -355,4 +347,4 @@ Memory sync was also fuzzed with junk records (string, list, bool, inf and missi
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.51.0 checked out: 5,306 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.52.0 checked out: 5,310 passed, 99% coverage. Next: round <N+1> on <angle>."

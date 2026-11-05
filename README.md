@@ -81,6 +81,12 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.52: Round 59: learning bridge off the event loop. 5,310 tests + 19 integration
+
+- **Every squad and deep run froze the node for the memory parse.** With asyncio's slow-callback detector on and a 200k-line memory store, each squad and each deep wave logged a ~1.0 s blocked step. Profiling put all of it in `Trinity._lessons_block` (bridge `lessons_block` loads and folds the whole store to find the lessons). Lessons are on by default, so every run stalled the API, WebSockets and fleet heartbeats. The end-of-run `_distill` save ran on the loop too. Both now run via `asyncio.to_thread`; the same workload logs no slow callbacks at 0.1 s.
+- Probed clean: all-tools fuzz seeds 20-23, governor parsers against junk cgroup, meminfo, vm_stat and pmset text.
+- Tests: `tests/test_round59_lessons_off_loop.py` (4 tests, 3 fail on v0.51).
+
 ## v0.51: Round 58: admin endpoints and agent-pack tools off the event loop. 5,306 tests + 19 integration
 
 - **Live-node stall probe** (uvicorn, `/api/status` pinged every 20 ms during each call):

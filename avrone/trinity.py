@@ -1051,7 +1051,8 @@ class TrinityCore:
 
         self.squad_roles[run_id] = [{"role": str(s.get("role")), "focus": str(s.get("focus", ""))}
                                     for s in subtasks if isinstance(s, dict)]
-        lessons = self._lessons_block(run_id, task)
+        # in a thread: it parses the whole memory store (200k lines: ~1 s with the node frozen)
+        lessons = await asyncio.to_thread(self._lessons_block, run_id, task)
         if lessons:
             subtasks_run = [dict(s, focus=s["focus"] + lessons) for s in subtasks]
         else:
@@ -1126,7 +1127,7 @@ class TrinityCore:
                           for i, (s, r) in enumerate(zip(subtasks, results))]}
         if xinfo is not None:
             out["bridge"] = {k: v for k, v in xinfo.items() if k != "digest"}
-        learned = self._distill(run_id, task)
+        learned = await asyncio.to_thread(self._distill, run_id, task)  # memory rewrite: off the loop
         if learned:
             out["lessons_learned"] = learned
         if ck is not None and not answer.startswith("Lead failed ("):
@@ -1176,7 +1177,8 @@ class TrinityCore:
             self.codex.emit(run_id, "deep.first_wave_done", "Trinity", first_run_id=first_run_id,
                             answer=first_answer[:6000])
 
-        lessons = self._lessons_block(run_id, task)
+        # in a thread: it parses the whole memory store (200k lines: ~1 s with the node frozen)
+        lessons = await asyncio.to_thread(self._lessons_block, run_id, task)
         angles = [dict(a, focus=a["focus"] + lessons) for a in DEEP_ANGLES[:n]] if lessons else DEEP_ANGLES[:n]
         current = first_answer
         seen: list[str] = []
@@ -1277,7 +1279,7 @@ class TrinityCore:
         }
         if first_run_id:
             out["first_run_id"] = first_run_id
-        learned = self._distill(run_id, task)
+        learned = await asyncio.to_thread(self._distill, run_id, task)  # memory rewrite: off the loop
         if learned:
             out["lessons_learned"] = learned
         if ck is not None and lead_ok:

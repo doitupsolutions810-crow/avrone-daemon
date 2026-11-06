@@ -1,0 +1,21 @@
+{
+  "id": "F",
+  "title": "Liveness Grammar + Convergence Certification",
+  "date": "2026-11-05",
+  "cherry_pick_order": [
+    "liveness_event.py",
+    "schema_gate.py",
+    "tombstone.py",
+    "relay_loop.py",
+    "verify_convergence.sh",
+    "test_enforcement_ratio.py",
+    "test_liveness_grammar.py"
+  ],
+  "depends_on": ["E"],
+  "summary": "Unifies backpressure and retirement into one four-state liveness event (ready, saturated, retiring, dead). Adds schema gate at the byte-to-typed-event boundary, tombstone module with three-window proof, convergence check in verify.sh using sum 1/n^2 against pi^2/6, reopen threshold when a single discovery exceeds the remaining tail, and enforcement-ratio census with floor at 2:1. Includes minimal relay_loop.py so test_integration.py stops importing an 11-byte stub.",
+  "tarball_sha256": "PENDING_ON_BUILD",
+  "tests_added": 2,
+  "boundary_gates": 20,
+  "interior_checks": 5,
+  "ratio": "4.0:1"
+}

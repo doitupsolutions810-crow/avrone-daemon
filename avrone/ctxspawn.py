@@ -45,6 +45,7 @@ CALL_OUT_CHARS = 600
 MEMORY_ENTRIES = 20
 MEMORY_VALUE_CHARS = 300
 DIR_FILES = 50
+DIR_SCAN_MAX = 20_000  # entries visited by _dir_files before it gives up
 SUMMARY_CHARS = 2000
 REDACTED = "[REDACTED]"
 TRUNC = "...[truncated]"
@@ -239,15 +240,38 @@ def _dir_files(ctx: Any) -> list[str]:
         return []
     root = Path(d)
     names: list[str] = []
-    try:
-        for p in sorted(root.rglob("*")):
-            if p.is_file():
-                names.append(p.relative_to(root).as_posix())
+    # Depth-first over each directory's entries sorted by name: the same order sorted(rglob("*"))
+    # gave, but it stops at DIR_FILES instead of listing and sorting the whole tree first. A
+    # 100,000-file agent dir took ~6 s per spawn (round 79). Symlinked dirs are not entered, and
+    # DIR_SCAN_MAX entries bound a tree of empty dirs.
+    stack: list[tuple[str, list[os.DirEntry]]] = []
+    seen = 0
+
+    def listing(path: str) -> list[os.DirEntry]:
+        try:
+            with os.scandir(path) as it:
+                return sorted(it, key=lambda e: e.name, reverse=True)
+        except OSError:
+            return []
+    stack.append(("", listing(str(root))))
+    while stack and seen < DIR_SCAN_MAX:
+        prefix, entries = stack[-1]
+        if not entries:
+            stack.pop()
+            continue
+        e = entries.pop()
+        seen += 1
+        rel = f"{prefix}{e.name}"
+        try:
+            if e.is_dir(follow_symlinks=False):
+                stack.append((rel + "/", listing(e.path)))
+            elif e.is_file():
+                names.append(rel)
                 if len(names) >= DIR_FILES:
                     names.append("...")
                     break
-    except OSError:
-        pass
+        except OSError:
+            continue
     return names
 
 

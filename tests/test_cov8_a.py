@@ -279,9 +279,9 @@ def test_ctxspawn_dir_files_oserror_and_cap(tmp_path, monkeypatch):
     assert len(names) == ctxspawn.DIR_FILES + 1 and names[-1] == "..."
     assert ctxspawn._dir_files(SimpleNamespace(agent_dir=None)) == []
 
-    def boom(self, pattern):
+    def boom(*a, **k):  # round 79: _dir_files walks with os.scandir instead of Path.rglob
         raise OSError("gone")
-    monkeypatch.setattr(Path, "rglob", boom)
+    monkeypatch.setattr(ctxspawn.os, "scandir", boom)
     assert ctxspawn._dir_files(SimpleNamespace(agent_dir=d)) == []
 
 

@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.72: Round 79: receipt chain under junk files, receipts off the loop, bounded spawn dir scan. 5,541 tests + 19 integration
+
+- **Receipt lines that aren't objects.** `capgate.verify_chain` raised `AttributeError` on a line that's valid JSON but not an object (`[1]`, `5`, `"x"`, `null`), and `RecursionError` on deeply nested JSON. It now returns `unreadable line` with the line number. `_last_hash` returned a junk `hash` as is (`5`, 64 non-hex chars), and the next receipt linked to it. It now takes only a 64-char hex hash.
+- **Chain files are plain files only.** As a FIFO, `capgate/receipts.jsonl` blocked `record()` forever. That call runs on every gated tool call, so one FIFO hung every agent. As a symlink, receipts were appended to the link's target. The chain, its lock and its head now open with `O_NOFOLLOW|O_NONBLOCK` and must be regular files. If they aren't, `record()` raises and `verify_chain` reports `receipts file unreadable`.
+- **Receipts off the event loop.** `capgate.record` ran inline in tool dispatch for every gated call, with a cross-process flock, SHA-256 of the args and output, and two fsyncs. Another process holding the chain lock froze the node. An exception from it, like a full disk, lost the output of a tool that had already run. `tools._receipt` now runs it in a thread and logs a failure instead of raising.
+- **Spawn context dir scan.** `ctxspawn._dir_files` sorted the whole `rglob` of the parent agent dir on every spawn, on the loop. A 100,000-file dir took 6.15 s; it now takes 0.026 s. It walks with `os.scandir`, depth-first, in the same order as before (checked against 30 random trees), and stops at `DIR_FILES`, or after `DIR_SCAN_MAX` (20,000) entries. Symlinked dirs are not entered.
+- Tests: `tests/test_round79_receipts_and_spawn_scan.py`, 16 tests. On v0.71, 11 fail and the FIFO case hangs (deselected with `-k "not fifo"`). The other 4 guard behavior that already held. `test_cov8_a::test_ctxspawn_dir_files_oserror_and_cap` now patches `os.scandir` instead of `Path.rglob`.
+
 ## v0.71: Round 78: evolve state files and queued job payloads. 5,525 tests + 19 integration
 
 - **Evolve state reads are plain-file only.** Proposal, loop and history files were read with `read_text()`, which follows symlinks, blocks forever on a FIFO and reads any size whole. `reconcile_interrupted()` runs at boot over `evolve/loops/*.json`, so a FIFO named `x.json` there hung startup. `list_loops`/`list_accepted`/`evolve_list` read symlinked files from outside the data dir. Every read now goes through `_read_state`: `O_NOFOLLOW|O_NONBLOCK`, regular files only, `STATE_JSON_MAX_BYTES` (16 MB) per file, `HISTORY_MAX_BYTES` (64 MB) for `history.jsonl`. Anything else is skipped as unreadable.

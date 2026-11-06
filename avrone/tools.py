@@ -7,6 +7,7 @@ Contract:
 from __future__ import annotations
 
 import asyncio
+import logging
 import difflib
 import functools
 import inspect
@@ -252,7 +253,7 @@ class ToolRegistry:
         if not allowed:
             msg = f"CAP DENIED ({name}): {why}. The tool did not run."
             if ddir is not None:
-                capgate.record(ddir, caller=caller, tool=name, args=args, outcome="denied",
+                await _receipt(ddir, caller=caller, tool=name, args=args, outcome="denied",
                                output=msg, cap_id=cap_id, run_id=run_id)
             return msg
         outcome = "ok"
@@ -262,10 +263,26 @@ class ToolRegistry:
             out, outcome = f"ERROR: {type(e).__name__}: {_safe_str(e)}", "error"
         out = _as_text(out)
         if ddir is not None:
-            capgate.record(ddir, caller=caller, tool=name, args=args,
+            await _receipt(ddir, caller=caller, tool=name, args=args,
                            outcome=outcome if not why else f"{outcome}+audit", output=out,
                            cap_id=cap_id, run_id=run_id)
         return out
+
+
+async def _receipt(ddir: Any, **kw: Any) -> None:
+    """capgate.record off the event loop, never raising into the tool call (round 79).
+
+    record() takes a cross-process flock, hashes the args and output (an 8 MB read_file result
+    hashed on the loop) and fsyncs twice. It ran inline on every gated call, so another process
+    holding the chain lock froze the whole node, and an unwritable chain (disk full, a dir where
+    receipts.jsonl should be) raised out of a tool that had already run, losing its output. The
+    failure is logged; the receipt chain's own verify_chain shows any gap."""
+    from . import capgate
+    try:
+        await asyncio.to_thread(capgate.record, ddir, **kw)
+    except Exception:  # noqa: BLE001
+        logging.getLogger("avrone.capgate").warning("capgate receipt not recorded for %s",
+                                                    kw.get("tool"), exc_info=True)
 
 
 MAX_NAME_BYTES = 255  # one path component (NAME_MAX on Linux/macOS)

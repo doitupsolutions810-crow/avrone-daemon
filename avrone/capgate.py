@@ -28,7 +28,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
+import stat
 import threading
 import time
 import uuid
@@ -180,20 +182,54 @@ def receipts_path(data_dir: str | Path) -> Path:
     return Path(data_dir) / "capgate" / "receipts.jsonl"
 
 
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_OPEN_FLAGS = getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+
+def _open_chain(p: Path, mode: str = "rb", create: bool = False):
+    """The receipt chain (or its lock/head), opened as a plain file only (round 78/79).
+
+    open() followed a symlink planted at capgate/receipts.jsonl (appending receipts to any file
+    the daemon can write) and blocked forever on a FIFO there: record() runs on every gated tool
+    call, so one FIFO hung every agent. O_NOFOLLOW|O_NONBLOCK, then fstat must say regular."""
+    flags = {"rb": os.O_RDONLY, "rb+": os.O_RDWR, "ab": os.O_WRONLY | os.O_APPEND}[mode] | _OPEN_FLAGS
+    if create:
+        flags |= os.O_CREAT
+    fd = os.open(p, flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{p.name} is not a regular file")
+        os.set_blocking(fd, True)
+        return os.fdopen(fd, mode)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _rec_hash(raw: bytes) -> str | None:
+    """The hash of one receipt line, or None for anything that is not a receipt object."""
+    try:
+        rec = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    h = rec.get("hash") if isinstance(rec, dict) else None
+    return h if isinstance(h, str) and _HEX64.fullmatch(h) else None
+
+
 def _last_hash(p: Path) -> str:
+    """Hash of the newest receipt. A junk last line ([1], {"hash": 5}, a 64-char non-hex string)
+    used to be returned as is (TypeError/garbage prev on the next receipt) or skipped silently."""
     if not p.exists():
         return GENESIS
     try:
-        with open(p, "rb") as f:
+        with _open_chain(p) as f:
             f.seek(0, os.SEEK_END)
             size = f.tell()
             f.seek(max(0, size - 8192))
             lines = f.read().splitlines()
         for ln in reversed(lines):
-            try:
-                return json.loads(ln)["hash"]
-            except (ValueError, KeyError, TypeError):
-                continue
+            if ln.strip() and (h := _rec_hash(ln)) is not None:
+                return h
     except OSError:
         pass
     return GENESIS
@@ -206,7 +242,10 @@ def _chain_lock(p: Path):
     fork the chain, which verify_chain then reports as tampering."""
     with _LOCK:
         p.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(str(p) + ".lock", os.O_RDWR | os.O_CREAT | _OPEN_FLAGS, 0o600)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise OSError("receipts.jsonl.lock is not a regular file")
         try:
             try:
                 import fcntl
@@ -228,7 +267,7 @@ def _repair_tail(p: Path) -> str | None:
         return None
     if size == 0:
         return None
-    with open(p, "rb+") as f:
+    with _open_chain(p, "rb+") as f:
         f.seek(size - 1)
         if f.read(1) == b"\n":
             return None
@@ -258,8 +297,8 @@ def record(data_dir: str | Path, *, caller: str, tool: str, args: Any, outcome: 
                "cap": cap_id, "run": str(run_id)[:80], "prev": _last_hash(p)}
         rec["hash"] = _digest(rec)
         rec["sig"] = _mac(rec)
-        with open(p, "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+        with _open_chain(p, "ab", create=True) as f:
+            f.write((json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         _write_head(p, rec["hash"])
@@ -275,12 +314,13 @@ def _write_head(p: Path, head: str) -> None:
     that its LAST lines were cut off (what remains still links); the signed head can."""
     hp = _head_path(p)
     try:
-        old = json.loads(hp.read_text())
+        with _open_chain(hp) as hf:
+            old = json.loads(hf.read(4096))
         count = int(old.get("count", 0)) + 1 if old.get("sig") == _mac({k: old[k] for k in ("count", "head")}) else None
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         count = None
     if count is None:  # first receipt, or an unreadable/foreign head: recount from the file
-        with open(p, "rb") as f:
+        with _open_chain(p) as f:
             count = sum(1 for ln in f if ln.strip())
     body = {"count": count, "head": head}
     tmp = hp.with_name(f"{hp.name}.{os.getpid()}.tmp")
@@ -294,10 +334,16 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
     if not p.exists():
         return {"ok": True, "count": 0, "head": GENESIS}
     prev, n = GENESIS, 0
-    with open(p, "rb") as f:
+    try:
+        f = _open_chain(p)
+    except OSError as e:
+        return {"ok": False, "count": 0, "error": f"receipts file unreadable: {e}"}
+    with f:
         for i, raw in enumerate(f, 1):
             try:
                 rec = json.loads(raw)
+                if not isinstance(rec, dict):  # [1] / 5 / "x" raised AttributeError out of verify_chain
+                    raise TypeError("not a receipt object")
                 body = {k: v for k, v in rec.items() if k not in ("hash", "sig")}
                 if rec["prev"] != prev:
                     return {"ok": False, "count": n, "line": i, "error": "broken link (line removed or reordered)"}
@@ -306,13 +352,14 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
                 if not hmac.compare_digest(_mac({**body, "hash": rec["hash"]}).encode(),
                                            str(rec["sig"]).encode("utf-8", "surrogatepass")):
                     return {"ok": False, "count": n, "line": i, "error": "bad signature (forged or wrong key)"}
-            except (ValueError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 return {"ok": False, "count": n, "line": i, "error": "unreadable line"}
             prev, n = rec["hash"], n + 1
     hp = _head_path(p)
     if hp.exists():
         try:
-            h = json.loads(hp.read_text())
+            with _open_chain(hp) as hf:
+                h = json.loads(hf.read(4096))
             body = {"count": int(h["count"]), "head": str(h["head"])}
             signed = hmac.compare_digest(_mac(body).encode(), str(h.get("sig")).encode("utf-8", "surrogatepass"))
         except (OSError, ValueError, TypeError, KeyError, AttributeError):

@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.71.0)
+# AVRONE MASTER PROMPT (v0.72.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,525 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,541 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 244 test files, offline by default
+├── tests/                  # 245 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +312,14 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.72: Round 79: receipt chain under junk files, receipts off the loop, bounded spawn dir scan. 5,541 tests + 19 integration
+
+- **Receipt lines that aren't objects.** `capgate.verify_chain` raised `AttributeError` on a line that's valid JSON but not an object (`[1]`, `5`, `"x"`, `null`), and `RecursionError` on deeply nested JSON. It now returns `unreadable line` with the line number. `_last_hash` returned a junk `hash` as is (`5`, 64 non-hex chars), and the next receipt linked to it. It now takes only a 64-char hex hash.
+- **Chain files are plain files only.** As a FIFO, `capgate/receipts.jsonl` blocked `record()` forever. That call runs on every gated tool call, so one FIFO hung every agent. As a symlink, receipts were appended to the link's target. The chain, its lock and its head now open with `O_NOFOLLOW|O_NONBLOCK` and must be regular files. If they aren't, `record()` raises and `verify_chain` reports `receipts file unreadable`.
+- **Receipts off the event loop.** `capgate.record` ran inline in tool dispatch for every gated call, with a cross-process flock, SHA-256 of the args and output, and two fsyncs. Another process holding the chain lock froze the node. An exception from it, like a full disk, lost the output of a tool that had already run. `tools._receipt` now runs it in a thread and logs a failure instead of raising.
+- **Spawn context dir scan.** `ctxspawn._dir_files` sorted the whole `rglob` of the parent agent dir on every spawn, on the loop. A 100,000-file dir took 6.15 s; it now takes 0.026 s. It walks with `os.scandir`, depth-first, in the same order as before (checked against 30 random trees), and stops at `DIR_FILES`, or after `DIR_SCAN_MAX` (20,000) entries. Symlinked dirs are not entered.
+- Tests: `tests/test_round79_receipts_and_spawn_scan.py`, 16 tests. On v0.71, 11 fail and the FIFO case hangs (deselected with `-k "not fifo"`). The other 4 guard behavior that already held. `test_cov8_a::test_ctxspawn_dir_files_oserror_and_cap` now patches `os.scandir` instead of `Path.rglob`.
+
 ## v0.71: Round 78: evolve state files and queued job payloads. 5,525 tests + 19 integration
 
 - **Evolve state reads are plain-file only.** Proposal, loop and history files were read with `read_text()`, which follows symlinks, blocks forever on a FIFO and reads any size whole. `reconcile_interrupted()` runs at boot over `evolve/loops/*.json`, so a FIFO named `x.json` there hung startup. `list_loops`/`list_accepted`/`evolve_list` read symlinked files from outside the data dir. Every read now goes through `_read_state`: `O_NOFOLLOW|O_NONBLOCK`, regular files only, `STATE_JSON_MAX_BYTES` (16 MB) per file, `HISTORY_MAX_BYTES` (64 MB) for `history.jsonl`. Anything else is skipped as unreadable.
@@ -327,16 +335,6 @@ landed and the suite is green. End with what is still open.
 - **Non-object job payloads.** A payload that is valid JSON but not an object (a list or a number) failed in every handler with `AttributeError` until `max_attempts` ran out. `claim()` now marks it dead at once.
 - Tests: `tests/test_round77_boot_state_junk.py`, 8 tests. 7 fail on v0.69; the eighth is a guard that a locked file is never moved aside.
 
-## v0.69: Round 76: fleet.json records go through register()'s checks at load. 5,502 tests + 19 integration
-
-- `fleet.json` outlives versions and can be edited by hand, but its node records were loaded as is. Now `clean_saved_node()` rebuilds each record with register()'s checks and drops a record that fails them, logging a warning with the count.
-  - **URLs:** a url pointing at a cloud metadata endpoint (169.254.169.254), carrying credentials, using a non-http scheme, or missing was dispatched to without `check_node_url`.
-  - **Ids:** a key that fails `ID_RE` (`../x`, `UPPER`) or equals this node's own id became a dispatch target. A record's own `node_id` could differ from its key; the key now wins.
-  - **Missing node_id:** a record without `node_id` raised `KeyError` in `pick()`'s error path.
-  - **Types:** capabilities, children, load, presence, health and last_seen of the wrong type or unclamped reached `node_has`, `fleet_nodes` and `health_score`. Health goes through `sanitize_health`.
-- Behavior change: `test_robust_v025_state` now uses a valid url, because a record with url `"u"` is dropped at load.
-- Tests: `tests/test_round76_fleet_json_load.py`, 6 tests, all fail on v0.68.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -348,4 +346,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.71.0 checked out: 5,525 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.72.0 checked out: 5,541 passed, 99% coverage. Next: round <N+1> on <angle>."

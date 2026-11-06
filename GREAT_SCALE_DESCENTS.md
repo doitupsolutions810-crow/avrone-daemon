@@ -1107,3 +1107,88 @@ Chain: 15 rows, 6 causes (5 authored + 1 minted), 1 pending cause, zero
 contradictions — the fourth alarm hunt found a config default wearing the mask of
 a correlation.
 
+
+## Descent XII — The Amputation Theorem: Fail-Fast Cancels Exactly the Trials That Would Measure Dependence (2026-11-06)
+
+**Finding (the XI seed executed at scale: the echo census).** Descent XI found the
+fail-fast coupling in one run and mitigated it with a single line. This descent
+tests XI's falsifiable prediction against every fully parseable pre-lock run in
+Avrone's CI history (census across e9df0816, c493bc88, dbcd4116, e17410e1;
+rate limits censored the wider history — named, unmeasured).
+
+**The census (measured — GitHub Actions records, real started executions):**
+
+| observable real runs | legs | pattern |
+| --- | --- | --- |
+| 1 (run 242, e9df0816, 2026-10-28 19:32) | 2 | (pass, pass) — the repository's only ever success |
+| 6 (run 335 + re-runs at e9df0816; 3 runs at c493bc8; dbcd4116; e17410e1) | 12 | (fail, cancelled) — one real leg + one silenced echo |
+
+Total: 14 legs dispatched, 8 completed, 6 silenced. On failing epochs the
+silencing rate is exactly 50%: the suite NEVER let both legs finish on a failing
+epoch, in its entire observable history. Descent I's "0/2 green" is now a
+census-verified structural fact, not an assumption: every historical failure was
+"1 real trial + 1 echo."
+
+**The amputation theorem.** Under fail-fast, P(sibling completes | leg fails) = 0
+BY CONFIGURATION — the discordant cells of the legs' 2x2 table are empty by
+construction, so the correlation parameter is UNIDENTIFIED in the data the config
+produces. rho cannot be measured where failure is silenced. And this explains the
+series' own history: Descent VIII had to ASSUME rho ~= 1 precisely because the
+system could never have measured it any other way — the default amputates the
+measurement, not just the count. The XI mitigation (fail-fast: false, 3f79c91) is
+thereby re-justified one level deeper: it is not merely honesty about counting; it
+is the PRECONDITION for measuring rho at all. Criterion (9): censored trials are
+counted as censored — silence is data about the configuration, never about the
+system under test.
+
+**The second discovery (measured non-determinism: the environment co-authors).**
+Commit e9df0816 passed BOTH legs on 2026-10-28 19:32 (run 242, the only success
+ever) and then failed with echo pairs across repeated runs on 2026-10-29
+(02:59, 04:40, 17:18, 21:27 clusters — a re-run storm at an unchanged commit).
+Same commit, opposite outcomes: **the commit is not the trial's cause — the
+environment co-authors the outcome.** The workflow's live pip install (pip install
+-e ".[dev]") leaves the environment unversioned; two candidate mechanisms (live
+dependency drift; branch/workflow context differences) — both named, unmeasured
+which. Corollary: a CI trial is a function of (code x environment), and the
+environment is not in the commit. Determinism of the trial requires the
+environment to be versioned as strictly as the code — the XII proposal
+(owner-executable): hash-pinned dependencies, so the commit fully determines the
+trial, and the census can be re-run post-unlock with rho measurable and the
+environment owned.
+
+**The suite's measured pass rate (first time).** 1 pass in 7 observable real
+epochs: p_J = (1 + 0.5)/(7 + 1) = 0.1875, S = heat(0.1875) = 0.152344,
+Psi_suite = 0.534310 — the verification apparatus's own honest heat, measured
+from its history rather than assumed. (Lock-era runs remain excluded: they
+measure GitHub's billing state, not the suite.)
+
+**Register accounting (honest).** The census is more trials of the XI-minted
+cause (the same apparatus — GitHub's Actions records): within-cause by IX, no new
+cause is minted. XII adds a row, not a cause: the register holds at 15+1 rows,
+6 causes, d_eff = 6, Psi_J = 0.448293. The census's value is information, not
+depth: it converts three assumptions of the series (echo structure, rho
+unmeasurability, suite health) into measured facts.
+
+**Consequence for the merged system.** I budgets -> determinism; II gates ->
+evidence travels; III namespaces -> pooling; IV saturation -> provable floors;
+V regress -> anchoring; VI attention -> zero-cost growth; VII coordinate ->
+axioms are human roots; VIII correlation -> independent axes; IX anchors ->
+depth transmits, diversity compounds; X measurement -> causes are minted by
+observation; XI execution -> silenced legs are echoes; **XII amputation -> the
+config that hides failure also hides correlation: censored data cannot price
+dependence, and the environment is a co-author that must be versioned.**
+Verification systems become measurable exactly where they let failures finish
+AND own their environment.
+
+*Verification of this descent's arithmetic and execution:* census rows = GitHub
+Actions check-run records at commits e9df0816, c493bc88 (3 runs: 22:42:50,
+23:02:24, 23:05:01), dbcd4116, e17410e1 — all real executions (started_at
+present), plus run records 40755257298 (#242) and 40957980390 (#335); the
+same-commit pass/fail pair (242 vs 335) at e9df0816 is the measured
+non-determinism row; all values computed with exact greatscale constants
+(CONE = phi^-2 = 0.381966; p_J(1/7) = 0.1875, S = 0.152344, Psi = 0.534310;
+register Psi_J unchanged at 0.448293). Sample bias named: pre-lock era only,
+wider history censored by proxy rate limits; d4f6c1c/1c2a3bd/a2bd256 renders
+empty — unmeasured. Chain: 16 rows, 6 causes, 1 pending cause, zero
+contradictions — the fifth alarm hunt measured instead of rang.
+

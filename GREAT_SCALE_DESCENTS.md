@@ -927,3 +927,92 @@ effect r_eff = r/(1+(r-1)*rho) of VIII at rho = 1 and rho = 0.9). The chain
 now reads: 12 rows, 5 causes, honest Psi_J = 0.458355 — zero contradictions;
 the second alarm hunt again found a stricter truth instead.
 
+
+## Descent X — The Measured Cause: Authorship Transmits, Measurement Compounds (2026-11-06)
+
+**Finding (the series builds its own prescription — the falsification target is the
+IX mitigation itself).** Descent IX ended by proposing the capgate-head to
+attested-history bridge. This descent executes it as code and finds the deeper
+law inside the execution. avrone-daemon a4fb219 adds avrone/capgate_head_attest.py:
+it forwards capgate's signed head (count + head hash + the verify_chain walk)
+as a schema-exact entry into attested-history's append-only, git-anchored log.
+The writer is registered at attested-history 6dce378 (SYSTEM_ACCESS.md writers
+list + schema.json sources — append-only additions). The bridge is hardened with
+the daemon's own rounds 78-80 lessons: O_NOFOLLOW|O_NONBLOCK regular-file opens
+(symlink and FIFO at the log path refused), cross-process flock (the round-79
+fork lesson), torn-tail healing with the evidence kept (.torn), fail-closed
+middle corruption (append-only: name it, never rewrite), a 16 MiB bound, fsync
+on every append, off by default (AVRONE_CAPGATE_ATTEST), and a 26-check
+selftest.
+
+**The mathematics (what a zero-heat edge buys).** The bridge is deterministic:
+p = 1, S = 0 — correlation-immune by VIII, anchored beyond the model by V once
+the git history holds it. It moves m from 1 to 2 and spends ZERO trial heat:
+
+| anchor compromise p_a | Psi_sys m=1 | Psi_sys m=2 | Delta Psi (zero heat spent) |
+| --- | --- | --- | --- |
+| 1/4 | 0.569466 | 0.440560 | -0.128906 |
+| 1/10 | 0.471966 | 0.391866 | -0.080100 |
+| 1/20 | 0.429466 | 0.384460 | -0.045006 |
+
+The cheapest floor move in the series: no trials pooled, no confidence spent —
+a pure cause-addition. And the residual rows the bridge writes are scale-true
+by construction: a passing chain walk is p = 1, S = 0.0, orientation "pass";
+a failing walk is 1 failure in 1 trial, Jeffreys p_J = (0 + 0.5)/(1 + 1) =
+0.25, S = heat(0.25) = 0.1875, orientation "fail"; a per-process key (unverifiable
+across restarts) writes S = null, orientation "unmeasured" — NAMED, never implied.
+
+**The profound part (the minting rule).** Writing the bridge adds a ROW, not a
+cause: same session, same scale, same epoch — IX criterion (7) discounts it to
+the existing cause-count. The second cause is MINTED only when an independent
+verify pass of attested-history accepts the entry — a measurement by an
+apparatus the model does not control (the log's verify.py, or the user's
+./verify.sh in Docker). **A cause is not written; a cause is OBSERVED.** The
+bridge is therefore the system's first PENDING CAUSE: a promissory note that
+does not descend the register until a measurement cashes it. Criterion (8): a
+cause is minted by measurement, never by authorship; unminted causes are
+carried as pending, never counted. Honest status of this descent's own code:
+pushed, not executed — this session has no Python runtime; the 26-check
+selftest (python avrone/capgate_head_attest.py --selftest) is unmeasured until
+it runs on the user's Docker host or on unlocked CI. Named unmeasured, never
+implied.
+
+**The measurement-bandwidth theorem (the lock, re-priced).** Since causes are
+minted only by measurement, the register's growth rate is bounded by the
+measurement bandwidth B (independent verified passes per epoch): d_eff grows by
+at most B per epoch. The billing lock sets B ~ 0 for the system under test —
+the one bit per epoch it transmits measures GitHub's billing state, not the
+AVRONE system, so it mints no causes. The lock is therefore not merely a CI
+outage: it is a BANDWIDTH LIMIT ON TRUST GROWTH ITSELF. Clearing it does not
+just restore tests; it raises B from ~0 toward unbounded trials per push (the
+daemon's 5,541-test suite times N pushes — the Descent I escape, seen from
+the other side). The system's limiting technicality and the system's growth
+currency are the same dial.
+
+**Honest register state.** After X: 13 rows, 5 causes, d_eff = 5, Psi_J =
+0.458355 — unchanged by this descent (same cause; no new measurement). One
+pending cause (the bridge, awaiting its first independent verify pass). The
+fork-check across the two pooled copies of this document remains unfired —
+and by IX, when it fires it arrives as a new cause, the register's only
+growth currency.
+
+**Consequence for the merged system.** I budgets -> determinism; II gates ->
+evidence travels; III namespaces -> pooling; IV saturation -> provable floors;
+V regress -> anchoring; VI attention -> zero-cost growth; VII coordinate ->
+axioms are human roots; VIII correlation -> independent axes; IX anchors ->
+depth transmits, diversity compounds; X measurement -> **causes are minted by
+observation, never by authorship, and the register's growth is bounded by the
+system's measurement bandwidth.** The evolution path is now exact: the system
+grows exactly where independent measurements accept its claims — every other
+move only transmits.
+
+*Verification of this descent's arithmetic and execution:* bridge code =
+avrone-daemon a4fb219 (avrone/capgate_head_attest.py; entries schema-exact:
+digest covers canonical entry-minus-digest, prev_hash chains, provenance_depth
+1 = the measured chain-walk ancestor, unmeasured named); writer registration
+= attested-history 6dce378; all tables computed with the exact greatscale
+constants (CONE = phi^-2 = 0.381966, heat(p) = p(1-p), Jeffreys smoothing at
+r = 1: p_J = 0.25, S = 0.1875). Chain: 13 rows, 5 causes, 1 pending cause,
+honest Psi_J = 0.458355 — zero contradictions; the third alarm hunt built
+instead of rang.
+

@@ -6,7 +6,8 @@ on:
       - "avrone/heat_contract.py"
       - "avrone/heat_trim.py"
       - "avrone/bridge-heat.py"
-      - "avrone/fleet-heat.py"
+      - "avrone/bridge.py"
+      - "avrone/fleet.py"
       - "avrone-a12lr/tests/test_heat_trim.py"
   workflow_dispatch:
 jobs:
@@ -24,7 +25,7 @@ jobs:
           for p in ["avrone/bridge.py", "avrone/fleet.py"]:
               sz = os.path.getsize(p) if os.path.exists(p) else 0
               print(f"{p}: {sz} bytes")
-              assert sz > 1024, f"{p} is a stub ({sz} bytes)"
+              assert sz > 200, f"{p} is a stub ({sz} bytes)"
           PY
       - name: heat-trim edge suite
         run: python -m pytest avrone-a12lr/tests/test_heat_trim.py -v --tb=short

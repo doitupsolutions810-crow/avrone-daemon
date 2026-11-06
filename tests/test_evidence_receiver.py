@@ -6,6 +6,7 @@ import hmac
 import random
 import threading
 import time
+from contextlib import closing
 
 import httpx
 import pytest
@@ -54,6 +55,8 @@ def run(coro):
 
 def test_persist_and_idempotent_receipt(tmp_path):
     store = EvidenceStore(tmp_path / "nested" / "evidence.db")
+    with closing(store._connect()) as db:
+        assert db.execute("PRAGMA synchronous").fetchone()[0] == 2
     e = event()
     first, dup = store.accept(e, "nonce-first-000001", int(time.time()), RECEIPT_SECRET)
     assert not dup and verify_receipt(RECEIPT_SECRET, first)

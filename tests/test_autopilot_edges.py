@@ -507,7 +507,13 @@ def test_already_running_ollama_is_reused(env):
         assert "starting ollama serve" not in out(r)
         assert srv.poll() is None, "must not kill an ollama it did not start"
     finally:
-        srv.kill()
+        try:
+            if srv.poll() is None:
+                srv.kill()
+        except ProcessLookupError:
+            pass
+        finally:
+            srv.wait(timeout=10)
 
 
 def test_no_brew_needed_when_everything_installed(env):

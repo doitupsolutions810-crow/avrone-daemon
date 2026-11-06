@@ -264,6 +264,10 @@ def test_duplicate_security_headers_fail_closed(tmp_path, monkeypatch):
             h.append(("content-type", "text/plain"))
             response = await c.post(PATH, content=body, headers=h)
             assert response.status_code == 415
+            h = list(headers(body).items())
+            h.append(("content-length", str(len(body))))
+            response = await c.post(PATH, content=body, headers=h)
+            assert response.status_code == 400
     run(go())
 
 

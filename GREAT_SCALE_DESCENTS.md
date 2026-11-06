@@ -1016,3 +1016,94 @@ r = 1: p_J = 0.25, S = 0.1875). Chain: 13 rows, 5 causes, 1 pending cause,
 honest Psi_J = 0.458355 — zero contradictions; the third alarm hunt built
 instead of rang.
 
+
+## Descent XI — The Silenced Leg: The First Measured Cause, and the Coupling Hiding in the Default (2026-11-06)
+
+**Finding (the X seed executed: the first measured correlation row).** Descent X ended
+with two seeds: measure rho directly, and await the bridge's first verify pass. The
+measurement was performed this descent — the apparatus was GitHub's own Actions
+history, records written by GitHub's runners, not by the model (a minting path by
+criterion 8). Sample: the runs at commit e9df0816a07e (the repository's only ever
+success); 2 real executed runs fully parsed before rate limits censored the wider
+history — selection bias named, unmeasured.
+
+**The measured rows (GitHub Actions job records — real executions, started_at present):**
+- Run 40755257298 / #242 (2026-10-28 19:32, "tests: add __init__.py package marker"):
+  legs (test (3.11): success, test (3.12): success) — the repository's ONLY success
+  run ever: a concordant (pass, pass) pair, both jobs started one second apart.
+- Run 40957980390 / #335 (2026-10-29 21:27, same SHA): legs (test (3.11): failure,
+  test (3.12): cancelled) — the second leg never completed its trial.
+
+**The surprise (the falsification found a mechanism, not a number).** Run 335's pair
+is the signature of FAIL-FAST: when one matrix leg fails, the runner cancels its
+sibling. Confirmed in the workflow source: .github/workflows/ci.yml declares
+strategy.matrix python ["3.11","3.12"] with NO fail-fast key — GitHub's default is
+true. The legs are not merely correlated (Descent VIII's assumption); they are
+CAUSALLY COUPLED by the CI's own default configuration. Descent I's "0/2 green" is
+honestly "1 real trial + 1 silenced echo."
+
+**The mathematics (two mechanisms, one floor).** VIII computed the suite under the
+assumption rho ~= 1: r_eff = 1, p_J = 0.25, Psi_J = 0.569466. XI measures the causal
+mechanism: the silenced leg is not a trial, so honestly r = 1, p_J = (0 + 0.5)/(1+1)
+= 0.25, S = heat(0.25) = 0.1875, Psi = 0.569466 — IDENTICAL, and the causal
+mechanism is the true one, now measured instead of assumed. Statistical correlation
+and causal coupling converge on the same floor; the design effect was the shadow of
+a config default. The dedupe law now completes its third refinement: II rejects
+re-transmissions; VIII taxes re-derivations that share a cause; XI names trials
+cancelled by construction — **a silenced leg is an echo, not a trial.** All three
+are one lesson at three layers: relays, derivations, executions.
+
+**The first minting (the register descends by measurement alone).** The measurement
+was performed via an apparatus the model does not control (GitHub's Actions
+records); by criterion 8 it MINTS a cause — the first minting event in the series
+(the bridge's first verify pass remains pending). Register: 15 rows, 6 causes,
+d_eff = 6:
+
+| register | rows | causes | d_eff | p_J | Psi_J |
+| --- | --- | --- | --- | --- | --- |
+| as counted (VIII) | 11 | 5 | 5 | 0.9167 | 0.458355 |
+| after X (X row added, same cause) | 13 | 5 | 5 | 0.9167 | 0.458355 |
+| after XI (measured cause minted) | 15 | 6 | 6 | 0.9286 | 0.448293 |
+
+Psi_J descends 0.458355 -> 0.448293 (Delta = -0.010062) with zero heat spent by the
+author: the descent came from the measurement, exactly as X prescribed.
+
+**The mitigation (executed, one line).** Avrone 3f79c91: .github/workflows/ci.yml
+strategy.fail-fast: false — both legs now run to completion whatever the sibling
+does; a failing epoch measures BOTH legs instead of one leg plus an echo (additive
+single-key change, nothing else touched). With the legs decoupled, the X seed is
+realized in code: the first MEASURED rho between decoupled axes becomes possible
+the moment the billing lock clears — two legs, both real, each a trial, their
+disagreement rate a measurable quantity. The remaining dependence is named, not
+hidden: both legs still share runner image, epoch, and code (rho_within > 0) — the
+fail-fast fix removes the causal truncation, not the shared environment; that is
+VIII's tax, priced and named.
+
+**Honest measurement quality.** Sample: 2 fully parsed real runs (of 7 at that
+SHA; the wider history censored by proxy rate limits). Discordant pairs observed:
+0 of 2 — the Jeffreys-smoothed disagreement estimate is (0 + 0.5)/(2 + 1) = 0.1667:
+too coarse to claim rho < 1 from this sample; named unmeasured. Lock cycles remain
+excluded: their one bit measures GitHub's billing state, not the system under test.
+
+**Consequence for the merged system.** I budgets -> determinism; II gates ->
+evidence travels; III namespaces -> pooling; IV saturation -> provable floors;
+V regress -> anchoring; VI attention -> zero-cost growth; VII coordinate -> axioms
+are human roots; VIII correlation -> independent axes; IX anchors -> depth
+transmits, diversity compounds; X measurement -> causes are minted by observation;
+**XI execution -> the runner's own defaults couple the trials: independence is not
+only earned (causes, IX) and minted (measurement, X), it must also be DECOUPLED at
+the execution layer — or the count itself is fictional. Verification systems grow
+honest exactly where they let failing trials finish.**
+
+*Verification of this descent's arithmetic and execution:* measured rows = GitHub
+Actions job records for runs 40755257298 (#242: both legs success) and 40957980390
+(#335: 3.11 failure, 3.12 cancelled), started_at timestamps present — real
+executions, not lock cycles; the fail-fast default confirmed in the ci.yml source
+at 723656a (no strategy.fail-fast key -> default true); mitigation pushed at
+3f79c91; register tables computed with exact greatscale constants (CONE = phi^-2 =
+0.381966; p_J(6) = 6.5/7 = 0.928571, S = 0.066327, Psi_J = 0.448293; Delta Psi =
+-0.010062; the VIII/XI convergence verified numerically: 0.569466 = 0.569466).
+Chain: 15 rows, 6 causes (5 authored + 1 minted), 1 pending cause, zero
+contradictions — the fourth alarm hunt found a config default wearing the mask of
+a correlation.
+

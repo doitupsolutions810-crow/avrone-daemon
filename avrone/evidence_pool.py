@@ -92,3 +92,37 @@ def pool_trials(trials: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     else:
         result["evidence"] = None
     return result
+
+
+def event_to_pool_trial(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Project exactly one verified execution into the individual-trial pool.
+
+    Aggregate events (runs > 1) are intentionally rejected: expanding an
+    aggregate count into synthetic trial IDs would manufacture independence.
+    The identity key excludes the outcome/digest so a conflicting re-report
+    of the same source/run/check collides instead of becoming a second trial.
+    This is an evidence projection only; it grants no capability or authority.
+    """
+    import hashlib
+    import json
+
+    from .integration_contract import verify_evidence_event
+
+    if not isinstance(event, Mapping):
+        raise ValueError("evidence event must be a mapping")
+    valid, reason = verify_evidence_event(dict(event))
+    if not valid:
+        raise ValueError(f"invalid evidence event: {reason}")
+    evidence = event["evidence"]
+    if evidence["runs"] != 1:
+        raise ValueError("aggregate evidence cannot be projected as an individual trial")
+    identity = json.dumps(
+        [event["source"], event["run_id"], event["check_id"]],
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("utf-8")
+    trial_id = hashlib.sha256(identity).hexdigest()
+    return {
+        "source": event["source"],
+        "trial_id": trial_id,
+        "failed": evidence["failures"] == 1,
+    }

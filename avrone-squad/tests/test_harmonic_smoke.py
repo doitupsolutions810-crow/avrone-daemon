@@ -60,6 +60,7 @@ def test_gauge_smoke_injected_index():
         assert dash.inject_into_index(injected).count('id="harmonic-thermo-gauge"') == 1
     finally:
         httpd.shutdown()
+        httpd.server_close()
 
 
 def test_gauge_smoke_missing_d3_graceful():
@@ -78,3 +79,4 @@ def test_gauge_smoke_missing_d3_graceful():
         assert r.status_code == 200 and 'id="harmonic-thermo-gauge"' in r.text
     finally:
         httpd.shutdown()
+        httpd.server_close()

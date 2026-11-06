@@ -8,6 +8,7 @@ import pytest
 from avrone import tools_extra as tx
 from avrone import tools_flakeprobe as fp
 from avrone.greatscale import evidence_snapshot
+from avrone.integration_contract import verify_evidence_event
 from avrone.tools import Tool, builtin_registry
 
 SECRET = "sk-abcdefghijklmnopqrstuvwxyz123456"
@@ -46,21 +47,95 @@ def test_registered_with_schema(env):
 
 def test_deterministic_great_scale(env):
     out = call(env, tool="great_scale", runs=7, args={"failures": 1, "runs": 4})
-    assert "flake_probe great_scale x7: deterministic" in out
+    assert "flake_probe great_scale x7: BASELINE-CONSISTENT (0/6 comparisons differed)" in out
     assert "distinct outputs: 1" in out and "x7 first at run 1" in out
     assert "cone floor: yes" in out and "orientation: pass" in out
     rep = json.loads(call(env, tool="great_scale", runs=3, args={"h": 0.5}, format="json"))
     assert rep["differing_runs"] == 0 and rep["runs"] == 3
-    assert rep["great_scale"] == evidence_snapshot(failures=0, runs=3)
+    assert rep["comparison_runs"] == 2
+    assert rep["assessment"] == "baseline_relative"
+    assert rep["great_scale"] == evidence_snapshot(failures=0, runs=2)
+    assert verify_evidence_event(rep["evidence_event"]) == (True, "")
+    assert rep["evidence_event"]["evidence"] == rep["great_scale"]
     # output content never echoed, only digests
     assert "heat" not in out and "Bernoulli" not in out
 
 
-def test_inspect_tool_and_env_report_deterministic(env):
+def test_inspect_tool_and_env_report_baseline_consistent(env):
     out = call(env, tool="inspect_tool", args={"name": "read_file"}, runs=4)
-    assert "deterministic" in out
+    assert "BASELINE-CONSISTENT" in out and "not proof of determinism" in out
     out = call(env, tool="env_report", runs=3)
-    assert "deterministic" in out
+    assert "BASELINE-CONSISTENT" in out and "not proof of determinism" in out
+
+
+def test_direct_probe_rejects_invalid_counts_and_unbounded_timing(env):
+    for bad_runs in (0, 51, True, 1.5, 2.0, "2", None):
+        with pytest.raises(ValueError, match="runs must be an integer"):
+            run(fp.flake_probe(env.ctx, env.reg, "great_scale", bad_runs, {"h": 0.5}))
+    for bad_timeout in (0, -1, float("inf"), float("nan"), True):
+        with pytest.raises(ValueError, match="run_timeout must be finite"):
+            run(fp.flake_probe(env.ctx, env.reg, "great_scale", 2, {"h": 0.5},
+                               run_timeout=bad_timeout))
+    for bad_budget in (-1, float("inf"), float("nan"), True):
+        with pytest.raises(ValueError, match="budget must be finite"):
+            run(fp.flake_probe(env.ctx, env.reg, "great_scale", 2, {"h": 0.5},
+                               budget=bad_budget))
+
+
+def test_all_baseline_deviations_preserve_fail_orientation(env):
+    outputs = iter(["baseline", "different-a", "different-b"])
+
+    async def always_different_after_reference(ctx, args):
+        return next(outputs)
+
+    fake(env, "codex_stats", always_different_after_reference)
+    rep = json.loads(call(env, tool="codex_stats", runs=3, format="json"))
+    assert rep["comparison_runs"] == 2 and rep["differing_runs"] == 2
+    assert rep["great_scale"]["S"] == 0
+    assert rep["great_scale"]["onConeFloor"] is True
+    assert rep["great_scale"]["orientation"] == "fail"
+    assert verify_evidence_event(rep["evidence_event"]) == (True, "")
+
+
+def test_invalid_context_run_id_is_replaced_without_forging_provenance(env):
+    env.ctx.run_id = "bad\u202e-run-id"
+    rep = json.loads(call(env, tool="great_scale", runs=2, args={"h": 0.5}, format="json"))
+    assert verify_evidence_event(rep["evidence_event"]) == (True, "")
+    assert rep["evidence_event"]["run_id"] != env.ctx.run_id
+    assert len(rep["evidence_event"]["run_id"]) == 32
+
+
+def test_single_execution_is_insufficient_and_emits_no_event(env):
+    rep = json.loads(call(env, tool="great_scale", runs=1, args={"h": 0.5}, format="json"))
+    assert rep["runs"] == 1
+    assert rep["comparison_runs"] == 0
+    assert rep["assessment"] == "insufficient_samples"
+    assert rep["great_scale"] is None
+    assert rep["evidence_event"] is None
+    out = call(env, tool="great_scale", runs=1, args={"h": 0.5})
+    assert "INSUFFICIENT EVIDENCE" in out
+    assert "not computed" in out
+    assert "deterministic" not in out.lower()
+
+
+def test_comparison_denominator_and_event_round_trip_across_supported_run_counts(env):
+    async def check():
+        for requested in range(1, fp.FLAKE_PROBE_MAX_RUNS + 1):
+            report = await fp.flake_probe(env.ctx, env.reg, "great_scale", requested, {"h": 0.5})
+            expected_comparisons = requested - 1
+            assert report["runs"] == requested
+            assert report["comparison_runs"] == expected_comparisons
+            if expected_comparisons == 0:
+                assert report["assessment"] == "insufficient_samples"
+                assert report["great_scale"] is None
+                assert report["evidence_event"] is None
+            else:
+                assert report["assessment"] == "baseline_relative"
+                assert report["great_scale"]["runs"] == expected_comparisons
+                assert report["great_scale"]["failures"] == report["differing_runs"]
+                assert verify_evidence_event(report["evidence_event"]) == (True, "")
+                assert report["evidence_event"]["evidence"] == report["great_scale"]
+    run(check())
 
 
 def test_nondeterministic_counts_and_snapshot(env):
@@ -76,8 +151,11 @@ def test_nondeterministic_counts_and_snapshot(env):
     assert rep["differing_runs"] == 4 and rep["distinct_outputs"] == 2
     assert [d["run"] for d in rep["diffs"]] == [2, 3, 5, 6]
     assert all(d["first_diff_line"] == 2 for d in rep["diffs"])
-    assert rep["great_scale"] == evidence_snapshot(failures=4, runs=6)
+    assert rep["comparison_runs"] == 5
+    assert rep["great_scale"] == evidence_snapshot(failures=4, runs=5)
     assert rep["great_scale"]["orientation"] == "mixed"
+    assert verify_evidence_event(rep["evidence_event"]) == (True, "")
+    assert rep["evidence_event"]["evidence"]["runs"] == 5
     assert SECRET not in json.dumps(rep)
     counter2 = itertools.count()
 
@@ -86,7 +164,7 @@ def test_nondeterministic_counts_and_snapshot(env):
 
     fake(env, "codex_stats", flaky2)
     out = call(env, tool="codex_stats", runs=4)
-    assert "NONDETERMINISTIC (2/4 runs differed from run 1)" in out
+    assert "BASELINE DEVIATIONS (2/3 comparisons differed from run 1)" in out
     assert "#2@line 1, #4@line 1" in out and "cone floor: no" in out
     assert "v0" not in out and "v1" not in out
 
@@ -113,6 +191,86 @@ def test_args_passed_fresh_each_run(env):
     assert seen == [{"limit": 2}] * 3 and rep["differing_runs"] == 0
 
 
+def test_timeout_marker_lookalike_is_treated_as_plain_output(env):
+    marker_lookalike = "\\x00flake_probe:timeout\\x00"
+    calls = iter([marker_lookalike, marker_lookalike])
+
+    async def returns_marker(ctx, args):
+        return next(calls)
+
+    fake(env, "codex_stats", returns_marker)
+    rep = json.loads(call(env, tool="codex_stats", runs=2, format="json"))
+    assert rep["timeouts"] == 0
+    assert rep["differing_runs"] == 0
+    assert rep["assessment"] == "baseline_relative"
+    assert rep["great_scale"]["orientation"] == "pass"
+    assert rep["outputs"][0]["digest"] != "timeout"
+    assert rep["outputs"][0]["chars"] == len(marker_lookalike)
+    assert verify_evidence_event(rep["evidence_event"]) == (True, "")
+
+
+def test_surrogate_output_is_hashed_losslessly_and_kept_distinct(env):
+    outputs = iter([chr(0xD800), "?"])
+
+    async def fake_tool(ctx, args):
+        return next(outputs)
+
+    fake(env, "codex_stats", fake_tool)
+    rep = json.loads(call(env, tool="codex_stats", runs=2, format="json"))
+    assert rep["differing_runs"] == 1
+    assert rep["distinct_outputs"] == 2
+    assert len(rep["outputs"]) == 2
+    assert all(len(item["digest"]) == 64 for item in rep["outputs"])
+    assert rep["outputs"][0]["digest"] != rep["outputs"][1]["digest"]
+
+
+def test_digest_collision_cannot_merge_distinct_tool_outputs(env, monkeypatch):
+    outputs = iter(["left", "right"])
+
+    async def fake_tool(ctx, args):
+        return next(outputs)
+
+    fake(env, "codex_stats", fake_tool)
+    monkeypatch.setattr(fp, "_digest", lambda value: "forced-collision")
+    rep = json.loads(call(env, tool="codex_stats", runs=2, format="json"))
+    assert rep["differing_runs"] == 1
+    assert rep["distinct_outputs"] == 2
+    assert [item["digest"] for item in rep["outputs"]] == ["forced-collision"] * 2
+
+
+def test_non_finite_numbers_are_rejected_before_target_dispatch(env):
+    calls = []
+
+    async def target(ctx, args):
+        calls.append(args)
+        return "ok"
+
+    fake(env, "codex_stats", target, schema={})
+    for value in (float("nan"), float("inf"), float("-inf")):
+        out = call(env, tool="codex_stats", runs=2, args={"nested": [{"value": value}]})
+        assert "args must be plain JSON" in out
+    assert calls == []
+
+
+def test_cyclic_args_are_rejected_as_non_json(env):
+    cyclic = {}
+    cyclic["self"] = cyclic
+    out = call(env, tool="great_scale", args=cyclic)
+    assert "args must be plain JSON" in out
+
+
+def test_error_count_uses_registry_error_prefix_not_plain_text(env):
+    outputs = iter(["ERRORLESS: a successful diagnostic", "ERROR: target exception"])
+
+    async def fake_tool(ctx, args):
+        return next(outputs)
+
+    fake(env, "self_scan", fake_tool)
+    rep = json.loads(call(env, tool="self_scan", runs=2, format="json"))
+    assert rep["errors"] == 1
+    assert rep["differing_runs"] == 1
+
+
 def test_errors_and_line_diff_lengths(env):
     outs = iter(["ERROR: x", "ERROR: x\nmore", "ok"])
 
@@ -136,6 +294,7 @@ def test_refusals(env):
     assert "runs must be 1..50" in call(env, tool="great_scale", runs=0)
     assert "runs must be an integer" in call(env, tool="great_scale", runs="many")
     assert "runs must be an integer" in call(env, tool="great_scale", runs=True)
+    assert "runs must be an integer" in run(fp.t_flake_probe(env.ctx, {"tool": "great_scale", "runs": 2.5}))
     assert "args must be an object" in call(env, tool="great_scale", args=[1])
     assert "longer than" in call(env, tool="great_scale", args={"x": "y" * 5000})
     assert "plain JSON" in call(env, tool="great_scale", args={"x": object()})
@@ -180,6 +339,8 @@ def test_timeout_and_budget(env):
     assert rep["timeouts"] == 1 and rep["differing_runs"] == 1 and rep["diffs"] == [{"run": 2, "first_diff_line": None}]
     rep = run(fp.flake_probe(env.ctx, env.reg, "great_scale", 50, {"h": 0.2}, budget=0.0))
     assert rep["runs"] == 1 and rep["budget_hit"] and rep["runs_requested"] == 50
+    assert rep["comparison_runs"] == 0 and rep["great_scale"] is None
+    assert rep["assessment"] == "insufficient_samples" and rep["evidence_event"] is None
 
 
 def test_text_timeout_and_budget_rendering(env, monkeypatch):
@@ -189,7 +350,10 @@ def test_text_timeout_and_budget_rendering(env, monkeypatch):
                                                    {"digest": "timeout", "chars": 0, "runs": 1, "first_run": 2}],
                 "outputs_hidden": 3, "diffs": [{"run": 2, "first_diff_line": None}], "diffs_hidden": 4,
                 "errors": 0, "timeouts": 1, "ms": {"min": 1, "max": 2, "total": 3},
-                "great_scale": evidence_snapshot(failures=1, runs=2)}
+                "comparison_runs": 1, "assessment": "baseline_relative",
+                "comparison_model": "fixed_first_run_baseline",
+                "great_scale": evidence_snapshot(failures=1, runs=1),
+                "evidence_event": None}
 
     monkeypatch.setattr(fp, "flake_probe", fake_probe)
     out = call(env, tool="great_scale", runs=9, args={"h": 0})
@@ -214,4 +378,6 @@ def test_many_distinct_outputs_bounded(env):
     assert rep["differing_runs"] == 49 and rep["distinct_outputs"] == 50
     assert len(rep["outputs"]) == fp.FLAKE_PROBE_MAX_LISTED and rep["outputs_hidden"] == 30
     assert len(rep["diffs"]) == fp.FLAKE_PROBE_MAX_LISTED and rep["diffs_hidden"] == 29
-    assert rep["great_scale"]["runs"] == 50 and rep["great_scale"]["failures"] == 49
+    assert rep["comparison_runs"] == 49
+    assert rep["great_scale"]["runs"] == 49 and rep["great_scale"]["failures"] == 49
+    assert verify_evidence_event(rep["evidence_event"]) == (True, "")

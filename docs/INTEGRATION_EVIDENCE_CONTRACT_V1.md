@@ -94,3 +94,64 @@ orientation blindness, provenance claims, and oversized references.
 - Attested History: stores the canonical event digest in its append-only chain.
 
 No cross-repository runtime connection is claimed by this contract alone.
+
+## Daemon producer: flake_probe
+
+The daemon's flake_probe now emits a v1 evidence event for a baseline-relative
+measurement whenever at least two executions completed. Execution 1 is the
+reference; it is **not** a comparison trial. For n completed executions:
+
+    m = n - 1,  p = d / m
+
+where d is the number of later executions whose output differs from execution
+1. The Great Scale snapshot and portable event therefore use runs = m, not n.
+A one-execution probe has zero comparisons: it is marked insufficient_samples,
+has no Great Scale snapshot, and emits no evidence event. A finite
+baseline-consistent sample is not proof of determinism.
+
+The event check_id identifies the probe invocation; run_id uses the daemon run
+identifier when it satisfies the contract, otherwise a fresh opaque identifier.
+References identify the allow-listed tool and fixed-first-run measurement model.
+Output content is never copied into the event. The SHA-256 digest is a canonical
+content-integrity check, **not** a signature, an identity assertion, or
+authorization. The 95% detection projection remains conditional on independent
+comparison outcomes given the observed baseline; stateful or correlated tool
+behavior invalidates that projection.
+## Runtime transport boundary
+
+At this revision, flake_probe returns the v1 event in its tool result; it does
+not persist the event or send an HTTP request. The Fusion Bridge
+greatscale_evidence module independently builds and verifies the same
+envelope, but that contract adapter is not an ingestion service. The
+CycleKernel observation link is deliberately GET-only.
+
+The existing CognitiveBridge /events endpoint accepts a different
+EventIn shape, stores entries in process memory, and updates traits using
+its own event kinds. The AVRONE shim /blackboard endpoint is also a separate
+contract. Neither endpoint is a valid Great Scale v1 receiver. Do not forward
+v1 evidence to either legacy route: the schema would be discarded or the
+event would not be interpreted as Great Scale evidence.
+
+Consequently, this release verifies **format and independent validation**, not
+cross-repository runtime delivery. Delivery remains disabled until a dedicated
+receiver exists with all of the following controls:
+
+1. HTTPS to an operator-configured destination; credentials are environment
+   configuration, never agent-supplied arguments or event fields.
+2. Authentication checked before body processing; bounded request and response
+   sizes; bounded timeouts; redirects disabled.
+3. Strict v1 verification, duplicate-key rejection, and recomputation of the
+   Great Scale summary before acceptance.
+4. Durable append-only storage with digest-based idempotency and explicit
+   duplicate/replay handling.
+5. An authenticated receipt. The event SHA-256 digest alone is not sender
+   authentication and must never authorize capability, deployment, or secret
+   operations.
+6. A separate, explicit publishing action. flake_probe stays read-only and
+   must not acquire an implicit network side effect.
+
+The transport success criterion is an end-to-end test in which a daemon event
+is submitted to the authenticated receiver, independently verified, stored
+exactly once, and acknowledged with the same digest. Until that test runs
+against a deployed receiver with operator-supplied credentials, the runtime
+connection is **not enabled**.

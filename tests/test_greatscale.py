@@ -84,7 +84,10 @@ def test_runs_to_detect_is_minimal():
             gs.runs_to_detect(*bad)
 
 
-@pytest.mark.parametrize("f,r", [(-1, 10), (11, 10), (0, 0), (True, 10), (0, 10**10)])
+@pytest.mark.parametrize("f,r", [
+    (-1, 10), (11, 10), (0, 0), (True, 10), (0, 10**10),
+    (1.9, 10), (1, 10.9), ("1", 10), (1, "10"), (None, 10), (1, None),
+])
 def test_evidence_snapshot_rejects_bad_counts(f, r):
     with pytest.raises(ValueError):
         gs.evidence_snapshot(f, r)

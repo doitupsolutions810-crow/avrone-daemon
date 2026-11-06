@@ -33,7 +33,7 @@ def test_ramp_down_both_orientations():
     assert governor._ramp_down(70, 80, 60) == pytest.approx(0.5)
 
 
-def test_psutil_reader(monkeypatch):
+def test_psutil_reader(monkeypatch, tmp_path):
     class VM:
         percent = 42.5
 
@@ -42,7 +42,7 @@ def test_psutil_reader(monkeypatch):
         def virtual_memory():
             return VM
     monkeypatch.setitem(sys.modules, "psutil", PS)
-    assert governor._psutil() is PS and governor.read_mem_pct() == 42.5
+    assert governor._psutil() is PS and governor.read_mem_pct(cgroup_root=str(tmp_path)) == 42.5
 
 
 def test_disk_reader_walks_to_root(monkeypatch):

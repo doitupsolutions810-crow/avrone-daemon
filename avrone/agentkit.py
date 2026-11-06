@@ -85,16 +85,28 @@ def _open_image(ctx: "AgentContext", raw: Any):
         return f"ERROR: {p.name} is empty"
     if size > MAX_IMAGE_BYTES:
         return f"ERROR: {p.name} is {size} bytes; cap is {MAX_IMAGE_BYTES}"
+    im = None
     try:
         im = Image.open(p)
         w, h = im.size
         if w <= 0 or h <= 0 or w * h > MAX_IMAGE_PIXELS:
             im.close()
+            im = None
             return f"ERROR: {p.name} is {w}x{h} ({w * h} px); cap is {MAX_IMAGE_PIXELS} px"
         im.load()
     except Image.DecompressionBombError:
+        if im is not None:
+            try:
+                im.close()
+            except OSError:
+                pass
         return f"ERROR: {p.name} declares too many pixels (decompression bomb)"
     except (OSError, ValueError, SyntaxError, EOFError) as e:  # UnidentifiedImageError is an OSError
+        if im is not None:
+            try:
+                im.close()
+            except OSError:
+                pass
         return f"ERROR: {p.name} is not a readable image ({type(e).__name__}: {str(e)[:120]})"
     return p, im
 

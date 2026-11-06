@@ -76,6 +76,8 @@ class EvidenceStore:
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
         db.execute("PRAGMA busy_timeout=10000")
+        # synchronous is connection-local in SQLite; apply FULL to every writer connection.
+        db.execute("PRAGMA synchronous=FULL")
         db.row_factory = sqlite3.Row
         return db
 

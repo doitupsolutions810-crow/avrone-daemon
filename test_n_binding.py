@@ -73,7 +73,6 @@ try:
     check("tamper detect", False)
 except ValueError:
     check("tamper detect", True)
-# restore for later tests
 ledger = NLedger()
 for i in range(5):
     ledger.append(0.3 + i * 0.05, n=2 + i)
@@ -97,8 +96,8 @@ check("log empty", log_space_product([]) == 1.0)
 # 12 log-space simple
 check("log simple", abs(log_space_product([2.0, 3.0]) - 6.0) < 1e-12)
 
-# 13 log-space underflow safety: 0.1**100 underflows in product form
-ws = [0.1] * 100
+# 13 log-space underflow safety: 0.1**400 underflows to exact 0.0 in product form
+ws = [0.1] * 400
 prod_naive = 1.0
 for w in ws:
     prod_naive *= w
@@ -116,7 +115,6 @@ except ValueError:
 # 15 zero weight
 check("zero weight", log_space_product([1.0, 0.0, 2.0]) == 0.0)
 
-# --- Slow-drift surface ---
 print("--- slow-drift ---")
 
 # 16 single eps step from near floor stays legal
@@ -186,7 +184,7 @@ for i in range(500):
     try:
         ledger3.append(sig, n)
     except ValueError:
-        pass  # psi-collapse expected for high sigma
+        pass
 check("fuzz chain verify", ledger3.verify() is True)
 check("fuzz non-empty", len(ledger3.receipts) > 100)
 

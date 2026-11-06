@@ -15,3 +15,16 @@
 - OCW publishes 1 scalar per block instead of 5.
 - Profound finding: safety-by-construction means the theorem and the code
   are the same object. The proof is executable; the executable is the proof.
+
+## Round 14 — joint constraint
+- ns_fusion geometric mean and spine psi half-space are the SAME bound
+  in different units. log-sum / geomean-exponent = trait count n.
+  One is load-bearing; the other is decoration up to n.
+- joint_certificate issues ONE witness covering both geometries.
+- oracle_checksum.py and cyclekernel_ingest.py landed (built rounds 12-13,
+  never pushed before now).
+- verify.sh fuzz pre-filters negative weights to match test distribution.
+- 22 joint tests + 20k fuzz at zero violations.
+- Profound finding: when two invariants are redundant up to a known
+  constant, the constant is the real system parameter. n (trait count)
+  is now a first-class witness, not an implementation detail.

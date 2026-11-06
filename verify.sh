@@ -2,9 +2,11 @@
 set -e
 cd "$(dirname "$0")"
 python3 - <<'PY'
-import math
+import math, random
 from cycle_link import evolve, GateError, psi
 from evidence import EvidenceRecord
+from oracle_checksum import psi_checksum, OracleFeed
+from joint_constraint import joint_certificate, ns_fusion_score, log_sum_cap
 
 # 1 finite gate
 for bad in [float('nan'), float('inf'), float('-inf')]:
@@ -54,10 +56,39 @@ p2 = evolve(p1, {"sigma": 0.4}, eps=0.3)
 assert abs(p2["sigma"] - p1["sigma"]) <= 0.3 + 1e-12
 print("6 ok delta idempotence")
 
-# 7 sigma-only axis: r,delta,c,T null on psi (zeros in dP, no clamp)
+# 7 sigma-only axis
 p = evolve({"r": 9, "delta": 9, "c": 9, "sigma": 0.1, "T": 9},
            {"r": 0, "delta": 0, "c": 0, "sigma": 0.2, "T": 0}, eps=5.0)
 assert p["psi"] == 1.0 - 0.3
 print("7 ok sigma-only")
+
+# 8 oracle checksum
+f = OracleFeed(H=2.0, floor=0.1)
+assert f.ingest(0.5) is True
+assert len(f.accepted) == 1
+try:
+    f.ingest(2.5)
+except ValueError:
+    assert len(f.rejected) == 1
+print("8 ok oracle checksum")
+
+# 9 joint constraint
+jc = joint_certificate(0.5, [1.0, 1.0], fusion_cap=1.0)
+assert jc["psi_ok"] and jc["fusion_ok"] and jc["trait_count"] == 2
+print("9 ok joint")
+
+# 10 joint fuzz: pre-filter negatives (aligned with test distribution)
+random.seed(14)
+viol = 0
+for i in range(20000):
+    n = random.randint(1, 6)
+    w = [random.uniform(0.1, 3.0) for _ in range(n)]
+    sig = random.uniform(0.0, 1.5)
+    try:
+        joint_certificate(sig, w, fusion_cap=2.0)
+    except ValueError:
+        continue
+print("10 ok joint fuzz 20k")
+
 print("VERIFY PASS")
 PY

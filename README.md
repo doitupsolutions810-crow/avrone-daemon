@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.71: Round 78: evolve state files and queued job payloads. 5,525 tests + 19 integration
+
+- **Evolve state reads are plain-file only.** Proposal, loop and history files were read with `read_text()`, which follows symlinks, blocks forever on a FIFO and reads any size whole. `reconcile_interrupted()` runs at boot over `evolve/loops/*.json`, so a FIFO named `x.json` there hung startup. `list_loops`/`list_accepted`/`evolve_list` read symlinked files from outside the data dir. Every read now goes through `_read_state`: `O_NOFOLLOW|O_NONBLOCK`, regular files only, `STATE_JSON_MAX_BYTES` (16 MB) per file, `HISTORY_MAX_BYTES` (64 MB) for `history.jsonl`. Anything else is skipped as unreadable.
+- **Malformed queued jobs go dead at once.** `run_job` trusted the payload from `jobs.db`, which every process on the data dir shares and which outlives versions. A job without `task` failed with `KeyError` on every attempt with backoff. A non-string task reached `squad()`/`dispatch()`, and an unknown kind ran as a dispatch. They now raise `jobqueue.PermanentJobError`, and the Worker calls `fail(..., permanent=True)`: dead now, attempts left or not. Ordinary errors still retry.
+- Tests: `tests/test_round78_state_reads_and_jobs.py`, 15 tests. 12 fail on v0.70; the other 3 guard behavior that already held (valid jobs run, ordinary errors retry, a symlinked loop is not marked).
+- Note: tag `v0.71.0` (`9b69f64`) has the code and tests but not this README section, which landed in the next commit on main. The tag is not moved.
+
 ## v0.70: Round 77: poisoned state files at boot. 5,510 tests + 19 integration
 
 - **Nonce expiries are clamped.** Saved expiries in `fleet_nonces.json` and its journal were trusted. An `Infinity` entry never expired, so a file holding `NONCE_CACHE_MAX` of them would refuse every fleet request forever with "replay cache full". A 400-digit integer raised `OverflowError` out of `FleetManager()`, which left the node with no fleet at all. `nonce_expiry()` now drops junk and clamps an expiry to `now + 2 * WINDOW_S` (+5 s), the newest a real nonce can have.

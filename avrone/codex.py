@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import errno
 import os
+import stat
 import math
 import re
 import threading
@@ -402,18 +404,45 @@ class Codex:
     def archives(self, path: Path) -> list[Path]:
         return archives_of(path)
 
-    @staticmethod
-    def _append(path: Path, line: bytes) -> None:
-        with path.open("ab+") as f:
-            # A crash mid-write leaves a last line with no newline; appending straight after it glued
-            # the NEXT event onto the torn bytes, so the first event after every crash was lost too.
-            # Start on a fresh line instead (only the torn event itself is lost). One write() call, so
-            # O_APPEND keeps concurrent writers' events whole.
-            fd = f.fileno()
-            size = os.fstat(fd).st_size
-            if size and os.pread(fd, 1, size - 1) != b"\n":
+    def _append(self, path: Path, line: bytes) -> None:
+        # A crash mid-write leaves a last line with no newline; appending straight after it glued
+        # the NEXT event onto the torn bytes, so the first event after every crash was lost too.
+        # Start on a fresh line instead (only the torn event itself is lost). One write() call, so
+        # O_APPEND keeps concurrent writers' events whole.
+        # Round 83: opened with O_NOFOLLOW|O_NONBLOCK. path.open("ab+") followed a symlink planted
+        # at runs/<run>.jsonl (events were appended to the link's target), and a FIFO there raised
+        # io.UnsupportedOperation out of emit(), killing the agent step that logged. Such a log is
+        # now skipped (counted in .dropped, warned once per path); subscribers still get the event.
+        flags = (os.O_RDWR | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
+        try:
+            fd = os.open(path, flags, 0o666)
+        except OSError as e:
+            if e.errno in (errno.ELOOP, errno.ENXIO, errno.EISDIR) or path.is_symlink():
+                self._drop(path, "a symlink or special file")
+                return
+            raise
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                self._drop(path, "not a regular file")
+                return
+            if st.st_size and os.pread(fd, 1, st.st_size - 1) != b"\n":
                 line = b"\n" + line
-            f.write(line)
+            view = memoryview(line)
+            while view:
+                n = os.write(fd, view)
+                view = view[n:]
+        finally:
+            os.close(fd)
+
+    def _drop(self, path: Path, why: str) -> None:
+        self.dropped = getattr(self, "dropped", 0) + 1
+        warned = self.__dict__.setdefault("_drop_warned", set())
+        if path.name not in warned and len(warned) < 1000:
+            warned.add(path.name)
+            import logging
+            logging.getLogger("avrone.codex").warning("not writing codex log %s: %s", path.name, why)
 
     @staticmethod
     def _parse_line(line: str) -> dict[str, Any] | None:

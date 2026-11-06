@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.76: Round 83: env-secret cache, codex run logs never follow links. 5,584 tests + 19 integration
+
+- **Env-secret cache.** `ctxspawn._env_secret_values` rebuilt the secret list from `os.environ` for every string of every CodeX event, which cost 751 µs per call with 500 variables. It is now cached against a snapshot of the environment, checked with a C-level dict compare. A variable set, changed or removed at runtime takes effect on the next call. A short redact now takes 19.5 µs.
+- **Run logs.** `Codex._append` used `path.open("ab+")` on `runs/<run>.jsonl`.
+  - A symlink planted there made every event of that run append to the link's target.
+  - A FIFO raised `io.UnsupportedOperation` out of `emit()`, which killed the agent step that was logging.
+  - The log now opens with `O_RDWR|O_APPEND|O_CREAT|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, and only a regular file is written. Any other log is skipped and counted in `Codex.dropped`, with one warning per name. Subscribers still receive the event.
+  - The torn-last-line repair and the single `O_APPEND` write are kept, and partial writes are now looped.
+- **Tests:** `tests/test_round83_env_cache_and_log_links.py` has 6 tests. On v0.75, 4 fail and 2 are guards.
+- **Not changed:** with many secret env vars, a 1 MB string still costs about 0.4 s, because there is one `str.replace` pass per secret. A combined regex would change results when secrets overlap, so it was left as is.
+
 ## v0.75: Round 82: redaction skips rules whose literals are absent. 5,578 tests + 19 integration
 
 - **Before:** every CodeX event string went through all 11 redaction rules on the event loop: 10 regex passes plus the key/value tokeniser. That cost about 0.9 s per MB of plain text, so the 1,000,000-char field cap from round 81 still allowed a near-second stall.

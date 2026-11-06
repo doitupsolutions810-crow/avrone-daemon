@@ -140,10 +140,26 @@ class _KVRule:
 _PATTERNS[3] = (_KVRule(), None)  # type: ignore[assignment]
 
 
+_ENV_CACHE: tuple[dict, list[str]] | None = None
+
+
 def _env_secret_values() -> list[str]:
+    """Secret-named env values, longest first. redact() runs this for every string of every CodeX
+    event; it rebuilt the list from os.environ each time (decoding every variable and testing it
+    against every marker): 751 us per call with 500 variables, round 83. The result is now cached
+    and reused while the environment is unchanged (a C-level dict comparison against a snapshot),
+    so a variable set or removed at runtime still takes effect on the next call."""
+    global _ENV_CACHE
+    raw = getattr(os.environ, "_data", None)
+    src = raw if isinstance(raw, dict) else dict(os.environ)
+    cache = _ENV_CACHE
+    if cache is not None and len(cache[0]) == len(src) and cache[0] == src:
+        return cache[1]
     from .tools_extra import is_secret_name
     vals = {v for k, v in os.environ.items() if is_secret_name(k) and v and len(v) >= 6}
-    return sorted(vals, key=len, reverse=True)
+    out = sorted(vals, key=len, reverse=True)
+    _ENV_CACHE = (dict(src), out)
+    return out
 
 
 def redact(text: Any) -> str:

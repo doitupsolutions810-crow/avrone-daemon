@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.69: Round 76: fleet.json records go through register()'s checks at load. 5,502 tests + 19 integration
+
+- `fleet.json` outlives versions and can be edited by hand, but its node records were loaded as is. Now `clean_saved_node()` rebuilds each record with register()'s checks and drops a record that fails them, logging a warning with the count.
+  - **URLs:** a url pointing at a cloud metadata endpoint (169.254.169.254), carrying credentials, using a non-http scheme, or missing was dispatched to without `check_node_url`.
+  - **Ids:** a key that fails `ID_RE` (`../x`, `UPPER`) or equals this node's own id became a dispatch target. A record's own `node_id` could differ from its key; the key now wins.
+  - **Missing node_id:** a record without `node_id` raised `KeyError` in `pick()`'s error path.
+  - **Types:** capabilities, children, load, presence, health and last_seen of the wrong type or unclamped reached `node_has`, `fleet_nodes` and `health_score`. Health goes through `sanitize_health`.
+- Behavior change: `test_robust_v025_state` now uses a valid url, because a record with url `"u"` is dropped at load.
+- Tests: `tests/test_round76_fleet_json_load.py`, 6 tests, all fail on v0.68.
+
 ## v0.68: Round 75: junk fleet records and peer presence can't break node selection. 5,496 tests + 19 integration
 
 - **`health_score` is total.** It cast raw fields with `float()`. A record loaded from `fleet.json` (written by an older version, or edited by hand) with headroom `"abc"` raised `ValueError` out of `select_nodes`, so every auto dispatch failed, along with `health_table` and `fleet_nodes`. NaN poisoned the ranking, and headroom `1e308` scored `inf` and won every pick. Each field now goes through `_finite` and is clamped, so the score is always within 0..100. Scores for valid values are unchanged.

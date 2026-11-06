@@ -462,6 +462,30 @@ def health_score(n: dict[str, Any]) -> float:
     return round(60 * headroom + 20 * (1 - ratio / 2) + 20 * (1 - min(max(busy, 0.0), 10.0) / 10), 3)
 
 
+def clean_saved_node(key: Any, v: Any, self_id: str) -> dict[str, Any] | None:
+    """A node record from fleet.json, rebuilt with the checks register() applies, or None to drop it.
+
+    The file outlives versions and can be edited by hand, but its records were loaded as is
+    (round 76): a url at a metadata endpoint or with credentials was dispatched to without
+    check_node_url, a key like "../x" or this node's own id became a target, a record without
+    node_id raised KeyError in pick(), and capabilities/children/health of the wrong type or
+    unclamped reached node_has, fleet_nodes and health_score."""
+    if not isinstance(key, str) or not ID_RE.match(key) or key == self_id or not isinstance(v, dict):
+        return None
+    try:
+        url = check_node_url(v.get("url"))
+    except ValueError:
+        return None
+    caps = v.get("capabilities")
+    kids = v.get("children")
+    pres = v.get("presence")
+    return {"node_id": key, "url": url, "last_seen": _finite(v.get("last_seen"), 0.0),
+            "capabilities": caps if isinstance(caps, dict) else {},
+            "children": [c for c in kids if isinstance(c, str)][:1000] if isinstance(kids, list) else [],
+            "load": node_load(v), "presence": pres if isinstance(pres, dict) else None,
+            "health": sanitize_health(v.get("health"))}
+
+
 def node_has(n: dict[str, Any], need: str | None) -> bool:
     """Capability match: spawn:* (every node), a tool name, the runner kind or a truthy capability key."""
     if not need or need.startswith("spawn:"):
@@ -616,10 +640,16 @@ class FleetManager:
             raise ValueError(f"AVRONE_NODE_ID {nid!r} must match {ID_RE.pattern}")
         self.node_id = nid
         raw_nodes = saved.get("nodes")
-        self.nodes: dict[str, dict[str, Any]] = (
-            {k: {**v, "load": node_load(v), "last_seen": _finite(v.get("last_seen"), 0.0)}
-             for k, v in raw_nodes.items() if isinstance(k, str) and isinstance(v, dict)}
-            if isinstance(raw_nodes, dict) else {})
+        self.nodes: dict[str, dict[str, Any]] = {}
+        dropped = 0
+        for k, v in (raw_nodes.items() if isinstance(raw_nodes, dict) else ()):
+            rec = clean_saved_node(k, v, nid)
+            if rec is None:
+                dropped += 1
+            else:
+                self.nodes[k] = rec
+        if dropped:
+            log.warning("fleet.json: dropped %d unusable node record(s) (bad id or url)", dropped)
         # The replay cache survives a restart: a request captured within its window must not run again
         # just because the node rebooted. If the saved cache cannot be read, nothing signed before this
         # boot is accepted (boot guard) - the same guarantee without the cache.
@@ -1868,7 +1898,7 @@ class FleetManager:
             best = self.select_nodes(1)
             if best:
                 return best[0]
-            if any(self.status_of(n) == "online" and self.allowed(n["node_id"]) for n in self.nodes.values()):
+            if any(self.status_of(n) == "online" and self.allowed(str(n.get("node_id", ""))) for n in self.nodes.values()):
                 raise RuntimeError("no healthy online nodes (all online nodes are hot or throttled)")
             raise RuntimeError("no online nodes")
         n = self.nodes.get(target)

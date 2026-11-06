@@ -30,7 +30,8 @@ def test_corrupt_fleet_json_boots_fresh(tmp_path, body):
 
 
 def test_junk_fields_in_fleet_json(tmp_path):
-    (tmp_path / "fleet.json").write_text(json.dumps({"node_id": 5, "nodes": {"good": {"url": "u"}, "bad": 3}}))
+    (tmp_path / "fleet.json").write_text(json.dumps({"node_id": 5, "nodes": {"good": {"url": "http://good:8080"}, "bad": 3}}))
+    # round 76: a record whose url fails check_node_url ("u") is dropped at load, like register() refuses it
     fm = FleetManager(MagicMock(), tmp_path)
     assert fm.node_id != 5 and set(fm.nodes) == {"good"}
     (tmp_path / "fleet.json").write_text(json.dumps({"node_id": "keep-me", "nodes": ["x"]}))

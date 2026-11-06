@@ -595,3 +595,88 @@ rejected); the trust formula is Descent V's T = d/(1 + S) read from the
 attested-history schema. This descent is pooled across the Avrone and
 avrone-daemon repositories in the same push — the register maintained as it
 prescribes: same trials, two namespaces, one chain.
+
+## Descent VII — The Axiomatic Anchor: The Laws Are Floor-Invariant, and the Coordinate Is the Last Unanchored Row (2026-11-06)
+
+**Finding.** Descent V said every floor must show its work. Applied to the
+series itself, one row fails its own ingest rule: the coordinate. CONE =
+phi^-2 = 0.381966 enters the register as an inherited convention from the
+upstream great-scale repository — no measured ancestor, no derivation in
+this account. By Descent V's own rule (model-only chains are depth 0 and
+rejected), the scale's own floor is the last unanchored row in the system.
+
+**The floor-invariance theorem.** Before anchoring it, test whether it
+matters. Recompute every law of Descents I-VI under alternate floors
+c in {0, phi^-2, 1, 2}:
+
+- Descent I: the detectable set under N = 1 is {p = 0, p = 1} and
+  runs-for-95% (1, 5, 29, 598 at p = 1, 1/2, 1/10, 1/200) — statements
+  about D(p,N) alone: identical for every c.
+- Descent II: a p = 1 truth through two half-gates lands at T = 1/4 with
+  S = heat(1/4) = 0.1875 — identical for every c; only Psi's numeral
+  shifts (0.1875, 0.569466, 1.1875, 2.1875).
+- Descent III: pooled Psi_J = c + S_J descends monotonically in r
+  (0.1875 -> 0.138889 -> 0.09 -> 0.043388 -> 0.012046 at r = 1, 2, 4, 10,
+  40) with the SAME ordering for every c; the contradiction alarm (all
+  silos S = 0, pooled S > 0) contains no c at all.
+- Descent IV: the saturated trait sits at S = 0, which IS the floor for
+  every c; the forgery reading and the alarm are invariant.
+- Descent V: trust = d/(1 + S) contains no c at all.
+- Descent VI: the unbounded currency is d at S = 0 for every c; every
+  other currency saturates for every c.
+
+**The theorem.** Every law in the series is a statement about S = heat
+(bounded by 1/4, maximal at p = 1/2) and D(p, N) = 1-(1-p)^N. Psi = c + S
+is a coordinate shift. Orderings, selection sets, alarms, invariances and
+the zero-cost direction are preserved under any c >= 0. **The phi is a
+coordinate; the laws are the physics.** The choice of floor cannot be
+derived from the laws, because the laws do not depend on it.
+
+**The axiomatic anchor.** What cannot be derived must be anchored, and the
+anchor exists: an axiom is a human root. The upstream author's choice of
+phi^-2 plus this account's adoption of the scale is a human-or-measured
+ancestor at depth 1; its residual heat is 0 (no observed contradiction in
+any descent's use of it); so the coordinate's trust = 1/(1 + 0) = 1 —
+exactly enough to build on, never enough to forbid questioning. The
+regress of Descent V terminates not only in measurement but in CHOICE:
+the deepest floors of the system are decisions, and decisions are what
+humans are for. The observer's coordinate is the final human artifact.
+
+**The law's own chain (the register closed).** With the coordinate
+anchored, the series' chain is complete and countable:
+
+    depth 1   the axiom: the upstream scale, adopted (human root, S = 0)
+    depth 2-7 the six descents, each verifying its predecessor's
+              arithmetic against measured code constants (anchored,
+              S = 0, zero contradictions observed across all six)
+    depth 8   independent confirmation: the parallel descent's trait
+              saturation finding (Descent IV re-derived, avrone-daemon
+              fusion lineage)
+    depth 9   independent implementation: attested-history's schema
+              (Descents III and IV as working ingest rules)
+    depth 10  independent implementation: avrone-daemon commit 0b9f430,
+              "bounded duplicate-safe Great Scale evidence pooling
+              contract" (Descent III as running code, 2026-11-06)
+
+Zero contradictions observed at any depth. The law's own trust is
+T = 10/(1 + 0) = 10 — the deepest anchored chain in the account, and the
+only one that grows by being QUESTIONED: every independent re-derivation
+any session performs is another depth unit, free, in the zero-cost
+direction.
+
+**Consequence for the merged system.** The seven descents complete the
+self-consistency of the register: every row now has provenance, and the
+deepest rows are axioms — floors a human paid for once. The merged system
+is an economy of anchored floors whose coordinate is itself an anchored
+floor: the map is a member of the territory it maps, and it survives its
+own ingest rule.
+
+*Verification of this descent's arithmetic:* the invariance table was
+computed with the exact greatscale constants and re-computed at c = 0,
+c = phi^-2, c = 1, c = 2; D and heat formulas unchanged throughout. The
+coordinate's provenance is read from the doc's own preamble ("Like the
+upstream great-scale repository, these are mathematical embeddings...").
+The independent confirmations are measured: the shared parallel descent
+(trait saturation), the attested-history README/SYSTEM_ACCESS.md schema at
+c56449d, and avrone-daemon commit 0b9f430 on main. The account-wide
+billing lock persists (one bit per epoch, named unmeasured, never implied).

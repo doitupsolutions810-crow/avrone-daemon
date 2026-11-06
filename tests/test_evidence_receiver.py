@@ -10,7 +10,8 @@ from contextlib import closing
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from starlette.requests import Request
 
 from avrone.evidence_receiver import (
     EvidenceStore, canonical, request_signature, ingest_evidence, verify_receipt,
@@ -264,10 +265,34 @@ def test_duplicate_security_headers_fail_closed(tmp_path, monkeypatch):
             h.append(("content-type", "text/plain"))
             response = await c.post(PATH, content=body, headers=h)
             assert response.status_code == 415
-            h = list(headers(body).items())
-            h.append(("content-length", str(len(body))))
-            response = await c.post(PATH, content=body, headers=h)
-            assert response.status_code == 400
+            ts = str(int(time.time()))
+            nonce = "c" * 32
+            signature = request_signature(SECRET, "POST", PATH, ts, nonce, body)
+            raw_headers = [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+                (b"content-length", str(len(body)).encode()),
+                (b"x-avrone-evidence-timestamp", ts.encode()),
+                (b"x-avrone-evidence-nonce", nonce.encode()),
+                (b"x-avrone-evidence-signature", signature.encode()),
+            ]
+            scope = {
+                "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                "method": "POST", "scheme": "http", "path": PATH,
+                "raw_path": PATH.encode(), "query_string": b"", "headers": raw_headers,
+                "client": ("127.0.0.1", 12345), "server": ("test", 80),
+            }
+            delivered = False
+            async def receive():
+                nonlocal delivered
+                if delivered:
+                    return {"type": "http.disconnect"}
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            request = Request(scope, receive)
+            with pytest.raises(HTTPException) as exc:
+                await ingest_evidence(request)
+            assert exc.value.status_code == 400
     run(go())
 
 

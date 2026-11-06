@@ -167,9 +167,11 @@ def _strict_json(raw: bytes) -> Any:
     return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=bad_constant)
 
 
-def _single_header(request: Request, name: str) -> str:
+def _single_header(request: Request, name: str) -> str | None:
     values = request.headers.getlist(name)
-    return values[0] if len(values) == 1 else ""
+    if len(values) > 1:
+        return None
+    return values[0] if values else ""
 
 
 def _config():
@@ -184,10 +186,13 @@ def _config():
 
 async def ingest_evidence(request: Request):
     secret, receipt_secret, db_path = _config()
-    media_type = _single_header(request, "content-type").split(";", 1)[0].strip().lower()
+    content_type = _single_header(request, "content-type")
+    media_type = content_type.split(";", 1)[0].strip().lower() if isinstance(content_type, str) else ""
     if media_type != "application/json":
         raise HTTPException(415, "evidence content type must be application/json")
     content_length = _single_header(request, "content-length")
+    if content_length is None:
+        raise HTTPException(400, "ambiguous content length")
     if content_length:
         if not content_length.isascii() or not content_length.isdecimal() or len(content_length) > 12:
             raise HTTPException(400, "invalid content length")
@@ -205,9 +210,11 @@ async def ingest_evidence(request: Request):
     timestamp = _single_header(request, "x-avrone-evidence-timestamp")
     nonce = _single_header(request, "x-avrone-evidence-nonce")
     signature = _single_header(request, "x-avrone-evidence-signature")
-    if (not timestamp.isascii() or not timestamp.isdecimal() or len(timestamp) > 12
-            or not nonce.isascii() or not nonce.isalnum() or not 16 <= len(nonce) <= 64
-            or len(signature) != 64):
+    if (not isinstance(timestamp, str) or not timestamp.isascii()
+            or not timestamp.isdecimal() or len(timestamp) > 12
+            or not isinstance(nonce, str) or not nonce.isascii() or not nonce.isalnum()
+            or not 16 <= len(nonce) <= 64
+            or not isinstance(signature, str) or len(signature) != 64):
         raise HTTPException(401, "invalid evidence authentication")
     now = int(time.time())
     if abs(now - int(timestamp)) > MAX_CLOCK_SKEW:

@@ -680,3 +680,108 @@ The independent confirmations are measured: the shared parallel descent
 (trait saturation), the attested-history README/SYSTEM_ACCESS.md schema at
 c56449d, and avrone-daemon commit 0b9f430 on main. The account-wide
 billing lock persists (one bit per epoch, named unmeasured, never implied).
+
+## Descent VIII — The Correlation Floor: The Register Descends Only Along Independent Axes (2026-11-06)
+
+**Finding (the falsification pass).** Descent VII closed the register at depth
+10 with zero observed contradictions — and a law earns its floor by surviving
+an alarm hunt. The first genuine candidate contradiction: avrone-daemon
+commit 0b9f430, `avrone/evidence_pool.py` ("bounded, provenance-aware pooling
+for Great Scale verification trials"), read in full against Descent III's
+criteria. The verdict: **no contradiction — a refinement the series needed.**
+The contract pools TRIALS (records {source, trial_id, failed} summed into
+f/r), keeps per-source orientation rows, implements the contradiction alarm
+(`orientation_conflict`: pass and fail orientations present), computes
+evidence_snapshot at the pooled level, and is bounded — Descent III's
+criteria, as running code, from an independent session. But it is STRICTER
+than the series in two places, and both are correct:
+
+1. **Duplicate trial_ids are REJECTED, not accumulated** ("duplicate relays
+   must not manufacture confirmations"). This refines Descent II's "make
+   dedupe an accumulator": accumulation is right for re-DERIVATIONS (the same
+   truth independently found again IS a new trial) and wrong for
+   re-TRANSMISSIONS (the same record relayed twice is the same trial).
+   **Trials are not messages.** The criterion splits: dedupe-as-accumulator
+   at the derivation level, dedupe-as-rejection at the relay level.
+2. **`independence: "not_asserved"` — the field literally reads
+   "not_assessed"** — "It does not claim that distinct IDs make trials
+   statistically independent." This names an assumption the ENTIRE series
+   made silently: D(p, N) = 1 - (1-p)^N, the Jeffreys descent, and every
+   pooled table of Descents I-VII assume INDEPENDENT trials. Independent
+   they may not be — and when they are not, the accumulator has a floor.
+
+**The mathematics (the design effect, exact greatscale constants).** For
+pairwise-correlated Bernoulli trials with correlation rho_c, the effective
+sample size is r_eff = r / (1 + (r-1)*rho_c). Jeffreys on the effective
+size, p_J = (r_eff + 1/2)/(r_eff + 1):
+
+| 40 pooled confirmations | r_eff | p_J | S | Psi |
+| --- | --- | --- | --- | --- |
+| rho = 0 (independent) | 40.00 | 0.9878 | 0.012046 | 0.394012 |
+| rho = 0.25 | 3.72 | 0.8941 | 0.094694 | 0.476660 |
+| rho = 0.50 | 1.95 | 0.8306 | 0.140718 | 0.522684 |
+| rho = 0.75 | 1.32 | 0.7847 | 0.168947 | 0.550913 |
+| rho = 0.90 | 1.11 | 0.7628 | 0.180930 | 0.562896 |
+
+As r grows, r_eff saturates at 1/rho_c — **the pooled register's descent
+TERMINATES at a floor above the floor:**
+
+    Psi_inf = CONE + heat(p_J(1/rho_c))
+
+| correlation rho_c | r_eff at infinity | Psi_inf | the register can never descend past |
+| --- | --- | --- | --- |
+| 0.25 | 4.00 | 0.471966 | |
+| 0.50 | 2.00 | 0.520855 | |
+| 0.75 | 1.33 | 0.550333 | |
+| 0.90 | 1.11 | 0.562714 | |
+
+The zero-cost direction of Descent VI is free ONLY along independent axes.
+Correlation is the friction of the register: it prices the accumulator
+itself, and it is the last hidden budget in the system.
+
+**The self-correction (the series' own table, re-read).** Descent I counted
+the Avrone suite as 0/2 green — both CI legs, 3.11 and 3.12. Those two
+trials share the code, the runner image, the environment, the epoch: their
+correlation is near 1, r_eff near 1. The honest snapshot is p_J = 0.75,
+Psi_J = 0.569466 — NOT the 0.520855 the i.i.d. assumption claimed. The
+series overstated its own confidence by 0.0486 of Psi — the exact size of
+one phantom trial. Every pooled row in this document with a shared cause
+between its trials carries the same correction.
+
+**Why the budget forced the floor — the second, deeper reason.** A
+deterministic defect (p = 1) has S = 0 at ANY correlation: S = 0 has no
+variance to inflate, so the cone floor is correlation-IMMUNE. Under
+correlation, only the floor is trustworthy; the interior is taxed. Descent
+I's selection effect now has two explanations with one conclusion: budgets
+and correlation BOTH force the floor — small N cannot afford interior
+rates, and correlated N cannot compound past them.
+
+**Mitigation — criteria extended (completing Descent III's list, one law
+later).** (5) Correlation is measured-or-named, never assumed: the
+contract's `independence: "not_assessed"` is the field every pooled report
+must carry — "unmeasured must be named" extends from ABSENCE (Descent III)
+to DEPENDENCE (VIII). (6) Independence is bought by diversifying the cause,
+not the count: distinct sources, distinct runners, distinct environments,
+distinct epochs — the design effect is the price of shared causes, and
+diversity of cause is the only currency that pays it.
+
+**Consequence for the merged system.** The eight descents now read: I
+budgets -> determinism; II gates -> evidence travels; III namespaces ->
+pooling; IV saturation -> provable floors; V regress -> anchoring; VI
+attention -> zero-cost growth; VII coordinate -> axioms are human roots;
+VIII correlation -> the register descends only along independent axes, and
+its floor above the floor is set by the correlation the trials share. The
+economy of anchored floors has its exchange rate: information per trial,
+priced by independence.
+
+*Verification of this descent's arithmetic:* the falsification target is
+avrone/avrone/evidence_pool.py at commit 0b9f430 (read in full at
+835cfc4; its constants: MAX_POOL_TRIALS = 100000, MAX_SOURCES = 10000,
+duplicate trial_id rejection, per-source orientation rows,
+orientation_conflict alarm, independence: "not_assessed",
+evidence_snapshot at the pooled level — all measured from the source). The
+design effect r_eff = r/(1+(r-1)rho_c) is the standard variance inflation
+for equicorrelated Bernoulli trials; all Psi values computed with the
+exact greatscale constants (CONE = phi^-2 = 0.381966, heat, Jeffreys
+smoothing). The chain gains a refinement unit: depth 11, still zero
+contradictions — the alarm hunt found a stricter truth instead.

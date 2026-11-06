@@ -94,3 +94,26 @@ orientation blindness, provenance claims, and oversized references.
 - Attested History: stores the canonical event digest in its append-only chain.
 
 No cross-repository runtime connection is claimed by this contract alone.
+
+## Daemon producer: flake_probe
+
+The daemon's flake_probe now emits a v1 evidence event for a baseline-relative
+measurement whenever at least two executions completed. Execution 1 is the
+reference; it is **not** a comparison trial. For n completed executions:
+
+    m = n - 1,  p = d / m
+
+where d is the number of later executions whose output differs from execution
+1. The Great Scale snapshot and portable event therefore use runs = m, not n.
+A one-execution probe has zero comparisons: it is marked insufficient_samples,
+has no Great Scale snapshot, and emits no evidence event. A finite
+baseline-consistent sample is not proof of determinism.
+
+The event check_id identifies the probe invocation; run_id uses the daemon run
+identifier when it satisfies the contract, otherwise a fresh opaque identifier.
+References identify the allow-listed tool and fixed-first-run measurement model.
+Output content is never copied into the event. The SHA-256 digest is a canonical
+content-integrity check, **not** a signature, an identity assertion, or
+authorization. The 95% detection projection remains conditional on independent
+comparison outcomes given the observed baseline; stateful or correlated tool
+behavior invalidates that projection.

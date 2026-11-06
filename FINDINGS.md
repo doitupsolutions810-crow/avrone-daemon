@@ -28,3 +28,24 @@
 - Profound finding: when two invariants are redundant up to a known
   constant, the constant is the real system parameter. n (trait count)
   is now a first-class witness, not an implementation detail.
+
+## Round 16 — n-binding + slow-drift surface
+- n is bound into the hash chain at every state transition via bind_n().
+  Changing n is a governance-gated witnessed event (governance_mutate_n),
+  not ambient context. Unauthorized mutations raise.
+- NLedger maintains the full (sigma, n, psi, hash) chain; verify_n_chain
+  recomputes every link independently.
+- Slow-drift surface: sequences of eps-sized steps that each look legal
+  but accumulate toward the floor. Clamp-before-check makes the reject
+  region unreachable in a single step; the only breach path is a long
+  sequence of small legal steps. The per-step receipt is what catches it.
+- Product-form (prod w_i) underflows to 0.0 in float64 for modest n and
+  sub-unit weights (0.3**20). Log-space (exp(sum log w_i)) stays finite.
+  Log-space is the only safe domain for any product-based check at scale.
+- 22 unit + chain + governance + drift + underflow + 500-step fuzz tests.
+- Profound finding: the spine's reject region is a half-space that is
+  unreachable in one step. Safety is therefore a statement about
+  trajectories, not about individual transitions. The hash chain is the
+  instrument that turns a trajectory property into a verifiable object.
+  Without the chain, slow drift is invisible; with it, every step is a
+  receipt and the floor becomes detectable before it is crossed.

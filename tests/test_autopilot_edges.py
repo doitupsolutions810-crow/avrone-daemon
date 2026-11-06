@@ -274,12 +274,21 @@ def test_missing_drive(env):
     assert r.returncode == 1 and "not mounted" in out(r)
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores permissions")
 def test_readonly_drive(env):
     env.drive.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    probe = env.drive / ".readonly-probe"
     try:
+        # Some sandbox/container users are non-root but retain DAC override
+        # capabilities. Check effective write behavior, not just euid/mode.
+        try:
+            probe.write_text("probe")
+        except OSError:
+            pass
+        else:
+            pytest.skip("execution environment can write despite read-only mode bits")
         r = env.run()
     finally:
+        probe.unlink(missing_ok=True)
         env.drive.chmod(0o755)
     assert r.returncode == 1 and "not writable" in out(r)
 

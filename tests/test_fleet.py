@@ -44,8 +44,25 @@ def fleet(tmp_path):
     procs.append(start(tmp_path, "router", pa, pr)); wait(f"http://127.0.0.1:{pa}/api/status")
     procs.append(start(tmp_path, "edge", pb, pa)); wait(f"http://127.0.0.1:{pb}/api/status")
     yield pr, pa, pb
-    for p in procs:
-        p.terminate(); p.wait(5)
+    for p in reversed(procs):
+        try:
+            if p.poll() is None:
+                try:
+                    p.terminate()
+                except ProcessLookupError:
+                    pass
+            # communicate() drains and closes stderr=PIPE instead of leaving
+            # BufferedReader handles for Python's finalizer to warn about.
+            p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                p.kill()
+            except ProcessLookupError:
+                pass
+            p.communicate(timeout=5)
+        finally:
+            if p.stderr is not None and not p.stderr.closed:
+                p.stderr.close()
 
 
 def signed_post(port, path, payload, token=TOKEN):

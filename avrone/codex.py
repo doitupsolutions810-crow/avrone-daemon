@@ -175,6 +175,44 @@ def log_max_bytes() -> int:
     return n if n == 0 else max(n, 4096)
 
 
+DEFAULT_FIELD_MAX_CHARS, HARD_FIELD_MAX_CHARS = 1_000_000, 64_000_000
+
+
+def field_max_chars() -> int:
+    """Longest string an event keeps (AVRONE_CODEX_FIELD_MAX_CHARS; 0 = no cap). Redaction runs
+    about ten linear regexes per string on the event loop: a 20 MB write_file content in one
+    tool.call event took 10.9 s to emit (round 81)."""
+    n = _env_whole("AVRONE_CODEX_FIELD_MAX_CHARS", DEFAULT_FIELD_MAX_CHARS, 0, HARD_FIELD_MAX_CHARS)
+    return n if n == 0 else max(n, 1024)
+
+
+DEFAULT_ARG_CHARS = 65_536
+
+
+def codex_arg_chars() -> int:
+    """Longest string kept from a tool call's args in its tool.call event (AVRONE_CODEX_ARG_CHARS;
+    0 = only the field cap). The tool itself always gets the full args; tool.result already kept
+    only 4000 chars of output."""
+    return _env_whole("AVRONE_CODEX_ARG_CHARS", DEFAULT_ARG_CHARS, 0, HARD_FIELD_MAX_CHARS)
+
+
+def clip_strings(v: Any, limit: int, depth: int = 0) -> Any:
+    """Every string in v cut to `limit` chars with a "...[clipped N chars]" marker (dicts and lists
+    walked to depth 8; their keys are cut too). Anything else is returned as is."""
+    if limit <= 0:
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= limit else f"{v[:limit]}...[clipped {len(v) - limit} chars]"
+    if depth > 8:
+        return v
+    if isinstance(v, dict):
+        return {clip_strings(k, limit, depth + 1) if isinstance(k, str) else k: clip_strings(x, limit, depth + 1)
+                for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [clip_strings(x, limit, depth + 1) for x in v]
+    return v
+
+
 def log_keep() -> int:
     """Rotated archives kept per log (AVRONE_CODEX_LOG_KEEP; 0 = drop the old log on rotation)."""
     return _env_whole("AVRONE_CODEX_LOG_KEEP", DEFAULT_LOG_KEEP, 0, HARD_LOG_KEEP)
@@ -312,6 +350,7 @@ class Codex:
             self.unsubscribe(q)
 
     def emit(self, run_id: str, kind: str, agent: str, **data: Any) -> Event:
+        data = clip_strings(data, field_max_chars())
         if _redact_on():
             data = _scrub(data)
         data = jsonable(data)

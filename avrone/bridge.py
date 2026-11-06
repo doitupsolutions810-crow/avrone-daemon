@@ -243,15 +243,12 @@ class Bridge:
                 self._lines += len(recs)
                 if self._lines > 2 * self.limit:  # replay under process lock before atomic compaction
                     self._replay(self.path.read_text(encoding="utf-8", errors="replace"))
-                    tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+                    from .safeio import atomic_write
                     head = json.dumps({"tombstones": list(self._evicted)}) + "\n" if self._evicted else ""
-                    with tmp.open("w", encoding="utf-8") as f:
-                        f.write(head + "".join(json.dumps(r, default=str) + "\n" for r in self._posts.values()))
-                        # durable before the rename: a power cut after os.replace could otherwise leave
-                        # a zero-length journal (delayed allocation) and lose every post of the run
-                        f.flush()
-                        os.fsync(f.fileno())
-                    os.replace(tmp, self.path)
+                    # durable before the rename (fsync): a power cut after os.replace could otherwise
+                    # leave a zero-length journal (delayed allocation) and lose every post of the run
+                    atomic_write(self.path, head + "".join(json.dumps(r, default=str) + "\n"
+                                                           for r in self._posts.values()), fsync=True)
                     self._lines = len(self._posts)
         except OSError:
             pass  # the in-memory bridge still works; persistence is best effort

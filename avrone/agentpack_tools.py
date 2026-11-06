@@ -66,9 +66,8 @@ async def t_agent_pack_export(ctx: "AgentContext", args: dict[str, Any]) -> str:
     out_dir = agentpack.pack_dir(data)
     out_dir.mkdir(parents=True, exist_ok=True)
     name = f"{aid}-{man['created']}.tar.gz"
-    tmp = out_dir / f".{name}.{os.getpid()}.tmp"
-    tmp.write_bytes(bundle)
-    os.replace(tmp, out_dir / name)
+    from .safeio import atomic_write
+    atomic_write(out_dir / name, bundle)
     digest = hashlib.sha256(bundle).hexdigest()
     _audit(ctx, "agentpack.export", name=name, bytes=len(bundle), files=len(man["files"]), sha256=digest)
     return (f"packed agent {aid}: {name} ({len(bundle)} bytes, {len(man['files'])} files, "

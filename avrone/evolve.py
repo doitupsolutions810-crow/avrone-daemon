@@ -48,6 +48,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .safeio import atomic_write
 from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
@@ -415,7 +416,7 @@ async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: s
             "by": ctx.name, "ts": time.time(), "test_cmd": test_cmd, "worktree": str(wt),
             "flaky_retry": flaky, "test_tail": tail[-3000:], "duration_s": duration, "base": base_sha,
             **({"commit_error": commit_error} if commit_error else {}), **(extra_meta or {})}
-    _meta_path(ctx, pid).write_text(json.dumps(meta))
+    atomic_write(_meta_path(ctx, pid), json.dumps(meta))
     _emit(ctx, "evolve.propose", pid=pid, passed=passed, files=changed, duration_s=duration)
     return {"pid": pid, "passed": passed, "branch": branch if passed else None, "files": changed,
             "flaky_retry": flaky, "test_tail": tail, "worktree": str(wt), "duration_s": duration}
@@ -587,7 +588,7 @@ async def evolve_loop(ctx: "AgentContext", goal: str, candidates: list | None = 
         loop_meta["checkpoint"] = {"next_iteration": first + len(attempts), "elapsed_s": loop_meta["duration_s"],
                                    "test_cmd": test_cmd, "candidates": stored,
                                    "candidates_stored": stored is not None}
-        loop_path.write_text(json.dumps(loop_meta))
+        atomic_write(loop_path, json.dumps(loop_meta))  # never torn by a crash mid-save
     save()
     def halted() -> str | None:
         if _cancel_requested(ctx, loop_id):
@@ -717,7 +718,6 @@ _HISTORY_LOCK = threading.Lock()
 
 def record_history(ctx: "AgentContext", loop_meta: dict[str, Any]) -> None:
     """Append one finished loop's summary (replacing any earlier row for the same loop_id) and trim."""
-    tmp = None
     try:
         _record_history_at(_history_path(ctx), loop_meta)
     except Exception:  # noqa: BLE001 - history is best effort
@@ -725,23 +725,15 @@ def record_history(ctx: "AgentContext", loop_meta: dict[str, Any]) -> None:
 
 
 def _record_history_at(path: Path, loop_meta: dict[str, Any]) -> None:
-    tmp = None  # an error before the tmp file existed raised UnboundLocalError out of the handler
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         row = _history_row(loop_meta)
         with _HISTORY_LOCK:
             rows = [r for r in _read_history(path) if r.get("loop_id") != row["loop_id"]]
             rows = (rows + [row])[-history_cap():]
-            tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-            tmp.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
-            os.replace(tmp, path)
-            tmp = None
-    except Exception:  # noqa: BLE001 - history is best effort
-        if tmp is not None:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+            atomic_write(path, "".join(json.dumps(r) + "\n" for r in rows))
+    except Exception:  # noqa: BLE001 - history is best effort (atomic_write removes its own temp)
+        pass
 
 
 def evolve_history(ctx: "AgentContext", limit: int | None = None) -> list[dict[str, Any]]:
@@ -818,7 +810,7 @@ async def evolve_start(ctx: "AgentContext", goal: str, candidates: list | None =
                          "evolve_cancel one or wait", "loop_id": None}
     n, budget = loop_limits(max_iters, time_budget_s)
     loop_id = _new_pid(ctx)
-    _loop_path(ctx, loop_id).write_text(json.dumps(
+    atomic_write(_loop_path(ctx, loop_id), json.dumps(
         {"loop_id": loop_id, "goal": goal, "by": ctx.name, "ts": time.time(), "max_iters": n,
          "time_budget_s": budget, "status": "running", "stopped": None, "accepted": None, "iterations": [],
          "duration_s": 0.0, "mode": "background", "owner_pid": os.getpid(),
@@ -927,7 +919,7 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
                owner_pid=os.getpid(), owner_token=_PROC_TOKEN, **keep)
     for k in ("resume_hint", "interrupted_at"):
         raw.pop(k, None)
-    p.write_text(json.dumps(raw))  # "running" + our token before returning: a second resume is refused
+    atomic_write(p, json.dumps(raw))  # "running" + our token before returning: a second resume is refused
     _cancel_path(ctx, loop_id).unlink(missing_ok=True)
     _spawn_bg(ctx, goal, candidates, edits_fn, n, budget, test_cmd, loop_id,
               resume={"rows": rows, "elapsed": elapsed, "meta": keep})
@@ -946,12 +938,10 @@ def _finish_abnormally(ctx: "AgentContext", loop_id: str, status: str, stopped: 
     if not isinstance(m, dict):
         m = {"loop_id": loop_id, "iterations": []}
     m.update(status=status, stopped=stopped)
-    tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
     try:
-        tmp.write_text(json.dumps(m))
-        os.replace(tmp, p)  # atomic: a crash here never leaves the loop file torn
+        atomic_write(p, json.dumps(m))  # atomic: a crash here never leaves the loop file torn
     except OSError:
-        tmp.unlink(missing_ok=True)
+        pass
     _cancel_path(ctx, loop_id).unlink(missing_ok=True)
     record_history(ctx, m)
 
@@ -1020,9 +1010,7 @@ def reconcile_interrupted(settings) -> list[str]:
         lp.update(status="interrupted", stopped="interrupted", resume_hint=_resume_hint(lp),
                   interrupted_at=time.time())
         try:
-            tmp = f.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(lp))
-            os.replace(tmp, f)
+            atomic_write(f, json.dumps(lp))
             (d / f"{f.stem}.cancel").unlink(missing_ok=True)
         except OSError:
             continue

@@ -821,16 +821,8 @@ class FleetManager:
                 cond.notify_all()  # on failure a waiter becomes the next leader and retries
 
     def _write_registry(self, text: str) -> None:
-        tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        try:
-            tmp.write_text(text)
-            os.replace(tmp, self.path)
-        except BaseException:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
-            raise
+        from .safeio import atomic_write
+        atomic_write(self.path, text)
 
     def flush(self) -> None:
         """Write heartbeat refreshes still held back by FLEET_SAVE_DEBOUNCE_S."""
@@ -1055,21 +1047,21 @@ class FleetManager:
         p = getattr(self, "_nonce_path", None)
         if p is None:  # a bare instance (no data dir): memory-only cache
             return
-        tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        from .safeio import atomic_write, open_nofollow
         try:
-            tmp.write_text(json.dumps(self._nonces, separators=(",", ":")))
-            os.replace(tmp, p)
+            atomic_write(p, json.dumps(self._nonces, separators=(",", ":")))
             st = p.stat()
             self._nonce_sig = (st.st_mtime_ns, st.st_size)
             jp = self._journal_path()
             if jp is not None and getattr(self, "_journal_off", 0):
-                with open(jp, "r+b") as fh:  # everything in it was merged into the snapshot we wrote
-                    fh.truncate(0)
+                fd = open_nofollow(jp, os.O_RDWR)  # a symlinked journal must not truncate its target
+                try:
+                    os.ftruncate(fd, 0)  # everything in it was merged into the snapshot we wrote
+                finally:
+                    os.close(fd)
             self._journal_off, self._journal_lines = 0, 0
         except OSError as e:
             log.debug("could not persist replay cache: %s", e)
-            with contextlib.suppress(OSError):
-                tmp.unlink()
 
     # ------------------------------------------------------------ auth
     def verify(self, method: str, path: str, body: bytes, headers: dict[str, str]) -> None:

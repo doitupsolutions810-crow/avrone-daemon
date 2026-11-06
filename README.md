@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.74: Round 81: no state write follows a planted temp link, codex events size-capped. 5,571 tests + 19 integration
+
+- **New `avrone/safeio.py`.** `atomic_write` creates its temp file with `mkstemp` (random name, `O_CREAT|O_EXCL`, never follows a link), writes, optionally fsyncs, sets the mode a plain `open()` would give, and `os.replace`s. On failure it removes the temp and re-raises.
+- **Fixed predictable temp names.** `fleet.json`, `fleet_nonces.json`, the bridge journal (still fsynced), evolve `history.jsonl`, loop files and the boot-reconcile `.json.tmp`, agentkit's task board, and agent pack exports all used pid/thread-id temp names with `write_text()`. A symlink planted at that name had its target overwritten. All now use `atomic_write`. Evolve proposal meta and loop saves are now atomic too; before, a crash could tear them.
+- **Nonce journal truncate** opens with `O_NOFOLLOW`, so a symlinked journal no longer truncates its target.
+- **Codex event size.** Every event string runs through about ten redaction regexes on the event loop. One `tool.call` with a 20 MB `write_file` content took 10.9 s to emit, and the whole content went into the log. Strings are now clipped before redaction: `AVRONE_CODEX_FIELD_MAX_CHARS` (default 1,000,000, floor 1,024, 0 = off) for every event, and `AVRONE_CODEX_ARG_CHARS` (default 65,536) for `tool.call` args. The tool still gets the full args. A 20 MB emit now takes 0.65 s at the field cap.
+- Tests `tests/test_round81_tmp_links_and_event_size.py`: 8 tests. On v0.73, 4 fail and the 2 `safeio` tests skip (module absent). The other 2 are guards.
+
 ## v0.73: Round 80: memory store read cache, clipped unknown tool names, temp-file symlinks. 5,563 tests + 19 integration
 
 - **Memory reads are cached.** `MemoryStore._records` re-parsed all of `memory.jsonl` on every `load()`: 0.88 s at 200,000 lines, and `ctxspawn` calls it on the event loop for every spawn. Parsed records are now cached per file identity (dev, inode, size, mtime_ns), across `MemoryStore` instances, for up to `RECORDS_CACHE_FILES` (8) files. A warm load is 0.16 s. Callers get shallow copies, so mutating a result never changes the cache. Saves, rewrites and hand edits change the identity and force a re-parse.

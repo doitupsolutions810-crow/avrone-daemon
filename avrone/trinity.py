@@ -40,7 +40,7 @@ from typing import Any
 from . import agentfs, memstore
 from . import bridge as bridgemod
 from .checkpoint import Checkpoint
-from .codex import Codex
+from .codex import Codex, clip_strings, codex_arg_chars
 from .config import Settings
 from .ctxspawn import RECENT_CALLS
 from .governor import Governor
@@ -838,7 +838,7 @@ class TrinityCore:
                         step: int, budget: dict[str, int]) -> tuple[str, str]:
         """Run one pre-checked call, logged as tool.call/tool.result. Never raises."""
         tool, args = call["tool"], call["args"]
-        self.codex.emit(run_id, "tool.call", name, tool=tool, args=args, step=step)
+        self.codex.emit(run_id, "tool.call", name, tool=tool, args=clip_strings(args, codex_arg_chars()), step=step)
         if call["error"] is not None:
             out = call["error"]
         else:

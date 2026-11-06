@@ -453,9 +453,8 @@ async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
     elif op != "list":
         return "ERROR: op must be add, update or list"
     if op != "list":
-        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(board, indent=1))
-        os.replace(tmp, p)  # atomic: a crash never leaves a half-written board
+        from .safeio import atomic_write  # random temp name: a planted .board.<pid>.tmp link is never followed
+        atomic_write(p, json.dumps(board, indent=1))  # atomic: a crash never leaves a half-written board
     if op != "list":
         _emit(ctx, "task.board", op=op, board=board[-10:])
     return "\n".join(f"#{t['id']} [{t.get('status', '?')}] {t.get('title', '')} (owner {t.get('owner', '?')})"

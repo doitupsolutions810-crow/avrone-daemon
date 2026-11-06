@@ -40,12 +40,31 @@ def verify_receipt(secret: str, receipt: dict[str, Any]) -> bool:
         "receipt_id", "event_digest", "stored_at", "duplicate", "signature"
     }:
         return False
+    receipt_id = receipt.get("receipt_id")
+    digest = receipt.get("event_digest")
+    stored_at = receipt.get("stored_at")
+    duplicate = receipt.get("duplicate")
     signature = receipt.get("signature")
-    if not isinstance(signature, str) or len(signature) != 64:
+    if not isinstance(receipt_id, str):
+        return False
+    try:
+        if str(uuid.UUID(receipt_id)) != receipt_id:
+            return False
+    except (ValueError, AttributeError):
+        return False
+    if (not isinstance(digest, str) or len(digest) != 64
+            or any(c not in "0123456789abcdef" for c in digest)
+            or not isinstance(stored_at, int) or isinstance(stored_at, bool) or stored_at < 0
+            or not isinstance(duplicate, bool)
+            or not isinstance(signature, str) or len(signature) != 64
+            or any(c not in "0123456789abcdef" for c in signature)):
         return False
     unsigned = {k: v for k, v in receipt.items() if k != "signature"}
-    expected = hmac.new(secret.encode(), canonical(unsigned), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    try:
+        expected = hmac.new(secret.encode(), canonical(unsigned), hashlib.sha256).hexdigest()
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return hmac.compare_digest(signature, expected)
 
 
 class EvidenceStore:
@@ -148,6 +167,11 @@ def _strict_json(raw: bytes) -> Any:
     return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=bad_constant)
 
 
+def _single_header(request: Request, name: str) -> str:
+    values = request.headers.getlist(name)
+    return values[0] if len(values) == 1 else ""
+
+
 def _config():
     secret = os.environ.get("AVRONE_EVIDENCE_HMAC_SECRET", "")
     receipt_secret = os.environ.get("AVRONE_EVIDENCE_RECEIPT_SECRET", "")
@@ -160,10 +184,10 @@ def _config():
 
 async def ingest_evidence(request: Request):
     secret, receipt_secret, db_path = _config()
-    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    media_type = _single_header(request, "content-type").split(";", 1)[0].strip().lower()
     if media_type != "application/json":
         raise HTTPException(415, "evidence content type must be application/json")
-    content_length = request.headers.get("content-length")
+    content_length = _single_header(request, "content-length")
     if content_length:
         if not content_length.isascii() or not content_length.isdecimal() or len(content_length) > 12:
             raise HTTPException(400, "invalid content length")
@@ -176,9 +200,11 @@ async def ingest_evidence(request: Request):
             raise HTTPException(413, "evidence event too large")
         chunks.append(chunk)
     raw = b"".join(chunks)
-    timestamp = request.headers.get("x-avrone-evidence-timestamp", "")
-    nonce = request.headers.get("x-avrone-evidence-nonce", "")
-    signature = request.headers.get("x-avrone-evidence-signature", "")
+    if content_length and int(content_length) != size:
+        raise HTTPException(400, "content length does not match received body")
+    timestamp = _single_header(request, "x-avrone-evidence-timestamp")
+    nonce = _single_header(request, "x-avrone-evidence-nonce")
+    signature = _single_header(request, "x-avrone-evidence-signature")
     if (not timestamp.isascii() or not timestamp.isdecimal() or len(timestamp) > 12
             or not nonce.isascii() or not nonce.isalnum() or not 16 <= len(nonce) <= 64
             or len(signature) != 64):
@@ -205,7 +231,7 @@ async def ingest_evidence(request: Request):
         raise HTTPException(409, "replayed nonce or invalid evidence")
     except KeyError:
         raise HTTPException(409, "evidence identity conflict")
-    except sqlite3.Error:
+    except (sqlite3.Error, OSError):
         raise HTTPException(503, "evidence storage unavailable")
     return JSONResponse({"accepted": True, "duplicate": duplicate, "receipt": receipt},
                         status_code=200 if duplicate else 201)

@@ -88,23 +88,33 @@ def _iter_events(log_dir: Path, since: float, max_files: int = 200):
         return
     found.sort(key=lambda mp: mp[0], reverse=True)
     limit = max_file_bytes()
+    from .codex import archives_of
     for m, p in found[:max(1, int(max_files))]:
         if m < since:
             continue
-        text = _read_tail(p, limit)
-        if text is None:
+        yield from _events_in(p, since, limit)
+        for a in archives_of(p):  # round 73: a rotation moved the window's older events here
+            am = _mtime(a)
+            if am is None or am < since:
+                break
+            yield from _events_in(a, since, limit)
+
+
+def _events_in(p: Path, since: float, limit: int):
+    text = _read_tail(p, limit)
+    if text is None:
+        return
+    for line in text.splitlines():
+        try:
+            ev = json.loads(line)
+        except (ValueError, RecursionError):  # JSONDecodeError, huge ints, deep nesting
             continue
-        for line in text.splitlines():
-            try:
-                ev = json.loads(line)
-            except (ValueError, RecursionError):  # JSONDecodeError, huge ints, deep nesting
-                continue
-            if not isinstance(ev, dict):
-                continue
-            ts = _finite(ev.get("ts"), 0.0)
-            if ts >= since:
-                ev["ts"] = ts
-                yield ev
+        if not isinstance(ev, dict):
+            continue
+        ts = _finite(ev.get("ts"), 0.0)
+        if ts >= since:
+            ev["ts"] = ts
+            yield ev
 
 
 def _key(v: Any) -> str | None:

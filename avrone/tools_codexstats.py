@@ -72,19 +72,37 @@ def _log_path(ctx: "AgentContext") -> Path | None:
     return p
 
 
-def _read_tail(p: Path) -> tuple[list[dict[str, Any]], bool]:
-    """Parsed events from at most the last CODEX_STATS_MAX_BYTES of the log; (events, truncated)."""
+def _tail_bytes(p: Path, budget: int) -> tuple[bytes, bool]:
+    """The last `budget` bytes of one file (no symlinks); (bytes, more_before)."""
     try:
         fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
-        return [], False
+        return b"", False
     with os.fdopen(fd, "rb") as f:
         size = os.fstat(f.fileno()).st_size
-        truncated = size > CODEX_STATS_MAX_BYTES
-        if truncated:
-            f.seek(size - CODEX_STATS_MAX_BYTES)
-        raw = f.read(CODEX_STATS_MAX_BYTES)
-    lines = raw.decode("utf-8", errors="replace").splitlines()
+        more = size > budget
+        if more:
+            f.seek(size - budget)
+        return f.read(budget), more
+
+
+def _read_tail(p: Path) -> tuple[list[dict[str, Any]], bool]:
+    """Parsed events from at most the last CODEX_STATS_MAX_BYTES of the run's log, reading back
+    into rotated archives when the active file is short (round 73: right after a rotation the
+    active log held a handful of events and codex_stats reported the run as nearly empty)."""
+    from .codex import log_chain
+    chunks: list[bytes] = []
+    budget = CODEX_STATS_MAX_BYTES
+    truncated = False
+    chain = log_chain(p)
+    for i, src in enumerate(chain):
+        raw, more = _tail_bytes(src, budget)
+        budget -= len(raw)
+        chunks.insert(0, raw if raw.endswith(b"\n") or not raw else raw + b"\n")
+        if more or (budget <= 0 and i + 1 < len(chain)):
+            truncated = True
+            break
+    lines = b"".join(chunks).decode("utf-8", errors="replace").splitlines()
     if truncated and lines:
         lines = lines[1:]  # first line is almost certainly cut mid-record
     out = []
@@ -105,7 +123,7 @@ def codex_stats(ctx: "AgentContext", scope: str = "self", kind: str = "", last: 
     p = _log_path(ctx)
     if p is None:
         raise LookupError("the codex log for this run is not available")
-    events, truncated = _read_tail(p) if p.exists() else ([], False)
+    events, truncated = _read_tail(p)
     run_id = str(ctx.run_id)
     me = str(getattr(ctx, "name", ""))
     sel = []

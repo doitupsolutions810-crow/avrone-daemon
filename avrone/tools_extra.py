@@ -933,8 +933,18 @@ def _codex_line(ev: dict[str, Any], run_id: str) -> str:
     return f"[{run_id}] {ts}Z {_line1(ev.get('kind', '?'), 80)} {_line1(ev.get('agent', '?'), 120)}{tool} {snippet}"
 
 
+def _run_stem(f: Path) -> str:
+    """The run id of a log or of one of its archives (<id>.jsonl.N)."""
+    name = f.name
+    head, _, tail = name.rpartition(".jsonl.")
+    return head if head and tail.isdigit() else f.stem
+
+
 def _line1(v: Any, n: int) -> str:
     return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", str(v))[:n]
+
+
+from .codex import log_chain  # noqa: E402
 
 
 @off_loop
@@ -963,16 +973,25 @@ async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
         f = log_dir / f"{run_id}.jsonl"
         if not f.resolve().is_relative_to(log_dir.resolve()):
             return "ERROR: invalid run_id"
-        if not f.is_file():
+        if not log_chain(f):  # round 73: a run whose active log just rotated away still exists
             return f"ERROR: run {run_id} not found"
         files = [f]
     else:
-        files = sorted(log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:max_runs]
+        stamped = []
+        for p in log_dir.glob("*.jsonl"):
+            try:  # a log can rotate or vanish between glob and stat (was an uncaught FileNotFoundError)
+                if p.is_symlink() or not p.is_file():  # a planted link read a file outside runs/
+                    continue
+                stamped.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        stamped.sort(key=lambda t: t[0], reverse=True)
+        files = [p for _, p in stamped[:max_runs]]
         if not files:
             return "No CodeX runs logged yet."
     hits: list[tuple[float, str]] = []
     scanned, capped = 0, False
-    for f in files:
+    for f in [c for run in files for c in log_chain(run)]:  # each run's archives too (round 73)
         try:
             fh = f.open(errors="replace")
         except OSError:
@@ -996,7 +1015,7 @@ async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
                     ts = float(ev.get("ts", 0))
                 except (TypeError, ValueError):
                     ts = 0.0
-                hits.append((ts, _codex_line(ev, f.stem)))
+                hits.append((ts, _codex_line(ev, _run_stem(f))))
         if capped:
             break
     if not hits:

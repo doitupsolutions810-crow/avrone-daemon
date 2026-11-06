@@ -184,6 +184,31 @@ def archive_path(p: Path, k: int) -> Path:
     return p.with_name(f"{p.name}.{k}")
 
 
+def archives_of(path: Path) -> list[Path]:
+    """Rotated archives of a log, newest first (stops at the first gap). A symlink is never an
+    archive: following one would read a planted file from outside runs/."""
+    out = []
+    for k in range(1, HARD_LOG_KEEP + 1):
+        a = archive_path(path, k)
+        try:
+            if a.is_symlink() or not a.is_file():
+                break
+        except OSError:
+            break
+        out.append(a)
+    return out
+
+
+def log_chain(path: Path) -> list[Path]:
+    """A log and its archives, newest first. The active file is left out when it is missing (just
+    rotated away, or never re-created) or is not a plain file, so readers never crash on it."""
+    try:
+        live = [path] if path.is_file() and not path.is_symlink() else []
+    except OSError:
+        live = []
+    return live + archives_of(path)
+
+
 def _whole(v: Any, default: int, cap: int) -> int:
     """A count from a caller: junk ("abc", NaN, inf, None, bool) reads as `default`; 1..cap."""
     if isinstance(v, bool):
@@ -336,17 +361,7 @@ class Codex:
             logging.getLogger("avrone.codex").warning("could not rotate %s: %s", path.name, e)
 
     def archives(self, path: Path) -> list[Path]:
-        """Rotated archives of a log, newest first (stops at the first gap)."""
-        out = []
-        for k in range(1, HARD_LOG_KEEP + 1):
-            a = archive_path(path, k)
-            try:
-                if a.is_symlink() or not a.is_file():  # never follow a planted link out of runs/
-                    break
-            except OSError:
-                break
-            out.append(a)
-        return out
+        return archives_of(path)
 
     @staticmethod
     def _append(path: Path, line: bytes) -> None:

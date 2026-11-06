@@ -20,6 +20,7 @@ person, username, email or phone number as a target.
 """
 from __future__ import annotations
 
+import itertools
 import json
 from collections import Counter
 from pathlib import Path
@@ -130,12 +131,15 @@ async def t_osint_metrics(ctx: "AgentContext", args: dict[str, Any]) -> str:
     refused = Counter()
     runs = 0
     if log_dir.exists():
+        from .codex import archives_of
         for p in log_dir.glob("*.jsonl"):
             lines = _iter_lines(p)
             if lines is None:  # vanished or not a regular file: skip it, never sink the rollup
                 continue
             runs += 1
-            for line in lines:
+            # round 73: rotated archives hold the run's older probes
+            arch = [x for a in archives_of(p) if (x := _iter_lines(a)) is not None]
+            for line in itertools.chain(*arch, lines):
                 ev = _event(line)
                 if ev is None:
                     continue

@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.66: Round 73: every codex log reader sees rotated archives. 5,481 tests + 19 integration
+
+- **Readers looked only at the active file.** After round 72's rotation, `codex_search` missed a run's older events. It also said "run not found" in the instant between the rename and the next write. `codex_stats` reported a run as nearly empty right after a rotation. The HUD telemetry window lost events that a rotation had moved, and the OSINT rollup undercounted. All of them now walk `log_chain()`: the active log, then `.jsonl.1..N`, newest first.
+- **`codex_stats`** reads back across archives within the same `CODEX_STATS_MAX_BYTES` budget and opens each file with `O_NOFOLLOW`. **Telemetry** reads an archive only while its mtime is inside the window.
+- **Listing race and planted links.** `codex_search` sorted the run listing with a bare `p.stat()`, so a log that rotated or vanished between the glob and the stat raised `FileNotFoundError`, and a dangling symlink did the same. It also opened symlinked logs found by the glob. Both are now skipped. Directories named `*.jsonl` no longer count as runs. Archive hits are labeled with the run id, not the archive file name.
+- New helpers in `avrone.codex`: `archives_of(path)` and `log_chain(path)`. A symlink is never an archive, a gap ends the chain, and a missing or non-file active log is left out.
+- Tests: `tests/test_round73_rotated_readers.py` (13 tests, 9 fail on v0.65). `test_cov8_b` now expects 1 run where it counted a directory as a second.
+
 ## v0.65: Round 72: codex event logs rotate by size. 5,468 tests + 19 integration
 
 - **Unbounded logs.** `fleet.jsonl` gains an event for every heartbeat, join, dispatch and refusal over the node's whole life. A long or looping run grows its own log until the disk is full. Logs now rotate once a write would pass `AVRONE_CODEX_LOG_MAX_BYTES` (default 64 MB, floor 4 KB, `0` turns rotation off). On rotation `<stem>.jsonl` becomes `<stem>.jsonl.1` and older archives shift up. Up to `AVRONE_CODEX_LOG_KEEP` archives are kept (default 3; `0` drops the old log). Shrinking KEEP also prunes the extra archives.

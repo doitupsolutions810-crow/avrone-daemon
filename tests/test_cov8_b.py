@@ -221,10 +221,10 @@ def test_codex_search_missing_dir_symlink_run_and_unreadable_file(env, tmp_path)
     (log_dir / "linked.jsonl").symlink_to(outside)
     assert call(env, "codex_search", run_id="linked") == "ERROR: invalid run_id"
     (log_dir / "linked.jsonl").unlink()
-    (log_dir / "adir.jsonl").mkdir()  # open() fails: skipped, not fatal
+    (log_dir / "adir.jsonl").mkdir()  # not a log file: skipped (round 73 no longer counts it as a run)
     (log_dir / "good.jsonl").write_text(json.dumps({"kind": "x", "agent": "A", "ts": 5, "data": {}}) + "\n")
     out = call(env, "codex_search", kind="x")
-    assert out.startswith("1 matching event(s) in 2 run(s)") and "[good]" in out
+    assert out.startswith("1 matching event(s) in 1 run(s)") and "[good]" in out
 
 
 def test_writable_and_disk_errors(tmp_path, monkeypatch):

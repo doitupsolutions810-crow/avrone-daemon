@@ -36,7 +36,19 @@ def _serve(directory, port):
     httpd = ThreadingHTTPServer(("127.0.0.1", port), H)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
+    httpd._smoke_thread = t
     return httpd
+
+
+def _close_server(httpd):
+    """Stop the serve loop and close the listening socket deterministically."""
+    httpd.shutdown()
+    httpd.server_close()
+    thread = getattr(httpd, "_smoke_thread", None)
+    if thread is not None:
+        thread.join(timeout=2)
+        if thread.is_alive():
+            raise RuntimeError("harmonic smoke HTTP server did not stop")
 
 
 def test_gauge_smoke_injected_index():
@@ -59,8 +71,7 @@ def test_gauge_smoke_injected_index():
         assert "setDebt" in body and "d3.arc" in body and "/api/codex/events" in body
         assert dash.inject_into_index(injected).count('id="harmonic-thermo-gauge"') == 1
     finally:
-        httpd.shutdown()
-        httpd.server_close()
+        _close_server(httpd)
 
 
 def test_gauge_smoke_missing_d3_graceful():
@@ -78,5 +89,4 @@ def test_gauge_smoke_missing_d3_graceful():
         r = httpx.get(f"http://127.0.0.1:{port}/index.html", timeout=5.0)
         assert r.status_code == 200 and 'id="harmonic-thermo-gauge"' in r.text
     finally:
-        httpd.shutdown()
-        httpd.server_close()
+        _close_server(httpd)

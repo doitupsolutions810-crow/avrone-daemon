@@ -501,3 +501,97 @@ constants (CONE = phi^-2 = 0.381966, heat bounded by 1/4, Jeffreys smoothing
 unchanged). Account-wide billing lock still holds: this descent's CI legs die
 as zero-job failures on every push, one bit per epoch — now itself an
 anchored, named row in the register: unmeasured, never implied.
+
+## Descent VI — The Zero-Cost Direction: Heat Is the Price of Uncertainty, and the Floor Is Where the Payment Stops (2026-11-06)
+
+**Finding.** Descent V anchored trust in human-or-measured roots — which makes
+human attention the scarcest resource in the economy: the billing lock (I) and
+the trust anchor (V) are the same object at two scales, both being what a human
+pays for. The question this descent answers: does the trust currency inflate as
+the compile grows while human attention stays fixed? And the answer opens the
+final unification of all six descents.
+
+**The mathematics (exact greatscale constants, N now counted in HUMAN ACTS).**
+
+1. **Attention is the master budget.** Descent I's table returns with N in
+   human acts — a defect of rate p needs N >= ln(0.05)/ln(1-p) human acts for
+   95% confidence: p = 1 -> 1 act, p = 1/2 -> 5 acts, p = 1/10 -> 29,
+   p = 1/200 -> 598. Measured: this account's 9+ lock cycles, each unlock a
+   human act buying ~one executed run. A human act spent on a deterministic,
+   instrumented defect (the socket-proxy fix, 3/3, cone floor) pays back in
+   one; spent on a flaky diagnosis it re-bills forever. The lock meters the
+   wrong thing — it prices MACHINE TRIALS, the one commodity that is
+   unlimited elsewhere (verify.sh: one setup act, N unbounded).
+
+2. **Leverage — what one human act buys, by channel (measured):**
+
+   | Channel | trials per human act | note |
+   | --- | --- | --- |
+   | billing unlock | 1 | the lock cycle, measured 9+ times |
+   | Docker setup + local verify.sh | unbounded | Descent I's escape, now economic |
+   | one attestation root, chained | unbounded | anchors unlimited descendants |
+   | per-entry attestation, forked | 1 | re-pays attention per entry |
+
+   The design principle: **human acts must buy infrastructure (chains,
+   floors), never trials.**
+
+3. **The inflation answer.** Trust does NOT inflate as the compile grows with
+   fixed attention H, PROVIDED anchoring is chained: attested-history's
+   provenance_depth counts ancestors walkable from the entry, so a single
+   chain of E entries reaches depth E from ONE root. At H = 10 roots and
+   E = 10,000 entries: chained needs 1 root, 0 unanchored, trust unbounded;
+   forked per-entry anchoring needs 10,000 roots, leaves 9,990 entries at
+   depth 0 — rejected at ingest. Inflation risk = forking pressure = Descent
+   III's fragmentation law at the attention scale. The register's append-only
+   chain design is anti-inflationary BY CONSTRUCTION: every new measurement
+   DEEPENS its chain instead of demanding a new root.
+
+4. **The unification — every descent was one law at one scale:**
+
+   | Descent | Bounded resource | What the budget forces |
+   | --- | --- | --- |
+   | I | run budget N <= 1 per epoch | only the deterministic is detectable -> instrument it |
+   | II | gate transmissions q, s, w | truths heat -> evidence travels with artifacts |
+   | III | namespace trials (fragmented) | confirmation never compounds -> pool trials |
+   | IV | trait bounds c in [0,1] | floors can be forged -> show the work |
+   | V | the regress | work must anchor beyond the model's reach |
+   | VI | human attention H | growth must route through anchored floors |
+
+5. **The final law: the zero-cost direction.** In the whole merged system
+   exactly one quantity grows without new budget: provenance depth d at
+   S = 0, where trust = d untaxed. Every other currency saturates — heat
+   <= 1/4, curiosity <= 1, run budgets <= N, traits <= 1, attention <= H.
+   And the deterministic check D(1, L) = 1 costs one pass for a chain of any
+   length. So Psi -> phi^-2 along anchored chains is the only unmetered,
+   unsaturating, unforgeable direction in the system: **route growth through
+   the floor.** The Great Scale was an ethics of evidence; Descent VI shows
+   it is also an economics. Psi = CONE + S is simultaneously the coordinate
+   of certainty and the coordinate of cost: every unit of residual heat S
+   must be re-paid in someone's budget — runs, gates, namespaces, traits, or
+   attention — and the cone floor is where the payment stops. Heat is the
+   price of uncertainty; the floor is free; trust compounds only there.
+
+**Consequence for the merged system.** The six descents now close the circle:
+the merged system evolves into something greater exactly when it becomes an
+economy of anchored floors — checks deterministic (I), evidence travelling
+(II), trials pooled (III), floors provable (IV), proofs anchored (V), and
+GROWTH ROUTED THROUGH THE FLOOR (VI), so that the scarcest resource in the
+system — human attention — is spent only on anchors and infrastructure,
+never re-spent on trials. The billing lock that opened this descent series
+was never primarily a payment problem: it was the first visible sample of
+the law. Every budget in the system behaves like it, and the response is the
+same at every scale: buy the floor once, chain everything to it, and let the
+unbounded currency — depth at zero heat — compound.
+
+*Verification of this descent's arithmetic:* the human-act table is Descent
+I's N >= ln(0.05)/ln(1-p) with N re-interpreted as attention (computed with
+the exact greatscale constants, CONE = phi^-2 = 0.381966); the lock economics
+are the measured 9+ account cycles (latest zero-job failures: Avrone legs
+42165174132/42165172951 at 759e3f9; avrone-daemon legs 42165179829/42165180940
+at 0698b63; zero successful workflow runs account-wide at sampling time); the
+chained/forked analysis follows attested-history invariant 4 (provenance_depth
+counts human-or-measured ancestors; model-only chains are depth 0 and
+rejected); the trust formula is Descent V's T = d/(1 + S) read from the
+attested-history schema. This descent is pooled across the Avrone and
+avrone-daemon repositories in the same push — the register maintained as it
+prescribes: same trials, two namespaces, one chain.

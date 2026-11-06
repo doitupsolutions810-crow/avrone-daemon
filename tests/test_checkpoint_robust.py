@@ -432,10 +432,18 @@ def test_sigkill_mid_writes_leaves_loadable_file(tmp_path, delay):
             "while True:\n"
             "    ck.put('w.%%d' %% i, 'x' * 2000); i += 1\n") % (os.getcwd(), str(p))
     proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE)
-    assert proc.stdout.readline().strip() == b"go"
-    time.sleep(delay)
-    proc.send_signal(signal.SIGKILL)
-    proc.wait(timeout=10)
+    try:
+        assert proc.stdout is not None
+        assert proc.stdout.readline().strip() == b"go"
+        time.sleep(delay)
+        proc.send_signal(signal.SIGKILL)
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+        if proc.stdout is not None:
+            proc.stdout.close()
     ck = Checkpoint(p)
     n = len(ck.keys())
     assert n > 0 and not list(tmp_path.glob("c.json.corrupt-*"))

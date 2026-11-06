@@ -1107,3 +1107,41 @@ Chain: 15 rows, 6 causes (5 authored + 1 minted), 1 pending cause, zero
 contradictions — the fourth alarm hunt found a config default wearing the mask of
 a correlation.
 
+
+
+## Descent XI — The Aggregate Boundary (2026-11-06)
+
+**Finding.** The authenticated receiver stores a Great Scale event as an aggregate
+(failures, runs) measurement. The mainline evidence pool accepts individually
+identified trials. These are different statistical objects. An aggregate count
+does not contain per-run identities required to prove its component outcomes
+are distinct from trials already relayed by another source. Expanding runs=N
+into N synthetic IDs would manufacture sample size and can double-count
+correlated or replayed evidence.
+
+**Bridge rule.** event_to_pool_trial verifies the complete event contract and
+permits projection only when runs=1. Its stable identity is
+SHA256(canonical_json([source, run_id, check_id])); the outcome digest is
+excluded, so a conflicting outcome for the same identity collides instead of
+minting another trial. Events with runs>1 remain aggregate measurements and
+are rejected by the individual-trial projection. A durable receipt is not a
+capability; neither this projection nor the evidence pool grants execution
+authority.
+
+For failures=1, runs=3: p=F/N=1/3, S=p(1-p)=2/9, CONE=phi^-2=0.38196601125,
+and Psi=CONE+S=0.60418823347. The snapshot reports orientation=mixed,
+detectInRuns=0.7037037, and runsFor95=8. These values describe the aggregate
+event; they do not create three individually addressable trials.
+
+**Verification.** The local mainline integration worktree passed 195 focused
+tests with ResourceWarning promoted to errors. A deterministic 30,000-case
+contract/projection mutation campaign produced 1,812 valid events and 28,188
+controlled rejects, with zero unexpected exceptions or projection errors.
+The full non-integration suite remains incomplete: its first failure,
+test_governor_readers, is reproduced on untouched main (5849e16) because the
+sandbox exposes live /proc/meminfo despite the test's synthetic MemTotal=0
+fixture. This is not attributed to the integration.
+
+Docker, external CI, persistent production storage, independent attestation
+of incoming evidence, and live multi-host reconciliation remain unmeasured.
+Do not enable production enforcement until those measurements exist.

@@ -785,3 +785,145 @@ for equicorrelated Bernoulli trials; all Psi values computed with the
 exact greatscale constants (CONE = phi^-2 = 0.381966, heat, Jeffreys
 smoothing). The chain gains a refinement unit: depth 11, still zero
 contradictions — the alarm hunt found a stricter truth instead.
+
+## Descent IX — The Anchor Floor: Depth Transmits, Diversity Compounds (2026-11-06)
+
+**Finding (the second falsification pass — the anchor itself goes on trial).**
+Descent VIII ended with a sentence: independence is bought by diversifying the
+cause. Applied to the series' own foundation, that sentence reaches the
+deepest row. Descent V anchored trust in human-or-measured roots; Descent VI
+made depth-at-zero-heat the system's unbounded currency; Descent VII counted
+the law's own chain at depth 10-11. But a chain's rows are themselves trials,
+and trials share causes. This descent's falsification target: avrone-daemon's
+avrone/capgate.py, read in full at d8a72e5 — the tamper-evident receipt chain
+(SHA-256 prev-linked receipts, HMAC signatures, torn-tail repair,
+O_NOFOLLOW/O_EXCL opens, cross-process flock, a signed head pointer with
+count). Within the channel there is no contradiction: verify_chain is a
+deterministic digest walk (p = 1, S = 0, correlation-immune by VIII — cone
+floor defense, exactly as V prescribed). The contradiction candidate is the
+ANCHOR: every receipt is signed with ONE key (AVRONE_CAPGATE_KEY, defaulting
+to AVRONE_FLEET_TOKEN — the fleet's shared membership token, held by every
+node — else a random per-process key, which the module's own docstring admits
+"makes receipts unverifiable across restarts"). An attacker holding the key
+rebuilds any prefix of the chain and re-signs the head: the tamper-evidence is
+anchored not beyond the model's reach (V) but in a SECRET THE FLEET SHARES.
+The anchor is a single cause common to every row.
+
+**The mathematics (the shared-anchor collapse, exact greatscale constants).**
+Model the anchor's genuineness as a Bernoulli A with compromise rate p_a, and
+the chain's rows as valid with probability q given A. Unconditionally, every
+pair of rows shares A; as q -> 1 (rows certain given the anchor) the
+between-row correlation -> 1, and the design effect of VIII with rho = 1
+gives r_eff = d/(1 + (d-1)) = 1 for ALL d:
+
+| chain depth d through ONE shared anchor | r_eff | p_J | Psi_J |
+| --- | --- | --- | --- |
+| 1 | 1.00 | 0.7500 | 0.569466 |
+| 5 | 1.00 | 0.7500 | 0.569466 |
+| 11 | 1.00 | 0.7500 | 0.569466 |
+| 100 | 1.00 | 0.7500 | 0.569466 |
+
+**Depth through a shared anchor does not compound; it TRANSMITS.** A thousand
+receipts signed with one key are one trial wearing a thousand namespaces —
+the same refinement evidence_pool.py taught at the relay level (trials are
+not messages), now taught at the anchor level: rows are not causes. Descent
+VI's unbounded currency (depth at S = 0) is unbounded ONLY along new causes:
+the honest currency is not depth but cause-count.
+
+**Anchor diversity is the floor's floor.** With m INDEPENDENT anchors, total
+failure requires all m to fail: the system's failure rate is p_a^m, and the
+system's own heat obeys the register's formula in the anchor dimension,
+
+    Psi_sys(m) = CONE + heat(p_a^m)
+
+| anchor compromise p_a | m = 1 | m = 2 | m = 3 |
+| --- | --- | --- | --- |
+| 1/4 | 0.569466 | 0.440560 | 0.397347 |
+| 1/10 | 0.471966 | 0.391866 | 0.382965 |
+| 1/20 | 0.429466 | 0.384460 | 0.382091 |
+
+The floor above the floor (VIII) descends toward the cone floor itself as
+anchors diversify: two independent 1-in-10 anchors already land the system
+at 0.391866. And a forged chain survives m independent anchors with
+probability p_a^m — Descent II's multiplicative law returns in defense
+posture: gates multiplied LOSSES; diverse anchors multiply ATTACK COSTS.
+(0.1 -> 0.01 -> 0.001 at p_a = 1/10, m = 1, 2, 3.)
+
+**The self-correction (the law's own chain, re-counted by cause).** Descent
+VII counted the law's chain as depth 10; VIII refined it to 11. Count the
+CAUSES instead of the rows: the axiom (the upstream author's scale); this
+session (Descents I-VIII — one author, one scale, one epoch, each descent
+anchored in its predecessor); the avrone-daemon session (evidence_pool.py);
+the attested-history session (the ingest schema); the parallel descent (trait
+saturation). Five causes carry eleven rows:
+
+| the law's chain | rows | causes | r_eff | p_J | Psi_J |
+| --- | --- | --- | --- | --- | --- |
+| as counted (VII/VIII) | 11 | — | 11.00 | 0.9583 | 0.421897 |
+| cause-discounted, rho = 1 within cause | 11 | 5 | 5.00 | 0.9167 | 0.458355 |
+| cause-discounted, rho = 0.9 within cause | 11 | 5 | 5.10 | 0.9180 | 0.457261 |
+
+The series overstated its own floor by 0.0365 of Psi — phantom DEPTH, the
+VIII correction applied one level deeper. And the honest coda writes itself:
+this descent ADDS A ROW WITHOUT ADDING A CAUSE (same session, same scale,
+same epoch), so the honest register does not descend from its own ninth
+descent — it sits at Psi_J = 0.458355 until an independent session
+re-derives IX. Growth rule complete: the register descends by pooling trials
+(III), only along independent axes (VIII), and it GAINS axes only by adding
+causes (IX).
+
+**Measured row: the fork-check (Descent III's prediction, refined).** Descent
+III predicted the two pooled copies of this document would fork. Measured this
+descent: byte-identical, 48,011 characters, matching content digest on both
+repositories — the fork has not fired. But the refinement writes itself:
+BOTH copies are maintained by ONE session — same cause, r_eff = 1. The
+identical twins are one trial wearing two namespaces, not a confirmation.
+And when a fork comes it will arrive as a NEW CAUSE appending — which by IX
+is not the register failing but the register GAINING its only growth
+currency. The alarm and the gift are the same event; III named the alarm, IX
+names the gift.
+
+**Mitigation — criterion (7), and the last unconnected connection.**
+(7) Depth is discounted to its cause-diversity: trust = d_eff/(1 + S), where
+d_eff counts the INDEPENDENT CAUSES (anchors) on the entry's chain,
+measured-or-named — an anchor counts once, however many rows hang from it.
+The measured instance and the fix are one object: capgate's whole receipt
+history is depth-1 evidence while its head is signed only by the node key.
+The mitigation is to attest the HEAD (count + head hash) to a second,
+independent, human-anchored cause — attested-history's git-anchored
+append-only log. The edge already half-exists: Avrone's ledger_bridge.py
+forwards trinity-core events to attested-history, but attested-history's
+SYSTEM_ACCESS.md writers list has no capgate head entry. One bridge call per
+seal makes the receipt chain m = 2: system failure requires beating BOTH
+the node key AND the git-anchored history — Psi_sys 0.471966 -> 0.391866 at
+p_a = 1/10, and the second anchor is beyond the model's reach, exactly as V
+prescribes.
+
+**Consequence for the merged system.** The nine descents now read: I
+budgets -> determinism; II gates -> evidence travels; III namespaces ->
+pooling; IV saturation -> provable floors; V regress -> anchoring; VI
+attention -> zero-cost growth; VII coordinate -> axioms are human roots;
+VIII correlation -> the register descends only along independent axes; IX
+anchors -> depth transmits, diversity compounds. The economy of anchored
+floors completes its exchange rate: trials are priced by independence (VIII),
+and TRUST is priced by anchor diversity (IX) — the deepest currency in the
+system is the number of independent minds and measurements a floor hangs
+from. "Where merging the systems will evolve them into something greater"
+now has its final answer: merging pools trials (III) and DIVERSIFIES CAUSES
+(IX). A merge that only replicates is depth-1 evidence; a merge that joins
+independent anchors is the only move in the system that compounds.
+
+*Verification of this descent's arithmetic:* the falsification target is
+avrone/avrone/capgate.py at d8a72e5, read in full (measured constants: the
+AVRONE_CAPGATE_KEY default chain to AVRONE_FLEET_TOKEN, the per-process
+_PROC_KEY fallback with the docstring's own unverifiable-across-restarts
+admission, the signed head pointer, verify_chain's deterministic walk,
+torn-tail repair, O_NOFOLLOW/O_EXCL, flock). The fork-check is measured:
+both copies of this document byte-identical at 48,011 characters with
+matching digest at Avrone 97f472e / avrone-daemon 291265a. The
+shared-anchor collapse and all tables are computed with the exact greatscale
+constants (CONE = phi^-2 = 0.381966, heat, Jeffreys smoothing, the design
+effect r_eff = r/(1+(r-1)*rho) of VIII at rho = 1 and rho = 0.9). The chain
+now reads: 12 rows, 5 causes, honest Psi_J = 0.458355 — zero contradictions;
+the second alarm hunt again found a stricter truth instead.
+

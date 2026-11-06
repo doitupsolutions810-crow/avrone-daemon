@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.73: Round 80: memory store read cache, clipped unknown tool names, temp-file symlinks. 5,563 tests + 19 integration
+
+- **Memory reads are cached.** `MemoryStore._records` re-parsed all of `memory.jsonl` on every `load()`: 0.88 s at 200,000 lines, and `ctxspawn` calls it on the event loop for every spawn. Parsed records are now cached per file identity (dev, inode, size, mtime_ns), across `MemoryStore` instances, for up to `RECORDS_CACHE_FILES` (8) files. A warm load is 0.16 s. Callers get shallow copies, so mutating a result never changes the cache. Saves, rewrites and hand edits change the identity and force a re-parse.
+- **FIFO memory file.** `read_text()` and `open("a")` blocked forever on a FIFO at `memory.jsonl`, so every memory op hung. Reads now open with `O_NONBLOCK` and treat a non-regular file as empty. Appends raise `MemoryRefused`.
+- **Over-long keys.** A hand-edited key over `MAX_KEY`, which no save can make, is dropped at read. Large values stay readable, as decided in v0.20.
+- **Unknown tool names are clipped.** A model that put a 1 MB string in `"tool"` got the whole string back in the error. It also landed in the codex `tool.call`/`tool.arg_error` events and in its next prompt as `TOOL RESULT (<1 MB>)`. `tools.clip_tool_name` caps the echo at `UNKNOWN_NAME_MAX` (120) chars plus a count, and `suggest()` skips difflib for names that long.
+- **Temp files don't follow symlinks.** The capgate head temp file (`receipts.jsonl.head.<pid>.tmp`) and the memstore rewrite temp file use predictable names, and a symlink planted there was followed and its target overwritten. Both now unlink first and create with `O_CREAT|O_EXCL|O_NOFOLLOW`.
+- Tests: `tests/test_round80_memstore_cache_and_names.py`, 9 tests. On v0.72, 6 fail and the FIFO case hangs (deselected with `-k "not fifo"`). The other 2 guard cache correctness.
+
 ## v0.72: Round 79: receipt chain under junk files, receipts off the loop, bounded spawn dir scan. 5,541 tests + 19 integration
 
 - **Receipt lines that aren't objects.** `capgate.verify_chain` raised `AttributeError` on a line that's valid JSON but not an object (`[1]`, `5`, `"x"`, `null`), and `RecursionError` on deeply nested JSON. It now returns `unreadable line` with the line number. `_last_hash` returned a junk `hash` as is (`5`, 64 non-hex chars), and the next receipt linked to it. It now takes only a 64-char hex hash.

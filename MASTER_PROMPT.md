@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.72.0)
+# AVRONE MASTER PROMPT (v0.73.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,541 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,563 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -59,6 +59,7 @@ Avrone/
 │   ├── config.py                AVRONE configuration, read from environment variables (or a .env file).
 │   ├── ctxspawn.py              Context-rich sub-agent spawning (ctxspawn).
 │   ├── doctor.py                doctor: offline, read-only preflight of a node's hosting readiness.
+│   ├── evidence_pool.py         Bounded, provenance-aware pooling for Great Scale verification trials.
 │   ├── evolve.py                Self-evolution (v0.9): AVRONE proposes and validates changes to its OWN codebase.
 │   ├── fleet.py                 Fleet: link AVRONE servers into a network of nodes that spawn agents on each other.
 │   ├── fsunify.py               Unify the generic file tools with the per-agent filesystem.
@@ -99,7 +100,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 245 test files, offline by default
+├── tests/                  # 247 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +313,15 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.73: Round 80: memory store read cache, clipped unknown tool names, temp-file symlinks. 5,563 tests + 19 integration
+
+- **Memory reads are cached.** `MemoryStore._records` re-parsed all of `memory.jsonl` on every `load()`: 0.88 s at 200,000 lines, and `ctxspawn` calls it on the event loop for every spawn. Parsed records are now cached per file identity (dev, inode, size, mtime_ns), across `MemoryStore` instances, for up to `RECORDS_CACHE_FILES` (8) files. A warm load is 0.16 s. Callers get shallow copies, so mutating a result never changes the cache. Saves, rewrites and hand edits change the identity and force a re-parse.
+- **FIFO memory file.** `read_text()` and `open("a")` blocked forever on a FIFO at `memory.jsonl`, so every memory op hung. Reads now open with `O_NONBLOCK` and treat a non-regular file as empty. Appends raise `MemoryRefused`.
+- **Over-long keys.** A hand-edited key over `MAX_KEY`, which no save can make, is dropped at read. Large values stay readable, as decided in v0.20.
+- **Unknown tool names are clipped.** A model that put a 1 MB string in `"tool"` got the whole string back in the error. It also landed in the codex `tool.call`/`tool.arg_error` events and in its next prompt as `TOOL RESULT (<1 MB>)`. `tools.clip_tool_name` caps the echo at `UNKNOWN_NAME_MAX` (120) chars plus a count, and `suggest()` skips difflib for names that long.
+- **Temp files don't follow symlinks.** The capgate head temp file (`receipts.jsonl.head.<pid>.tmp`) and the memstore rewrite temp file use predictable names, and a symlink planted there was followed and its target overwritten. Both now unlink first and create with `O_CREAT|O_EXCL|O_NOFOLLOW`.
+- Tests: `tests/test_round80_memstore_cache_and_names.py`, 9 tests. On v0.72, 6 fail and the FIFO case hangs (deselected with `-k "not fifo"`). The other 2 guard cache correctness.
+
 ## v0.72: Round 79: receipt chain under junk files, receipts off the loop, bounded spawn dir scan. 5,541 tests + 19 integration
 
 - **Receipt lines that aren't objects.** `capgate.verify_chain` raised `AttributeError` on a line that's valid JSON but not an object (`[1]`, `5`, `"x"`, `null`), and `RecursionError` on deeply nested JSON. It now returns `unreadable line` with the line number. `_last_hash` returned a junk `hash` as is (`5`, 64 non-hex chars), and the next receipt linked to it. It now takes only a 64-char hex hash.
@@ -327,14 +337,6 @@ landed and the suite is green. End with what is still open.
 - Tests: `tests/test_round78_state_reads_and_jobs.py`, 15 tests. 12 fail on v0.70; the other 3 guard behavior that already held (valid jobs run, ordinary errors retry, a symlinked loop is not marked).
 - Note: tag `v0.71.0` (`9b69f64`) has the code and tests but not this README section, which landed in the next commit on main. The tag is not moved.
 
-## v0.70: Round 77: poisoned state files at boot. 5,510 tests + 19 integration
-
-- **Nonce expiries are clamped.** Saved expiries in `fleet_nonces.json` and its journal were trusted. An `Infinity` entry never expired, so a file holding `NONCE_CACHE_MAX` of them would refuse every fleet request forever with "replay cache full". A 400-digit integer raised `OverflowError` out of `FleetManager()`, which left the node with no fleet at all. `nonce_expiry()` now drops junk and clamps an expiry to `now + 2 * WINDOW_S` (+5 s), the newest a real nonce can have.
-- **Oversized nonce journal.** The journal was read whole into memory. Above `NONCE_JOURNAL_MAX_BYTES` (64 MB) it is now skipped, and the boot guard refuses anything signed before now.
-- **Corrupt `jobs.db`.** A "file is not a database" error raised out of `start_queue` at boot, so `fleet.start()` and the fleet's cleanup never ran. The file (with its `-wal` and `-shm` files) is now moved aside as `*.corrupt-<ts>` and the queue starts empty. A locked database (`OperationalError`) still raises.
-- **Non-object job payloads.** A payload that is valid JSON but not an object (a list or a number) failed in every handler with `AttributeError` until `max_attempts` ran out. `claim()` now marks it dead at once.
-- Tests: `tests/test_round77_boot_state_junk.py`, 8 tests. 7 fail on v0.69; the eighth is a guard that a locked file is never moved aside.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -346,4 +348,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.72.0 checked out: 5,541 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.73.0 checked out: 5,563 passed, 99% coverage. Next: round <N+1> on <angle>."

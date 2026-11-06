@@ -324,8 +324,20 @@ def _write_head(p: Path, head: str) -> None:
             count = sum(1 for ln in f if ln.strip())
     body = {"count": count, "head": head}
     tmp = hp.with_name(f"{hp.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({**body, "sig": _mac(body)}))
+    _write_new(tmp, json.dumps({**body, "sig": _mac(body)}).encode())
     os.replace(tmp, hp)
+
+
+def _write_new(tmp: Path, data: bytes) -> None:
+    """Write a temp file that is created fresh. write_text() followed a symlink planted at the
+    (pid-predictable) temp name and overwrote its target (round 80): unlink it, then O_EXCL."""
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
 
 
 def verify_chain(data_dir: str | Path) -> dict[str, Any]:

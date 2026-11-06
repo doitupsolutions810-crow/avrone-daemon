@@ -46,7 +46,7 @@ from .ctxspawn import RECENT_CALLS
 from .governor import Governor
 from .llm import LLM, LLMError
 from .sovereign import Runner
-from .tools import ToolRegistry, builtin_registry
+from .tools import ToolRegistry, builtin_registry, clip_tool_name
 
 PLANNER_PROMPT = """You are the PLANNER in AVRONE, a multi-agent system.
 Split the user's task into {n} independent angles that different agents can work
@@ -819,6 +819,8 @@ class TrinityCore:
                 args = {} if args is None else args
                 args = coerce_args(self.tools, tool, c, args)
                 problem = self.tools.check(tool, args)
+                if problem and problem[0] == "unknown_tool":
+                    tool = clip_tool_name(tool)  # never echoed whole into codex or the next prompt
             if problem and problem[0] == "bad_args" and budget["spent"] and isinstance(c, dict):
                 problem = None  # budget spent: stop nudging, let the tool handle its args
             if problem:

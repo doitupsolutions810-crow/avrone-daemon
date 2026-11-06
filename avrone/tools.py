@@ -170,6 +170,18 @@ def validate_args(schema: dict[str, dict[str, str]] | None, args: Any) -> list[s
     return problems
 
 
+UNKNOWN_NAME_MAX = 120
+
+
+def clip_tool_name(name: Any) -> str:
+    """An unknown tool name as it may be echoed back: at most UNKNOWN_NAME_MAX chars plus a count.
+    A model that put a 1 MB string in "tool" got the whole string back in the error, in the
+    codex tool.call/tool.arg_error events and in its next prompt as "TOOL RESULT (<1 MB>)",
+    every turn it repeated it (round 80)."""
+    s = str(name)
+    return s if len(s) <= UNKNOWN_NAME_MAX else f"{s[:UNKNOWN_NAME_MAX]}...(+{len(s) - UNKNOWN_NAME_MAX} chars)"
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
@@ -204,6 +216,8 @@ class ToolRegistry:
 
     def suggest(self, name: str, n: int = 3) -> list[str]:
         """Registered tool names closest to `name` (for typos like 'shel' or 'readfile')."""
+        if len(str(name)) > UNKNOWN_NAME_MAX:  # no registered name is this long; skip difflib
+            return []
         names = self.names()
         lowered = {t.lower(): t for t in names}
         hits = difflib.get_close_matches(str(name).lower(), list(lowered), n=n, cutoff=0.6)
@@ -212,7 +226,7 @@ class ToolRegistry:
     def unknown_message(self, name: str) -> str:
         close = self.suggest(name)
         hint = f" Did you mean: {', '.join(close)}?" if close else ""
-        return f"ERROR: unknown tool '{name}'.{hint} Known: {', '.join(self.names())}"
+        return f"ERROR: unknown tool '{clip_tool_name(name)}'.{hint} Known: {', '.join(self.names())}"
 
     def check(self, name: str, args: Any) -> tuple[str, str] | None:
         """Pre-call check: None if the call may run, else (reason, message for the model).

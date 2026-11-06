@@ -35,6 +35,7 @@ import json
 import math
 import os
 import re
+import stat
 import threading
 import time
 from contextlib import contextmanager
@@ -203,13 +204,19 @@ class _Oldest:
         heapq.heappush(h, (_ts(rec.get("ts", 0)), seq[key], self._uniq, key, rec))
 
 
+RECORDS_CACHE_FILES = 8
+_RECORDS_CACHE: dict[str, tuple[tuple[int, int, int, int], list[dict[str, Any]]]] = {}
+_RECORDS_GUARD = threading.Lock()
+
+
 class MemoryStore:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock_path = self.path.with_name(self.path.name + ".lock")
+        self._key = str(self.path.resolve())
         with _LOCKS_GUARD:
-            self._tlock = _LOCKS.setdefault(str(self.path.resolve()), threading.Lock())
+            self._tlock = _LOCKS.setdefault(self._key, threading.Lock())
 
     # ------------------------------------------------------------ locking / io
     @contextmanager
@@ -225,11 +232,49 @@ class MemoryStore:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
                 fh.close()
 
+    def _read_raw(self) -> tuple[tuple[int, int, int, int] | None, bytes]:
+        """(identity, bytes) of memory.jsonl, or (None, b"") when it is missing or not a regular
+        file. read_text() blocked forever on a FIFO there, so one FIFO hung every memory op."""
+        try:
+            fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        except OSError:
+            return None, b""
+        with os.fdopen(fd, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                return None, b""
+            ident = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+            with _RECORDS_GUARD:
+                hit = _RECORDS_CACHE.get(self._key)
+            if hit is not None and hit[0] == ident:
+                return ident, b""
+            return ident, fh.read()
+
     def _records(self) -> list[dict[str, Any]]:
-        if not self.path.exists():
+        """Every usable record, oldest first. Parsing is cached per file identity (dev, inode,
+        size, mtime_ns): load() re-parsed the whole file on every call, ~0.9 s at 200,000 lines,
+        and ctxspawn calls it on the event loop for every spawn (round 80). Callers get fresh
+        shallow copies, so mutating a result never touches the cache."""
+        ident, raw = self._read_raw()
+        if ident is None:
             return []
+        key = self._key
+        with _RECORDS_GUARD:
+            hit = _RECORDS_CACHE.get(key)
+        if hit is not None and hit[0] == ident:
+            return [dict(r) for r in hit[1]]
+        out = self._parse(raw)
+        with _RECORDS_GUARD:
+            _RECORDS_CACHE.pop(key, None)
+            _RECORDS_CACHE[key] = (ident, out)
+            while len(_RECORDS_CACHE) > RECORDS_CACHE_FILES:
+                _RECORDS_CACHE.pop(next(iter(_RECORDS_CACHE)))
+        return [dict(r) for r in out]
+
+    @staticmethod
+    def _parse(raw: bytes) -> list[dict[str, Any]]:
         out = []
-        for line in self.path.read_text(errors="replace").splitlines():
+        for line in raw.decode("utf-8", errors="replace").splitlines():
             if not line.strip():
                 continue
             try:
@@ -241,8 +286,8 @@ class MemoryStore:
                 # to be served as is: load() returned {"{'x': 1}": {... "value": 5}} and tools that
                 # slice or join values raised on it. Keys/values read the way merge() takes them.
                 key, value = merge_key(rec.get("key")), merge_value(rec.get("value"))
-                if not key or value is None:
-                    continue
+                if not key or value is None or len(key) > MAX_KEY:
+                    continue  # no save can make a key over MAX_KEY (round 80); big values stay readable (v0.20)
                 rec["key"], rec["value"] = key, value
                 if not isinstance(rec.get("ns"), str) or not rec["ns"]:
                     rec["ns"] = agent_namespace(rec.get("agent"))
@@ -259,6 +304,12 @@ class MemoryStore:
         return spaces
 
     def _append(self, recs: list[dict[str, Any]]) -> None:
+        try:
+            st = os.stat(self.path)
+            if not stat.S_ISREG(st.st_mode):  # a FIFO here blocked open("a") forever
+                raise MemoryRefused("memory file is not a regular file")
+        except FileNotFoundError:
+            pass
         data = "".join(json.dumps(r) + "\n" for r in recs)
         # A crash mid-append can leave a torn last line with no newline; appending straight
         # onto it would glue the new record to the torn one and lose both. Start a fresh line.
@@ -279,7 +330,12 @@ class MemoryStore:
     def _rewrite(self, spaces: dict[str, dict[str, dict[str, Any]]]) -> None:
         recs = sorted((r for ns in spaces.values() for r in ns.values()), key=lambda r: r.get("ts", 0))
         tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        with tmp.open("w") as f:
+        try:  # a symlink planted at the temp name was followed and its target overwritten (round 80)
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o666)
+        with os.fdopen(fd, "w") as f:
             f.write("".join(json.dumps(r) + "\n" for r in recs))
             f.flush()
             os.fsync(f.fileno())

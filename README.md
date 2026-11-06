@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.65: Round 72: codex event logs rotate by size. 5,468 tests + 19 integration
+
+- **Unbounded logs.** `fleet.jsonl` gains an event for every heartbeat, join, dispatch and refusal over the node's whole life. A long or looping run grows its own log until the disk is full. Logs now rotate once a write would pass `AVRONE_CODEX_LOG_MAX_BYTES` (default 64 MB, floor 4 KB, `0` turns rotation off). On rotation `<stem>.jsonl` becomes `<stem>.jsonl.1` and older archives shift up. Up to `AVRONE_CODEX_LOG_KEEP` archives are kept (default 3; `0` drops the old log). Shrinking KEEP also prunes the extra archives.
+- **Readers.** Archives don't match `*.jsonl`, so `runs()`, telemetry and OSINT still see one file per run. `replay()` reads back through the archives, newest first, only while the newer files hold fewer events than asked. Events come back in order. `runs()` takes a run's start event from its oldest archive.
+- **Edge cases.** An event bigger than the cap is still written whole. If rotation fails (an archive slot taken by a directory, a read-only dir), the event goes to the active log, so nothing is dropped. A symlinked archive is never followed. A torn tail from a crash stays isolated. 8 concurrent writers lose no events across rotations.
+- **Cost.** One extra `stat` per emit: 28 to 33 us.
+- Tests: `tests/test_round72_codex_rotation.py` (13 tests, 6 fail on v0.64).
+
 ## v0.64: Round 71: junk floods no longer fill the fleet audit log. 5,455 tests + 19 integration
 
 - **Unauthenticated audit flood.** Anyone who can reach the port can trigger a refusal before the HMAC check (no token, a malformed timestamp or nonce, a bad signature). Each one wrote a full `fleet.refused` event to the codex log, which never rotates, and sent it to every dashboard. 5,000 junk requests left 1.16 MB of identical lines, so 1M would leave about 230 MB. These refusals are now audited up to `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN` (default 60) a minute. Past that they are counted (`refused_unauth`), and one `fleet.refused.suppressed` event per window gives the count per code. `stop()` writes any pending summary. Refusals after authentication (stale, replay, allowlist, hops, capability) are still audited every time. 5,000 junk requests: 0.78 s and 1.16 MB before, 0.07 s and 14 KB after.

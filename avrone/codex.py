@@ -151,6 +151,38 @@ def replay_limit() -> int:
 
 RUNS_PROMPT_CHARS = 2000
 
+# Size-based rotation (round 72). A log never rotated: fleet.jsonl gains an event per heartbeat,
+# join, dispatch and refusal for the life of the node, and one long or looping run grew its own log
+# until the disk filled. Past AVRONE_CODEX_LOG_MAX_BYTES the active <stem>.jsonl is renamed to
+# <stem>.jsonl.1 (older archives shift up to AVRONE_CODEX_LOG_KEEP, the oldest is dropped).
+# Archives do not match *.jsonl, so run listings and telemetry still see one file per run;
+# replay() reads back into the archives when the active file holds fewer events than asked.
+DEFAULT_LOG_MAX_BYTES, HARD_LOG_MAX_BYTES = 64 * 1024 * 1024, 1 << 40
+DEFAULT_LOG_KEEP, HARD_LOG_KEEP = 3, 100
+
+
+def _env_whole(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        n = default
+    return max(lo, min(hi, n))
+
+
+def log_max_bytes() -> int:
+    """Rotate a codex log once it would pass this size (AVRONE_CODEX_LOG_MAX_BYTES; 0 = never)."""
+    n = _env_whole("AVRONE_CODEX_LOG_MAX_BYTES", DEFAULT_LOG_MAX_BYTES, 0, HARD_LOG_MAX_BYTES)
+    return n if n == 0 else max(n, 4096)
+
+
+def log_keep() -> int:
+    """Rotated archives kept per log (AVRONE_CODEX_LOG_KEEP; 0 = drop the old log on rotation)."""
+    return _env_whole("AVRONE_CODEX_LOG_KEEP", DEFAULT_LOG_KEEP, 0, HARD_LOG_KEEP)
+
+
+def archive_path(p: Path, k: int) -> Path:
+    return p.with_name(f"{p.name}.{k}")
+
 
 def _whole(v: Any, default: int, cap: int) -> int:
     """A count from a caller: junk ("abc", NaN, inf, None, bool) reads as `default`; 1..cap."""
@@ -264,7 +296,61 @@ class Codex:
         # 4 MB event cost ~1.3 s of event-loop time across 32 HUD subscribers
         ev._wire = text  # type: ignore[attr-defined]
         line = (text + "\n").encode("utf-8", errors="backslashreplace")
-        with self._write_lock, (self.log_dir / f"{log_name(run_id)}.jsonl").open("ab+") as f:
+        path = self.log_dir / f"{log_name(run_id)}.jsonl"
+        with self._write_lock:
+            cap = log_max_bytes()
+            if cap:
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    size = 0
+                if size and size + len(line) > cap:
+                    self._rotate(path)
+            self._append(path, line)
+        self.emitted += 1
+        for q in list(self._subscribers):
+            self._deliver(q, ev)
+        return ev
+
+    def _rotate(self, path: Path) -> None:
+        """<stem>.jsonl -> .jsonl.1 (older archives shift up, the oldest past log_keep() goes).
+        Any failure (an archive name taken by a directory, a read-only dir) keeps writing to the
+        active log: an audit event is never dropped for a rotation problem."""
+        keep = log_keep()
+        try:
+            if keep == 0:
+                path.unlink()
+                self.rotations = getattr(self, "rotations", 0) + 1
+                return
+            for a in [archive_path(path, keep)] + self.archives(path)[keep:]:  # keep may have shrunk
+                if a.is_file() or a.is_symlink():
+                    a.unlink()
+            for k in range(keep - 1, 0, -1):
+                a = archive_path(path, k)
+                if a.is_file() and not a.is_symlink():
+                    os.replace(a, archive_path(path, k + 1))
+            os.replace(path, archive_path(path, 1))
+            self.rotations = getattr(self, "rotations", 0) + 1
+        except OSError as e:
+            import logging
+            logging.getLogger("avrone.codex").warning("could not rotate %s: %s", path.name, e)
+
+    def archives(self, path: Path) -> list[Path]:
+        """Rotated archives of a log, newest first (stops at the first gap)."""
+        out = []
+        for k in range(1, HARD_LOG_KEEP + 1):
+            a = archive_path(path, k)
+            try:
+                if a.is_symlink() or not a.is_file():  # never follow a planted link out of runs/
+                    break
+            except OSError:
+                break
+            out.append(a)
+        return out
+
+    @staticmethod
+    def _append(path: Path, line: bytes) -> None:
+        with path.open("ab+") as f:
             # A crash mid-write leaves a last line with no newline; appending straight after it glued
             # the NEXT event onto the torn bytes, so the first event after every crash was lost too.
             # Start on a fresh line instead (only the torn event itself is lost). One write() call, so
@@ -274,10 +360,6 @@ class Codex:
             if size and os.pread(fd, 1, size - 1) != b"\n":
                 line = b"\n" + line
             f.write(line)
-        self.emitted += 1
-        for q in list(self._subscribers):
-            self._deliver(q, ev)
-        return ev
 
     @staticmethod
     def _parse_line(line: str) -> dict[str, Any] | None:
@@ -308,8 +390,10 @@ class Codex:
         stamped.sort(key=lambda t: t[0], reverse=True)
         out = []
         for _, p in stamped[:limit]:
+            arch = self.archives(p)
+            src = arch[-1] if arch else p  # after a rotation the run's start event is in the oldest archive
             try:
-                with p.open(encoding="utf-8", errors="replace") as f:
+                with src.open(encoding="utf-8", errors="replace") as f:
                     first = next(iter_lines(f), None)
                 start = self._parse_line(first) if first else None
             except OSError:
@@ -333,15 +417,21 @@ class Codex:
             return []  # is_file: a FIFO hung the replay request in open()
         from collections import deque
         n = replay_limit() if limit is None else _whole(limit, replay_limit(), HARD_REPLAY_EVENTS)
-        keep: deque[dict[str, Any]] = deque(maxlen=n)
-        total = 0
-        try:
-            with p.open(encoding="utf-8", errors="replace") as f:
-                for line in iter_lines(f):
-                    ev = self._parse_line(line) if line is not None else None
-                    if ev is not None:
-                        keep.append(ev)
-                        total += 1
-        except OSError:
-            return []
-        return list(keep)
+        out: list[dict[str, Any]] = []
+        for i, src in enumerate([p, *self.archives(p)]):
+            # newest file first; an older archive is read only while the newer ones fell short
+            keep: deque[dict[str, Any]] = deque(maxlen=n - len(out))
+            try:
+                with src.open(encoding="utf-8", errors="replace") as f:
+                    for line in iter_lines(f):
+                        ev = self._parse_line(line) if line is not None else None
+                        if ev is not None:
+                            keep.append(ev)
+            except OSError:
+                if i == 0:
+                    return []
+                break
+            out = list(keep) + out
+            if len(out) >= n:
+                break
+        return out

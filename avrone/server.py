@@ -48,6 +48,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AVRONE", version=__version__, lifespan=lifespan)
 
+from .evidence_receiver import ingest_evidence  # noqa: E402
+
+app.add_api_route("/api/evidence/events", ingest_evidence, methods=["POST"])
+
 
 from fastapi.exceptions import RequestValidationError as _RequestValidationError  # noqa: E402
 

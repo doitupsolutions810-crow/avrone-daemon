@@ -1,0 +1,19 @@
+name: heat-trim
+on:
+  push:
+    branches: ["descent/heat-weighted-trim"]
+    paths:
+      - "avrone/heat_contract.py"
+      - "avrone/heat_trim.py"
+      - "tests/test_heat_trim_edge.py"
+  workflow_dispatch:
+jobs:
+  edge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: heat-trim edge suite
+        run: python -m pytest tests/test_heat_trim_edge.py -v --tb=short

@@ -278,7 +278,8 @@ def _repair_tail(p: Path) -> str | None:
         start = size - back + cut + 1 if cut >= 0 else 0
         f.seek(start)
         torn = f.read()
-        with open(str(p) + ".torn", "ab") as t:
+        from .safeio import open_append
+        with open_append(str(p) + ".torn", "ab") as t:
             t.write(torn + b"\n")
         f.truncate(start)
         f.flush()

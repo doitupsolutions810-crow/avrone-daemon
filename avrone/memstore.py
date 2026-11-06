@@ -152,6 +152,8 @@ def merge_value(v: Any) -> str | None:
     return None
 
 
+from .safeio import NotRegularFile, open_append, open_lock
+
 class MemoryRefused(ValueError):
     """A save refused by a cap or a bad key/namespace."""
 
@@ -222,7 +224,10 @@ class MemoryStore:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         with self._tlock:
-            fh = open(self.lock_path, "a+")
+            try:
+                fh = open_lock(self.lock_path)
+            except OSError as e:  # a symlink/FIFO at memory.lock was followed (or blocked)
+                raise MemoryRefused(f"memory lock unusable: {e}") from e
             try:
                 if fcntl is not None:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
@@ -236,7 +241,7 @@ class MemoryStore:
         """(identity, bytes) of memory.jsonl, or (None, b"") when it is missing or not a regular
         file. read_text() blocked forever on a FIFO there, so one FIFO hung every memory op."""
         try:
-            fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+            fd = os.open(self.path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
         except OSError:
             return None, b""
         with os.fdopen(fd, "rb") as fh:
@@ -305,7 +310,7 @@ class MemoryStore:
 
     def _append(self, recs: list[dict[str, Any]]) -> None:
         try:
-            st = os.stat(self.path)
+            st = os.lstat(self.path)  # lstat: a symlink to a regular file passed os.stat (round 84)
             if not stat.S_ISREG(st.st_mode):  # a FIFO here blocked open("a") forever
                 raise MemoryRefused("memory file is not a regular file")
         except FileNotFoundError:
@@ -322,7 +327,11 @@ class MemoryStore:
                         data = "\n" + data
         except FileNotFoundError:
             pass
-        with self.path.open("a") as f:
+        try:
+            f = open_append(self.path, "a")
+        except NotRegularFile as e:  # a symlink here appended to its target (os.stat followed it)
+            raise MemoryRefused("memory file is not a regular file") from e
+        with f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())

@@ -1033,7 +1033,8 @@ class FleetManager:
             self._save_nonces()
             return
         try:
-            with open(jp, "ab") as fh:
+            from .safeio import open_append  # a symlinked journal no longer appends to its target
+            with open_append(jp, "ab") as fh:
                 fh.write(f"{nonce} {exp!r}\n".encode("ascii"))
                 self._journal_off = fh.tell()
             self._journal_lines = getattr(self, "_journal_lines", 0) + 1

@@ -307,6 +307,10 @@ async def t_skill_load(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------- resources
+LEDGER_READ_MAX = 16 * 1024 * 1024  # resources.jsonl is read from its newest 16 MB
+BOARD_READ_MAX = 8 * 1024 * 1024
+
+
 def _ledger(ctx: "AgentContext") -> Path:
     return _data(ctx) / "resources.jsonl"
 
@@ -314,8 +318,12 @@ def _ledger(ctx: "AgentContext") -> Path:
 def record_change(ctx: "AgentContext", action: str, target: str, ok: bool, detail: str = "") -> None:
     entry = {"ts": time.time(), "run_id": ctx.run_id, "agent": ctx.name, "action": action, "target": target,
              "ok": ok, "detail": detail[:500]}
-    with _ledger(ctx).open("a") as f:
-        f.write(json.dumps(entry) + "\n")
+    from .safeio import open_append
+    try:  # a symlink at resources.jsonl appended to its target; a FIFO blocked the tool forever
+        with open_append(_ledger(ctx), "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError as e:
+        entry["detail"] = (entry["detail"] + f" [ledger not written: {e}]")[:600]
     _emit(ctx, "env.change", **{k: v for k, v in entry.items() if k not in ("run_id", "agent")})
 
 
@@ -351,7 +359,9 @@ def _installed_before(ctx: "AgentContext", mgr: str, pkg: str) -> str | None:
     p = _ledger(ctx)
     if not p.exists():
         return None
-    for line in reversed(p.read_text().splitlines()):
+    from .safeio import read_regular
+    raw = read_regular(p, LEDGER_READ_MAX)
+    for line in reversed((raw or b"").decode("utf-8", "replace").splitlines()):
         try:
             r = json.loads(line)
         except (ValueError, RecursionError):
@@ -391,7 +401,8 @@ async def t_resources(ctx: "AgentContext", args: dict[str, Any]) -> str:
         limit = 30
     limit = max(1, min(500, limit))
     rows = []
-    for line in p.read_text(errors="replace").splitlines():
+    from .safeio import read_regular
+    for line in (read_regular(p, LEDGER_READ_MAX) or b"").decode("utf-8", "replace").splitlines():
         try:  # one torn or hand-edited line used to break the tool for good
             r = json.loads(line)
         except (ValueError, RecursionError):
@@ -423,7 +434,9 @@ def _board(ctx: "AgentContext") -> Path:
 async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = _board(ctx)
     try:
-        board: list[dict[str, Any]] = json.loads(p.read_text()) if p.exists() else []
+        from .safeio import read_regular
+        raw = read_regular(p, BOARD_READ_MAX)
+        board: list[dict[str, Any]] = json.loads(raw) if raw else []
     except (OSError, ValueError):
         board = []  # a torn/corrupt board starts fresh instead of breaking the tool for the run
     if not isinstance(board, list):

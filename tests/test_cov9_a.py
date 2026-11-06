@@ -24,7 +24,8 @@ def test_refs_capped():
 def test_load_oserror_leaves_empty(tmp_path, monkeypatch):
     b = bm.Bridge("r", tmp_path)
     b.post("a", "finding", "x")
-    monkeypatch.setattr(type(b.path), "read_text", lambda *a, **k: (_ for _ in ()).throw(OSError("eio")))
+    # round 84: the journal is read through bridge._read_journal (regular files only)
+    monkeypatch.setattr(bm, "_read_journal", lambda *a, **k: (_ for _ in ()).throw(OSError("eio")))
     assert len(bm.Bridge("r", tmp_path)) == 0
 
 

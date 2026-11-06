@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.77: Round 84: appends, locks and journal reads refuse symlinks and FIFOs. 5,592 tests + 19 integration
+
+- **New `safeio` helpers.** `open_append`, `open_lock` and `read_regular` all open with `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`. They accept regular files only; a symlink, FIFO, socket or directory raises `safeio.NotRegularFile`, and `read_regular` returns `None` for them. `read_regular(path, max_bytes)` reads only the newest whole lines when the file is too big.
+- **Bridge.** The journal append and its `.lock` followed a planted symlink. A FIFO journal made `Bridge()` block forever at boot, because `read_text`. Journal reads now go through `_read_journal`, which reads the newest 64 MB.
+- **memstore.** `_append` checked with `os.stat`, which follows links, so a symlink to a regular file passed and the record went to the link's target. It now uses `lstat` plus `open_append`. `memory.lock` goes through `open_lock`. A refusal raises `MemoryRefused`. `_read_raw` adds `O_NOFOLLOW`.
+- **agentkit.** The `resources.jsonl` ledger append followed links and blocked on a FIFO. Ledger reads (16 MB tail) and the task board read (8 MB) now use `read_regular`. A ledger that can't be written is noted in the event detail and doesn't fail the tool.
+- **Fleet and capgate.** The fleet nonce journal append and capgate's `.torn` sidecar now use `open_append`.
+- **Tests.** `tests/test_round84_append_targets.py` has 8 tests. On v0.76, 7 fail; the bridge symlink case passes and stays as a guard. `test_cov9_a::test_load_oserror_leaves_empty` now patches `bridge._read_journal`.
+- **Not changed.** `capgate_head_attest.py` (Crow's module) still appends its log with `log.open("ab")`.
+
 ## v0.76: Round 83: env-secret cache, codex run logs never follow links. 5,584 tests + 19 integration
 
 - **Env-secret cache.** `ctxspawn._env_secret_values` rebuilt the secret list from `os.environ` for every string of every CodeX event, which cost 751 µs per call with 500 variables. It is now cached against a snapshot of the environment, checked with a C-level dict compare. A variable set, changed or removed at runtime takes effect on the next call. A short redact now takes 19.5 µs.

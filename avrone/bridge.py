@@ -112,6 +112,17 @@ def _remote_ts(ts: Any) -> float:
     return ts if math.isfinite(ts) and ts > 0 else time.time()
 
 
+
+JOURNAL_READ_MAX = 64 * 1024 * 1024
+
+
+def _read_journal(path: Path) -> str:
+    """The bridge journal's text (its newest 64 MB at most). read_text() blocked forever on a FIFO
+    there (boot hung in Bridge()) and followed a planted symlink; both now read as empty."""
+    from .safeio import read_regular
+    raw = read_regular(path, JOURNAL_READ_MAX)
+    return "" if raw is None else raw.decode("utf-8", errors="replace")
+
 class BridgeError(ValueError):
     """A post refused (bad kind, empty text, unknown refs)."""
 
@@ -142,7 +153,7 @@ class Bridge:
             return
         with self._lock:
             try:
-                text = self.path.read_text(encoding="utf-8", errors="replace")
+                text = _read_journal(self.path)
             except OSError:
                 return
             self._replay(text)
@@ -214,7 +225,8 @@ class Bridge:
             yield
             return
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
-        with lock_path.open("a+b") as lock_file:
+        from .safeio import open_lock
+        with open_lock(lock_path) as lock_file:
             try:
                 import fcntl  # POSIX: Linux and macOS
             except ImportError:  # pragma: no cover - non-POSIX fallback
@@ -231,7 +243,8 @@ class Bridge:
             return
         try:
             with self._file_lock():
-                with self.path.open("a+b") as f:
+                from .safeio import open_append
+                with open_append(self.path, "a+b") as f:
                     f.seek(0, os.SEEK_END)
                     lead = b""
                     if f.tell() > 0:  # a torn last line (crash mid-write) must not swallow this post
@@ -242,7 +255,7 @@ class Bridge:
                     f.write(lead + "".join(json.dumps(r, default=str) + "\n" for r in recs).encode("utf-8"))
                 self._lines += len(recs)
                 if self._lines > 2 * self.limit:  # replay under process lock before atomic compaction
-                    self._replay(self.path.read_text(encoding="utf-8", errors="replace"))
+                    self._replay(_read_journal(self.path))
                     from .safeio import atomic_write
                     head = json.dumps({"tombstones": list(self._evicted)}) + "\n" if self._evicted else ""
                     # durable before the rename (fsync): a power cut after os.replace could otherwise
@@ -279,7 +292,7 @@ class Bridge:
                 # process's post was refused as "unknown post id". Re-read the journal and recheck.
                 try:
                     with self._file_lock():
-                        self._replay(self.path.read_text(encoding="utf-8", errors="replace"))
+                        self._replay(_read_journal(self.path))
                 except OSError:
                     pass
                 unknown = [r for r in refs_l if r not in self._posts]

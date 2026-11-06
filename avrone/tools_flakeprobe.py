@@ -6,7 +6,7 @@
         args   the args object passed unchanged (a fresh deep copy) to every run (<= 4000 chars JSON)
 
 Every output is compared with the FIRST run's. The report gives how many runs differed, the
-number of distinct outputs, per-output sha256 prefix + length, the first differing line number of
+number of distinct outputs, per-output SHA-256 digest + length, the first differing line number of
 each differing run, error/timeout counts, run timings, and the Great Scale evidence snapshot
 avrone.greatscale.evidence_snapshot(failures=differing_runs, runs=N): S = p(1 - p) is the
 outcome variance of "this tool gives the same answer twice".
@@ -47,7 +47,7 @@ FLAKE_PROBE_MAX_CHARS = 8000
 
 
 def _digest(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return hashlib.sha256(s.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
 def _first_diff_line(a: str, b: str) -> int:
@@ -118,11 +118,14 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
         except EvidenceContractError:
             event_args["run_id"] = uuid.uuid4().hex
             evidence_event = build_evidence_event(**event_args)
-    distinct: dict[str, dict[str, Any]] = {}
+    distinct: dict[tuple[str, str], dict[str, Any]] = {}
     for i, o in enumerate(outs, 1):
         did_timeout = timed_out[i - 1]
         d = "timeout" if did_timeout else _digest(o)
-        e = distinct.setdefault(d, {"digest": d, "chars": 0 if did_timeout else len(o), "runs": 0, "first_run": i})
+        # Group by the exact output, not a shortened digest. A digest collision
+        # must never collapse two distinct tool results in the report.
+        key = ("timeout", "") if did_timeout else ("output", o)
+        e = distinct.setdefault(key, {"digest": d, "chars": 0 if did_timeout else len(o), "runs": 0, "first_run": i})
         e["runs"] += 1
     diffs = [{"run": r, "first_diff_line": None
               if first_timed_out or timed_out[r - 1]
@@ -135,7 +138,7 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
         "outputs": list(distinct.values())[:FLAKE_PROBE_MAX_LISTED],
         "outputs_hidden": max(0, len(distinct) - FLAKE_PROBE_MAX_LISTED),
         "diffs": diffs, "diffs_hidden": max(0, len(differing) - FLAKE_PROBE_MAX_LISTED),
-        "errors": sum(1 for o in outs if o.startswith("ERROR")),
+        "errors": sum(1 for o in outs if o.startswith("ERROR:")),
         "timeouts": sum(timed_out),
         "ms": {"min": round(min(times) * 1000, 1), "max": round(max(times) * 1000, 1),
                "total": round(sum(times) * 1000, 1)},
@@ -170,7 +173,7 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not isinstance(targs, dict):
         return "ERROR: args must be an object (the args passed to every run)"
     try:
-        encoded = json.dumps(targs, sort_keys=True)
+        encoded = json.dumps(targs, sort_keys=True, allow_nan=False)
     except (TypeError, ValueError, RecursionError):
         return "ERROR: args must be plain JSON"
     if len(encoded) > FLAKE_PROBE_MAX_ARGS_CHARS:

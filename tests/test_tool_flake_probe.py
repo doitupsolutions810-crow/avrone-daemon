@@ -209,6 +209,68 @@ def test_timeout_marker_lookalike_is_treated_as_plain_output(env):
     assert verify_evidence_event(rep["evidence_event"]) == (True, "")
 
 
+def test_surrogate_output_is_hashed_losslessly_and_kept_distinct(env):
+    outputs = iter([chr(0xD800), "?"])
+
+    async def fake_tool(ctx, args):
+        return next(outputs)
+
+    fake(env, "codex_stats", fake_tool)
+    rep = json.loads(call(env, tool="codex_stats", runs=2, format="json"))
+    assert rep["differing_runs"] == 1
+    assert rep["distinct_outputs"] == 2
+    assert len(rep["outputs"]) == 2
+    assert all(len(item["digest"]) == 64 for item in rep["outputs"])
+    assert rep["outputs"][0]["digest"] != rep["outputs"][1]["digest"]
+
+
+def test_digest_collision_cannot_merge_distinct_tool_outputs(env, monkeypatch):
+    outputs = iter(["left", "right"])
+
+    async def fake_tool(ctx, args):
+        return next(outputs)
+
+    fake(env, "codex_stats", fake_tool)
+    monkeypatch.setattr(fp, "_digest", lambda value: "forced-collision")
+    rep = json.loads(call(env, tool="codex_stats", runs=2, format="json"))
+    assert rep["differing_runs"] == 1
+    assert rep["distinct_outputs"] == 2
+    assert [item["digest"] for item in rep["outputs"]] == ["forced-collision"] * 2
+
+
+def test_non_finite_numbers_are_rejected_before_target_dispatch(env):
+    calls = []
+
+    async def target(ctx, args):
+        calls.append(args)
+        return "ok"
+
+    fake(env, "codex_stats", target, schema={})
+    for value in (float("nan"), float("inf"), float("-inf")):
+        out = call(env, tool="codex_stats", runs=2, args={"nested": [{"value": value}]})
+        assert "args must be plain JSON" in out
+    assert calls == []
+
+
+def test_cyclic_args_are_rejected_as_non_json(env):
+    cyclic = {}
+    cyclic["self"] = cyclic
+    out = call(env, tool="great_scale", args=cyclic)
+    assert "args must be plain JSON" in out
+
+
+def test_error_count_uses_registry_error_prefix_not_plain_text(env):
+    outputs = iter(["ERRORLESS: a successful diagnostic", "ERROR: target exception"])
+
+    async def fake_tool(ctx, args):
+        return next(outputs)
+
+    fake(env, "self_scan", fake_tool)
+    rep = json.loads(call(env, tool="self_scan", runs=2, format="json"))
+    assert rep["errors"] == 1
+    assert rep["differing_runs"] == 1
+
+
 def test_errors_and_line_diff_lengths(env):
     outs = iter(["ERROR: x", "ERROR: x\nmore", "ok"])
 

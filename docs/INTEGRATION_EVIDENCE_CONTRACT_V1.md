@@ -117,3 +117,41 @@ content-integrity check, **not** a signature, an identity assertion, or
 authorization. The 95% detection projection remains conditional on independent
 comparison outcomes given the observed baseline; stateful or correlated tool
 behavior invalidates that projection.
+## Runtime transport boundary
+
+At this revision, flake_probe returns the v1 event in its tool result; it does
+not persist the event or send an HTTP request. The Fusion Bridge
+greatscale_evidence module independently builds and verifies the same
+envelope, but that contract adapter is not an ingestion service. The
+CycleKernel observation link is deliberately GET-only.
+
+The existing CognitiveBridge /events endpoint accepts a different
+EventIn shape, stores entries in process memory, and updates traits using
+its own event kinds. The AVRONE shim /blackboard endpoint is also a separate
+contract. Neither endpoint is a valid Great Scale v1 receiver. Do not forward
+v1 evidence to either legacy route: the schema would be discarded or the
+event would not be interpreted as Great Scale evidence.
+
+Consequently, this release verifies **format and independent validation**, not
+cross-repository runtime delivery. Delivery remains disabled until a dedicated
+receiver exists with all of the following controls:
+
+1. HTTPS to an operator-configured destination; credentials are environment
+   configuration, never agent-supplied arguments or event fields.
+2. Authentication checked before body processing; bounded request and response
+   sizes; bounded timeouts; redirects disabled.
+3. Strict v1 verification, duplicate-key rejection, and recomputation of the
+   Great Scale summary before acceptance.
+4. Durable append-only storage with digest-based idempotency and explicit
+   duplicate/replay handling.
+5. An authenticated receipt. The event SHA-256 digest alone is not sender
+   authentication and must never authorize capability, deployment, or secret
+   operations.
+6. A separate, explicit publishing action. flake_probe stays read-only and
+   must not acquire an implicit network side effect.
+
+The transport success criterion is an end-to-end test in which a daemon event
+is submitted to the authenticated receiver, independently verified, stored
+exactly once, and acknowledged with the same digest. Until that test runs
+against a deployed receiver with operator-supplied credentials, the runtime
+connection is **not enabled**.

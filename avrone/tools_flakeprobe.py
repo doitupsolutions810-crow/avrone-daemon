@@ -23,10 +23,13 @@ import asyncio
 import copy
 import hashlib
 import json
+import math
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from .greatscale import evidence_snapshot
+from .integration_contract import EvidenceContractError, build_evidence_event
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -41,7 +44,6 @@ FLAKE_PROBE_RUN_TIMEOUT_S = 20.0
 FLAKE_PROBE_BUDGET_S = 120.0
 FLAKE_PROBE_MAX_LISTED = 20
 FLAKE_PROBE_MAX_CHARS = 8000
-_TIMEOUT_MARK = "\x00flake_probe:timeout\x00"
 
 
 def _digest(s: str) -> str:
@@ -59,7 +61,16 @@ def _first_diff_line(a: str, b: str) -> int:
 async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args: dict[str, Any],
                       run_timeout: float = FLAKE_PROBE_RUN_TIMEOUT_S,
                       budget: float = FLAKE_PROBE_BUDGET_S) -> dict[str, Any]:
+    if isinstance(runs, bool) or not isinstance(runs, int) or not 1 <= runs <= FLAKE_PROBE_MAX_RUNS:
+        raise ValueError(f"runs must be an integer in [1, {FLAKE_PROBE_MAX_RUNS}]")
+    if (isinstance(run_timeout, bool) or not isinstance(run_timeout, (int, float))
+            or not math.isfinite(run_timeout) or not 0 < run_timeout <= FLAKE_PROBE_RUN_TIMEOUT_S):
+        raise ValueError(f"run_timeout must be finite and in (0, {FLAKE_PROBE_RUN_TIMEOUT_S}]")
+    if (isinstance(budget, bool) or not isinstance(budget, (int, float))
+            or not math.isfinite(budget) or not 0 <= budget <= FLAKE_PROBE_BUDGET_S):
+        raise ValueError(f"budget must be finite and in [0, {FLAKE_PROBE_BUDGET_S}]")
     outs: list[str] = []
+    timed_out: list[bool] = []
     times: list[float] = []
     t0 = time.monotonic()
     budget_hit = False
@@ -71,30 +82,65 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
         try:
             out = await asyncio.wait_for(reg.call(ctx, name, copy.deepcopy(args)), run_timeout)
         except asyncio.TimeoutError:
-            out = _TIMEOUT_MARK
+            out = ""
+            timed_out.append(True)
+        else:
+            timed_out.append(False)
         times.append(time.monotonic() - s)
         outs.append(out if isinstance(out, str) else str(out))
     n = len(outs)
+    # The first execution is the reference, not a comparison trial. Counting it
+    # in the Great Scale denominator would manufacture one guaranteed success.
     first = outs[0]
-    differing = [i + 1 for i, o in enumerate(outs) if o != first]
+    first_timed_out = timed_out[0]
+    differing = [i + 1 for i, (o, did_timeout) in enumerate(zip(outs, timed_out))
+                 if did_timeout != first_timed_out or o != first]
+    comparison_runs = max(0, n - 1)
+    assessment = "baseline_relative" if comparison_runs else "insufficient_samples"
+    great_scale = (evidence_snapshot(failures=len(differing), runs=comparison_runs)
+                   if comparison_runs else None)
+    evidence_event = None
+    if comparison_runs:
+        # Bind the measurement to the current daemon run when valid. Fall back
+        # to a fresh opaque identifier if a caller supplies invalid provenance.
+        raw_run_id = getattr(ctx, "run_id", None)
+        check_id = f"flake_probe:{name}:{uuid.uuid4().hex}"
+        event_args = dict(
+            source="avrone-daemon",
+            run_id=raw_run_id,
+            check_id=check_id,
+            failures=len(differing),
+            runs=comparison_runs,
+            refs=[f"tool:{name}", "measurement:first-run-baseline"],
+        )
+        try:
+            evidence_event = build_evidence_event(**event_args)
+        except EvidenceContractError:
+            event_args["run_id"] = uuid.uuid4().hex
+            evidence_event = build_evidence_event(**event_args)
     distinct: dict[str, dict[str, Any]] = {}
     for i, o in enumerate(outs, 1):
-        d = "timeout" if o == _TIMEOUT_MARK else _digest(o)
-        e = distinct.setdefault(d, {"digest": d, "chars": 0 if o == _TIMEOUT_MARK else len(o), "runs": 0, "first_run": i})
+        did_timeout = timed_out[i - 1]
+        d = "timeout" if did_timeout else _digest(o)
+        e = distinct.setdefault(d, {"digest": d, "chars": 0 if did_timeout else len(o), "runs": 0, "first_run": i})
         e["runs"] += 1
-    diffs = [{"run": r, "first_diff_line": None if _TIMEOUT_MARK in (first, outs[r - 1])
+    diffs = [{"run": r, "first_diff_line": None
+              if first_timed_out or timed_out[r - 1]
               else _first_diff_line(first, outs[r - 1])} for r in differing[:FLAKE_PROBE_MAX_LISTED]]
     return {
         "tool": name, "runs_requested": runs, "runs": n, "budget_hit": budget_hit,
+        "comparison_runs": comparison_runs, "assessment": assessment,
+        "comparison_model": "fixed_first_run_baseline",
         "differing_runs": len(differing), "distinct_outputs": len(distinct),
         "outputs": list(distinct.values())[:FLAKE_PROBE_MAX_LISTED],
         "outputs_hidden": max(0, len(distinct) - FLAKE_PROBE_MAX_LISTED),
         "diffs": diffs, "diffs_hidden": max(0, len(differing) - FLAKE_PROBE_MAX_LISTED),
         "errors": sum(1 for o in outs if o.startswith("ERROR")),
-        "timeouts": sum(1 for o in outs if o == _TIMEOUT_MARK),
+        "timeouts": sum(timed_out),
         "ms": {"min": round(min(times) * 1000, 1), "max": round(max(times) * 1000, 1),
                "total": round(sum(times) * 1000, 1)},
-        "great_scale": evidence_snapshot(failures=len(differing), runs=n),
+        "great_scale": great_scale,
+        "evidence_event": evidence_event,
     }
 
 
@@ -114,11 +160,7 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     runs = args.get("runs", 5)
     if runs is None or runs == "":
         runs = 5
-    if isinstance(runs, bool):
-        return "ERROR: runs must be an integer 1..50"
-    try:
-        runs = int(runs)
-    except (TypeError, ValueError):
+    if isinstance(runs, bool) or not isinstance(runs, int):
         return "ERROR: runs must be an integer 1..50"
     if not 1 <= runs <= FLAKE_PROBE_MAX_RUNS:
         return f"ERROR: runs must be 1..{FLAKE_PROBE_MAX_RUNS}"
@@ -150,11 +192,16 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if str(args.get("format", "text")).lower() == "json":
         return _cap(json.dumps(rep, indent=1, sort_keys=True))
     g = rep["great_scale"]
-    verdict = ("deterministic" if rep["differing_runs"] == 0 else
-               f"NONDETERMINISTIC ({rep['differing_runs']}/{rep['runs']} runs differed from run 1)")
+    if rep["assessment"] == "insufficient_samples":
+        verdict = "INSUFFICIENT EVIDENCE (one execution; no baseline comparison)"
+    elif rep["differing_runs"] == 0:
+        verdict = f"BASELINE-CONSISTENT (0/{rep['comparison_runs']} comparisons differed)"
+    else:
+        verdict = (f"BASELINE DEVIATIONS ({rep['differing_runs']}/{rep['comparison_runs']} "
+                   "comparisons differed from run 1)")
     lines = [f"flake_probe {name} x{rep['runs']}"
              + (f" (of {rep['runs_requested']}; time budget hit)" if rep["budget_hit"] else "")
-             + ": " + verdict + "  (outputs compared by digest; content never shown)",
+             + ": " + verdict + "  (finite sample; not proof of determinism; output content hidden)",
              f"distinct outputs: {rep['distinct_outputs']}  errors: {rep['errors']}  timeouts: {rep['timeouts']}  "
              f"ms min/max/total: {rep['ms']['min']}/{rep['ms']['max']}/{rep['ms']['total']}"]
     for o in rep["outputs"]:
@@ -165,10 +212,16 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
         lines.append("differing runs: " + ", ".join(
             f"#{d['run']}" + (f"@line {d['first_diff_line']}" if d["first_diff_line"] else " (timeout)")
             for d in rep["diffs"]) + (f" ...[+{rep['diffs_hidden']}]" if rep["diffs_hidden"] else ""))
-    n95 = g["runsFor95"]
-    lines.append(f"great scale: p={g['p']:.4g}  S=p(1-p)={g['S']:.4g}  Psi={g['psi']:.6f}  "
-                 f"cone floor: {'yes' if g['onConeFloor'] else 'no'}  orientation: {g['orientation']}  "
-                 f"runs for 95% detection: {'n/a' if n95 is None else n95}")
+    if g is None:
+        lines.append("great scale: not computed; at least two executions are required for one comparison")
+    else:
+        n95 = g["runsFor95"]
+        lines.append(f"great scale (baseline-relative): p={g['p']:.4g}  S=p(1-p)={g['S']:.4g}  "
+                     f"Psi={g['psi']:.6f}  cone floor: {'yes' if g['onConeFloor'] else 'no'}  "
+                     f"orientation: {g['orientation']}  comparisons for 95% detection: "
+                     f"{'n/a' if n95 is None else n95} (IID assumption)")
+    lines.append("evidence event: " + ("available (content digest; not a signature)"
+                                      if rep["evidence_event"] else "not emitted (no comparisons)"))
     return _cap("\n".join(lines))
 
 

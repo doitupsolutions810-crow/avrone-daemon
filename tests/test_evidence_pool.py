@@ -68,3 +68,34 @@ def test_normalizes_whitespace_in_identity_fields():
 
     assert result["sources"][0]["source"] == "node"
     assert result["runs"] == 1
+
+
+def test_verified_atomic_evidence_projects_into_pool_without_synthetic_trials():
+    from avrone.evidence_pool import event_to_pool_trial, pool_trials
+    from avrone.integration_contract import build_evidence_event
+
+    event = build_evidence_event(source="ci", run_id="run-1", check_id="unit", failures=0, runs=1)
+    trial = event_to_pool_trial(event)
+    assert trial == event_to_pool_trial(dict(event))
+    assert trial["source"] == "ci" and trial["failed"] is False
+    report = pool_trials([trial])
+    assert report["runs"] == 1 and report["failures"] == 0
+
+
+def test_aggregate_evidence_is_not_fabricated_into_independent_trials():
+    import pytest
+    from avrone.evidence_pool import event_to_pool_trial
+    from avrone.integration_contract import build_evidence_event
+
+    event = build_evidence_event(source="ci", run_id="run-aggregate", check_id="unit", failures=1, runs=3)
+    with pytest.raises(ValueError, match="aggregate evidence"):
+        event_to_pool_trial(event)
+
+
+def test_conflicting_outcome_for_same_identity_keeps_same_trial_id():
+    from avrone.evidence_pool import event_to_pool_trial
+    from avrone.integration_contract import build_evidence_event
+
+    passed = build_evidence_event(source="ci", run_id="same-run", check_id="unit", failures=0, runs=1)
+    failed = build_evidence_event(source="ci", run_id="same-run", check_id="unit", failures=1, runs=1)
+    assert event_to_pool_trial(passed)["trial_id"] == event_to_pool_trial(failed)["trial_id"]

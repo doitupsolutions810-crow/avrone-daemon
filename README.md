@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.75: Round 82: redaction skips rules whose literals are absent. 5,578 tests + 19 integration
+
+- **Before:** every CodeX event string went through all 11 redaction rules on the event loop: 10 regex passes plus the key/value tokeniser. That cost about 0.9 s per MB of plain text, so the 1,000,000-char field cap from round 81 still allowed a near-second stall.
+- **Now:** `ctxspawn.redact` gates each rule on the literals it needs (`PRIVATE KEY-----`, `sk-`/`pk-`/`rk-`, `ghp_`…, `xox`, `AKIA`, `AIza`, `eyJ` + `.`, `://` + `@`). For the case-insensitive rules (authorization headers, bearer, key=value secret words) it checks case-folded text. Folding matches `re.IGNORECASE`: `str.lower()` plus U+0130/U+0131 → i, U+017F → s, U+212A → k. Those are the only non-ASCII code points `(?i)` matches against ASCII letters (exhaustive scan of all code points).
+- **Speed:** 1 MB of plain text went from 0.91 s to 0.011 s. 1 MB of prose with URLs went from 0.22 s to 0.011 s.
+- **Output unchanged:** byte-identical to running every rule. A differential fuzz over 140,000 random secret-fragment strings found 0 diffs. `secret_scan` still uses the same `_PATTERNS`.
+- **Tests:** `tests/test_round82_redact_gates.py`, 7 tests. On v0.74, 2 fail (the fold table and the speed test). The other 5 are equivalence guards and pass on both versions.
+
 ## v0.74: Round 81: no state write follows a planted temp link, codex events size-capped. 5,571 tests + 19 integration
 
 - **New `avrone/safeio.py`.** `atomic_write` creates its temp file with `mkstemp` (random name, `O_CREAT|O_EXCL`, never follows a link), writes, optionally fsyncs, sets the mode a plain `open()` would give, and `os.replace`s. On failure it removes the temp and re-raises.

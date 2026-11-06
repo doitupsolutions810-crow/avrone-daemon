@@ -154,9 +154,61 @@ def redact(text: Any) -> str:
             s = s.replace(v, REDACTED)
     except Exception:  # noqa: BLE001
         pass
-    for pat, rep in _PATTERNS:
-        s = pat.sub(rep, s)  # type: ignore[arg-type]
+    low: str | None = None
+    for i, (pat, rep) in enumerate(_PATTERNS):
+        anyof = _ANY_GATES.get(i)
+        if anyof is not None and not any(w in s for w in anyof):
+            continue
+        gate = _GATES[i] if i < len(_GATES) else None
+        if gate is not None:
+            need, words = gate
+            if need and not all(w in s for w in need):
+                continue
+            if words:
+                if low is None:
+                    low = _fold(s)
+                if not any(w in low for w in words):
+                    continue
+        t = pat.sub(rep, s)  # type: ignore[arg-type]
+        if t is not s and t != s:
+            s, low = t, None
     return s
+
+
+# Literal gates (round 82). Every CodeX event string runs every rule on the event loop; ten full
+# regex passes cost ~0.55 s per MB. Each rule can only match text that holds certain literals, and
+# `in` is a C memchr-speed scan, so a rule whose literals are absent is skipped. `need`: all of these
+# must be present (case-sensitive); `words`: at least one must be present in the case-folded text.
+# Folding matches re.IGNORECASE: besides str.lower(), U+0130/U+0131 fold to i, U+017F to s and
+# U+212A to k (the only non-ASCII code points re's (?i) matches against ASCII letters).
+_FOLD_MAP = str.maketrans({"\u0130": "i", "\u0131": "i", "\u017f": "s", "\u212a": "k"})
+_FOLD_CHARS = ("\u0130", "\u0131", "\u017f", "\u212a")
+
+
+def _fold(s: str) -> str:
+    if any(c in s for c in _FOLD_CHARS):
+        s = s.translate(_FOLD_MAP)
+    return s.lower()
+
+
+_ANY_GATES: dict[int, tuple[str, ...]] = {
+    4: ("sk-", "pk-", "rk-"),
+    5: ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
+}
+_KV_WORDS = ("token", "secret", "passw", "api", "private", "access", "_key", "credential")
+_GATES: list[tuple[tuple[str, ...], tuple[str, ...]] | None] = [
+    (("PRIVATE KEY-----",), ()),
+    ((), ("authorization", "x-api-key", "x-admin-token")),
+    ((), ("bearer",)),
+    ((), _KV_WORDS),  # _redact_kv: the key must hold a secret word (and is followed by : or =)
+    None,  # sk-/pk-/rk-: any-of, case-sensitive: checked in _any_gate
+    None,  # gh?_ / github_pat_: same
+    (("xox",), ()),
+    (("AKIA",), ()),
+    (("AIza",), ()),
+    (("eyJ", "."), ()),
+    (("://", "@"), ()),
+]
 
 
 # --------------------------------------------------------------------------- pack

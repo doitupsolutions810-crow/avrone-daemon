@@ -5,7 +5,9 @@ on:
     paths:
       - "avrone/heat_contract.py"
       - "avrone/heat_trim.py"
-      - "tests/test_heat_trim_edge.py"
+      - "avrone/bridge-heat.py"
+      - "avrone/fleet-heat.py"
+      - "avrone-a12lr/tests/test_heat_trim.py"
   workflow_dispatch:
 jobs:
   edge:
@@ -15,5 +17,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: stub-size gate
+        run: |
+          python - <<'PY'
+          import os
+          for p in ["avrone/bridge.py", "avrone/fleet.py"]:
+              sz = os.path.getsize(p) if os.path.exists(p) else 0
+              print(f"{p}: {sz} bytes")
+              assert sz > 1024, f"{p} is a stub ({sz} bytes)"
+          PY
       - name: heat-trim edge suite
-        run: python -m pytest tests/test_heat_trim_edge.py -v --tb=short
+        run: python -m pytest avrone-a12lr/tests/test_heat_trim.py -v --tb=short

@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import sqlite3
 import threading
 import time
@@ -104,12 +105,16 @@ class JobQueue:
             lease = 900.0
         # a zero, negative or NaN lease made every running job instantly reclaimable (double runs)
         self.lease_s = lease if math.isfinite(lease) and lease >= 1 else 900.0
-        self._db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
-        # Several JobQueue instances (processes) may share one file: wait for the write lock
-        # instead of failing with "database is locked".
-        self._db.execute("PRAGMA busy_timeout=10000")
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.executescript(SCHEMA)
+        try:
+            self._open()
+        except sqlite3.DatabaseError as e:
+            # "file is not a database" / "malformed": raised out of start_queue at boot, which
+            # skipped fleet.start() and the fleet's cleanup (round 77). Move it aside, start fresh.
+            # A locked file (OperationalError) is not corruption and still raises.
+            if isinstance(e, sqlite3.OperationalError):
+                raise
+            self._set_aside(e)
+            self._open()
         cols = {r[1] for r in self._db.execute("PRAGMA table_info(jobs)").fetchall()}
         if "token" not in cols:  # migrate a pre-round-29 file in place
             try:
@@ -124,6 +129,30 @@ class JobQueue:
         self._tlock = threading.Lock()
         self._closed = False
         self._enqueued = 0
+
+    def _open(self) -> None:
+        self._db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
+        try:
+            # Several JobQueue instances (processes) may share one file: wait for the write lock
+            # instead of failing with "database is locked".
+            self._db.execute("PRAGMA busy_timeout=10000")
+            self._db.execute("PRAGMA journal_mode=WAL")
+            self._db.executescript(SCHEMA)
+        except BaseException:
+            self._db.close()
+            raise
+
+    def _set_aside(self, err: BaseException) -> None:
+        stamp = f"corrupt-{int(time.time())}"
+        for suffix in ("", "-wal", "-shm"):
+            src = Path(str(self.path) + suffix)
+            if src.exists():
+                try:
+                    os.replace(src, Path(f"{self.path}{suffix}.{stamp}"))
+                except OSError:
+                    pass
+        log.warning("job queue %s was unreadable (%s); moved aside as *.%s, starting empty",
+                    self.path.name, err, stamp)
 
     def _txn(self, fn: Callable[[], Any]) -> Any:
         """Run fn inside BEGIN IMMEDIATE ... COMMIT: the write lock is taken BEFORE the read, so a
@@ -214,10 +243,17 @@ class JobQueue:
                     return None
                 try:
                     payload = json.loads(row[2]) if row[2] is not None else {}
-                except (TypeError, ValueError) as e:
+                except (TypeError, ValueError, RecursionError) as e:
                     # used to raise out of claim() after COMMIT and kill the Worker loop for good
                     self._db.execute("UPDATE jobs SET status='dead', error=?, updated=? WHERE id=?",
                                      (_err_text(f"corrupt payload: {e}"), now, row[0]))
+                    continue
+                if not isinstance(payload, dict):
+                    # a list/number payload (hand edit, another writer) failed in every handler
+                    # with AttributeError, retried max_attempts times; it can never run
+                    self._db.execute("UPDATE jobs SET status='dead', error=?, updated=? WHERE id=?",
+                                     (_err_text(f"corrupt payload: not an object ({type(payload).__name__})"),
+                                      now, row[0]))
                     continue
                 token = uuid.uuid4().hex
                 self._db.execute("UPDATE jobs SET status='running', attempts=attempts+1, lease_until=?, updated=?, "

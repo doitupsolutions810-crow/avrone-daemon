@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.70: Round 77: poisoned state files at boot. 5,510 tests + 19 integration
+
+- **Nonce expiries are clamped.** Saved expiries in `fleet_nonces.json` and its journal were trusted. An `Infinity` entry never expired, so a file holding `NONCE_CACHE_MAX` of them would refuse every fleet request forever with "replay cache full". A 400-digit integer raised `OverflowError` out of `FleetManager()`, which left the node with no fleet at all. `nonce_expiry()` now drops junk and clamps an expiry to `now + 2 * WINDOW_S` (+5 s), the newest a real nonce can have.
+- **Oversized nonce journal.** The journal was read whole into memory. Above `NONCE_JOURNAL_MAX_BYTES` (64 MB) it is now skipped, and the boot guard refuses anything signed before now.
+- **Corrupt `jobs.db`.** A "file is not a database" error raised out of `start_queue` at boot, so `fleet.start()` and the fleet's cleanup never ran. The file (with its `-wal` and `-shm` files) is now moved aside as `*.corrupt-<ts>` and the queue starts empty. A locked database (`OperationalError`) still raises.
+- **Non-object job payloads.** A payload that is valid JSON but not an object (a list or a number) failed in every handler with `AttributeError` until `max_attempts` ran out. `claim()` now marks it dead at once.
+- Tests: `tests/test_round77_boot_state_junk.py`, 8 tests. 7 fail on v0.69; the eighth is a guard that a locked file is never moved aside.
+
 ## v0.69: Round 76: fleet.json records go through register()'s checks at load. 5,502 tests + 19 integration
 
 - `fleet.json` outlives versions and can be edited by hand, but its node records were loaded as is. Now `clean_saved_node()` rebuilds each record with register()'s checks and drops a record that fails them, logging a warning with the count.

@@ -462,6 +462,28 @@ def health_score(n: dict[str, Any]) -> float:
     return round(60 * headroom + 20 * (1 - ratio / 2) + 20 * (1 - min(max(busy, 0.0), 10.0) / 10), 3)
 
 
+NONCE_EXP_SLACK_S = 5.0
+NONCE_JOURNAL_MAX_BYTES = 64 * 1024 * 1024
+
+
+def nonce_expiry(v: Any, now: float) -> float | None:
+    """A saved nonce expiry, or None to drop it. The newest a real one can be is
+    max(ts + WINDOW_S, now + 2 * WINDOW_S) with ts inside the window, so anything later is clamped
+    to now + 2 * WINDOW_S (+ slack). Saved files were trusted (round 77): `Infinity` entries never
+    expired, so a file holding NONCE_CACHE_MAX of them refused every fleet request forever with
+    "replay cache full", and a 400-digit integer raised OverflowError out of FleetManager() and
+    left the node with no fleet at all."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    try:
+        f = float(v)
+    except OverflowError:
+        f = float("inf") if v > 0 else float("-inf")
+    if f != f or f < now:
+        return None
+    return min(f, now + 2 * WINDOW_S + NONCE_EXP_SLACK_S)
+
+
 def clean_saved_node(key: Any, v: Any, self_id: str) -> dict[str, Any] | None:
     """A node record from fleet.json, rebuilt with the checks register() applies, or None to drop it.
 
@@ -904,12 +926,14 @@ class FleetManager:
             raw = json.loads(p.read_text())
             if not isinstance(raw, dict):
                 raise ValueError("not an object")
-            out = {k: float(v) for k, v in raw.items()
-                   if isinstance(k, str) and NONCE_RE.fullmatch(k) and isinstance(v, (int, float))
-                   and not isinstance(v, bool) and float(v) >= now}
+            out = {}
+            for k, v in raw.items():
+                exp = nonce_expiry(v, now) if isinstance(k, str) and NONCE_RE.fullmatch(k) else None
+                if exp is not None:
+                    out[k] = exp
             self._read_journal(out, now, from_start=True)
             return dict(list(out.items())[:NONCE_CACHE_MAX])
-        except (OSError, ValueError, TypeError, RecursionError):
+        except (OSError, ValueError, TypeError, RecursionError, OverflowError):
             self._boot_guard = now
             log.warning("fleet_nonces.json unreadable; refusing requests signed before this boot")
             return {}
@@ -955,9 +979,9 @@ class FleetManager:
             return  # unreadable now: keep ours; our save rewrites it whole
         if isinstance(raw, dict):
             for k, v in raw.items():
-                if isinstance(k, str) and NONCE_RE.fullmatch(k) and isinstance(v, (int, float)) \
-                        and not isinstance(v, bool) and v == v and float(v) >= now:
-                    self._nonces[k] = max(float(v), self._nonces.get(k, 0.0))
+                exp = nonce_expiry(v, now) if isinstance(k, str) and NONCE_RE.fullmatch(k) else None
+                if exp is not None:
+                    self._nonces[k] = max(exp, self._nonces.get(k, 0.0))
         self._nonce_sig = sig
         self._read_journal(self._nonces, now, from_start=True)  # a new snapshot: re-read what follows it
 
@@ -978,6 +1002,15 @@ class FleetManager:
             if size == off:
                 self._journal_off = off
                 return
+            if size - off > NONCE_JOURNAL_MAX_BYTES:
+                # a journal no live set can produce (compaction keeps it near the live size):
+                # read whole, a hand-made multi-GB file exhausted memory at boot. Skip it and
+                # refuse anything signed before now, the same guarantee as an unreadable snapshot.
+                self._boot_guard = now
+                self._journal_off, self._journal_lines = size, 0
+                log.warning("fleet nonce journal is %d bytes; skipped, refusing requests signed before now",
+                            size - off)
+                return
             with open(jp, "rb") as fh:
                 fh.seek(off)
                 chunk = fh.read(size - off)
@@ -989,10 +1022,10 @@ class FleetManager:
             if not NONCE_RE.fullmatch(k):
                 continue
             try:
-                exp = float(v)
+                exp = nonce_expiry(float(v), now)
             except ValueError:
                 continue
-            if exp == exp and exp >= now:
+            if exp is not None:
                 into[k] = max(exp, into.get(k, 0.0))
         self._journal_off = off + end
         self._journal_lines = (0 if off == 0 else getattr(self, "_journal_lines", 0)) + chunk[:end].count(b"\n")

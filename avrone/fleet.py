@@ -2120,11 +2120,18 @@ async def t_fleet_agents(ctx: "AgentContext", args: dict[str, Any]) -> str:
     from .presence import directory, render
     f = _fleet(ctx)
     rows = await directory(ctx.core)
-    q = str(args.get("filter", "")).lower()
-    if q:
-        rows = [{**r, "agents": [a for a in r["agents"] if q in json.dumps(a).lower()]} for r in rows
-                if q in json.dumps(r).lower()]
-    return f"directory from {f.node_id}:\n" + render(rows, bool(args.get("live_only")))
+    q = str(args.get("filter", "") or "").lower()
+    if len(q) > 500:
+        return "ERROR: filter is longer than 500 chars"
+    live_only = bool(args.get("live_only"))
+
+    def build() -> str:  # filter + render of a 2,000-row tree cost seconds on the event loop
+        rs = rows
+        if q:
+            rs = [{**r, "agents": [a for a in r["agents"] if q in json.dumps(a, default=str).lower()]}
+                  for r in rs if q in json.dumps(r, default=str).lower()]
+        return f"directory from {f.node_id}:\n" + render(rs, live_only)
+    return await asyncio.to_thread(build)
 
 
 async def t_agent_message(ctx: "AgentContext", args: dict[str, Any]) -> str:

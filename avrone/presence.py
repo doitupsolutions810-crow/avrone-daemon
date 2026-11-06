@@ -168,8 +168,15 @@ async def directory(core: "TrinityCore") -> list[dict[str, Any]]:
     return flatten(await snapshot(core))
 
 
+FIND_AMBIGUOUS_SHOWN = 20
+
+
 def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
-    """Resolve 'Builder-3' or 'router/edge/Builder-3' to (route, agent_name)."""
+    """Resolve 'Builder-3' or 'router/edge/Builder-3' to (route, agent_name).
+
+    One pass over the directory. It used to rescan every row for every hit to find the live ones,
+    so a fleet whose peers all run a "Worker-1" (2,000 rows x 50 agents) took 9.6 s on the event
+    loop per fleet_tell / agent_message, and the ambiguity error listed all 100,000 matches."""
     if "/" in ref:
         route, name = ref.rsplit("/", 1)
         if not name:  # "edge/" or "/" resolved to an agent named "" (a tell to nobody)
@@ -177,14 +184,23 @@ def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
         if not any(r["route"] == route for r in rows):
             raise LookupError(f"no node at route {route!r}")
         return route, name
-    hits = [(r["route"], a["name"]) for r in rows for a in r["agents"] if a["name"] == ref]
+    hits: list[tuple[str, str]] = []
+    live_routes: set[str] = set()
+    for r in rows:
+        for a in r["agents"]:
+            if a["name"] == ref:
+                hits.append((r["route"], a["name"]))
+                if a.get("status") == "working":
+                    live_routes.add(r["route"])
     if not hits:
         raise LookupError(f"no agent named {ref!r}; use fleet_agents to list them, or give route/name")
-    live = [h for h in hits if any(a["name"] == ref and a["status"] == "working"
-                                    for r in rows if r["route"] == h[0] for a in r["agents"])]
+    live = [h for h in hits if h[0] in live_routes]
     pick = live or hits
     if len(pick) > 1:
-        raise LookupError(f"{ref!r} is ambiguous: " + ", ".join(f"{r or '(this node)'}/{n}" for r, n in pick))
+        shown = ", ".join(f"{r or '(this node)'}/{n}" for r, n in pick[:FIND_AMBIGUOUS_SHOWN])
+        more = len(pick) - FIND_AMBIGUOUS_SHOWN
+        raise LookupError(f"{ref!r} is ambiguous: {shown}" + (f" ... and {more} more; give route/name"
+                                                                 if more > 0 else ""))
     return pick[0]
 
 
@@ -199,9 +215,19 @@ def _one(v: Any, n: int = 120) -> str:
     return text[:n]
 
 
-def render(rows: list[dict[str, Any]], only_live: bool = False) -> str:
-    out = []
-    for r in rows:
+RENDER_MAX_CHARS = 200_000
+
+
+def render(rows: list[dict[str, Any]], only_live: bool = False, max_chars: int = RENDER_MAX_CHARS) -> str:
+    """The directory as text, at most ~max_chars. Uncapped, 2,000 rows of 50 agents rendered 35 MB
+    (2 s of CPU) straight into a model's context through fleet_agents."""
+    out: list[str] = []
+    size = 0
+    for i, r in enumerate(rows):
+        if size > max_chars:
+            out.append(f"...[output capped: {i} of {len(rows)} nodes shown; use filter or live_only]")
+            break
+        start = len(out)
         env = _d(r.get("env"))
         dev, run, svc = _d(env.get("device")), _d(env.get("runner")), _d(env.get("services"))
         nets = "; ".join(f"{_one(i.get('name'), 64)} {','.join(_one(x, 64) for x in i.get('addrs', [])[:32])}"
@@ -221,4 +247,5 @@ def render(rows: list[dict[str, Any]], only_live: bool = False) -> str:
         for a in ags:
             out.append(f"   - {_one(a.get('name'))} ({_one(a.get('role'), 60)}) {_one(a.get('status'), 32)} "
                        f"run={_one(a.get('run_id'), 80)}: {_one(a.get('task'), 80)}")
+        size += sum(len(x) + 1 for x in out[start:])
     return "\n".join(out)

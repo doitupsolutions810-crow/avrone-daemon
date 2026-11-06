@@ -88,7 +88,7 @@ def _iter_lines(p: Path):
     """The file's lines, read one at a time (a multi-GB run log used to be read whole into memory);
     a line longer than MAX_EVENT_LINE is skipped. None when the file cannot be opened."""
     try:
-        if not p.is_file():
+        if p.is_symlink() or not p.is_file():  # never read a planted link from outside runs/
             return None
         f = p.open("rb")
     except OSError:

@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -57,7 +58,11 @@ def max_file_bytes() -> int:
 
 def _read_tail(p: Path, limit: int) -> str | None:
     try:
-        with open(p, "rb") as f:
+        # O_NOFOLLOW: a symlink planted in runs/ fed a file from outside it to the HUD (round 74)
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return None
             size = os.fstat(f.fileno()).st_size
             cut = size > limit
             if cut:

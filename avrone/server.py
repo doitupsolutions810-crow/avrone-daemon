@@ -6,6 +6,7 @@ from typing import Any
 import hmac
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -459,8 +460,15 @@ async def _verified(request: Request) -> dict:
 async def fleet_info(x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
     f = _fleet()
+    from fastapi.responses import Response
+
     from .codex import jsonable
-    return jsonable({**f.info(), "nodes": f.list_nodes()})  # records saved before v0.40 may hold inf
+
+    def build() -> bytes:
+        # records saved before v0.40 may hold inf. Off the loop and encoded once: at 256 peers x
+        # 60 KB, jsonable + FastAPI's own encoder held the loop for ~1 s per GET (round 74)
+        return json.dumps(jsonable({**f.info(), "nodes": f.list_nodes()}), allow_nan=False).encode()
+    return Response(await asyncio.to_thread(build), media_type="application/json")
 
 
 @app.post("/api/fleet/register")

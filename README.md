@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.67: Round 74: the fleet directory holds up at 2,000 nodes. 5,489 tests + 19 integration
+
+- **`find_agent` is one pass.** It used to rescan the whole directory for every match. With 2,000 rows x 50 agents all named `Worker-1` (peers control their presence), each `fleet_tell` / `agent_message` held the event loop for 9.6 s. Now it takes well under a second. The ambiguity error lists 20 matches plus a count instead of all 100,000. Lookup results are unchanged: a live agent still wins, and route/name still resolves directly.
+- **`presence.render` is bounded** at about `RENDER_MAX_CHARS` (200,000) with an `...[output capped: i of N nodes shown]` footer. That tree used to render 35 MB (2 s) into a model's context through `fleet_agents`. `fleet_agents` now filters and renders in a worker thread and refuses a filter longer than 500 chars.
+- **`GET /api/fleet`** builds and encodes the node list once, in a worker thread, instead of running `jsonable` and FastAPI's encoder on the loop.
+- **Telemetry** opens logs with `O_NOFOLLOW | O_NONBLOCK` and reads regular files only. A planted symlink fed an outside file to the HUD, and a FIFO named `*.jsonl` hung it. **OSINT metrics** skip symlinked logs.
+- Tests: `tests/test_round74_directory_scale.py`, 8 tests. 6 fail or hang on v0.66 (5 fail, and the FIFO case hangs).
+
 ## v0.66: Round 73: every codex log reader sees rotated archives. 5,481 tests + 19 integration
 
 - **Readers looked only at the active file.** After round 72's rotation, `codex_search` missed a run's older events. It also said "run not found" in the instant between the rename and the next write. `codex_stats` reported a run as nearly empty right after a rotation. The HUD telemetry window lost events that a rotation had moved, and the OSINT rollup undercounted. All of them now walk `log_chain()`: the active log, then `.jsonl.1..N`, newest first.

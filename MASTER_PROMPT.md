@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.66.0)
+# AVRONE MASTER PROMPT (v0.67.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,481 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,489 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 239 test files, offline by default
+├── tests/                  # 240 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -312,6 +312,14 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.67: Round 74: the fleet directory holds up at 2,000 nodes. 5,489 tests + 19 integration
+
+- **`find_agent` is one pass.** It used to rescan the whole directory for every match. With 2,000 rows x 50 agents all named `Worker-1` (peers control their presence), each `fleet_tell` / `agent_message` held the event loop for 9.6 s. Now it takes well under a second. The ambiguity error lists 20 matches plus a count instead of all 100,000. Lookup results are unchanged: a live agent still wins, and route/name still resolves directly.
+- **`presence.render` is bounded** at about `RENDER_MAX_CHARS` (200,000) with an `...[output capped: i of N nodes shown]` footer. That tree used to render 35 MB (2 s) into a model's context through `fleet_agents`. `fleet_agents` now filters and renders in a worker thread and refuses a filter longer than 500 chars.
+- **`GET /api/fleet`** builds and encodes the node list once, in a worker thread, instead of running `jsonable` and FastAPI's encoder on the loop.
+- **Telemetry** opens logs with `O_NOFOLLOW | O_NONBLOCK` and reads regular files only. A planted symlink fed an outside file to the HUD, and a FIFO named `*.jsonl` hung it. **OSINT metrics** skip symlinked logs.
+- Tests: `tests/test_round74_directory_scale.py`, 8 tests. 6 fail or hang on v0.66 (5 fail, and the FIFO case hangs).
+
 ## v0.66: Round 73: every codex log reader sees rotated archives. 5,481 tests + 19 integration
 
 - **Readers looked only at the active file.** After round 72's rotation, `codex_search` missed a run's older events. It also said "run not found" in the instant between the rename and the next write. `codex_stats` reported a run as nearly empty right after a rotation. The HUD telemetry window lost events that a rotation had moved, and the OSINT rollup undercounted. All of them now walk `log_chain()`: the active log, then `.jsonl.1..N`, newest first.
@@ -328,14 +336,6 @@ landed and the suite is green. End with what is still open.
 - **Cost.** One extra `stat` per emit: 28 to 33 us.
 - Tests: `tests/test_round72_codex_rotation.py` (13 tests, 6 fail on v0.64).
 
-## v0.64: Round 71: junk floods no longer fill the fleet audit log. 5,455 tests + 19 integration
-
-- **Unauthenticated audit flood.** Anyone who can reach the port can trigger a refusal before the HMAC check (no token, a malformed timestamp or nonce, a bad signature). Each one wrote a full `fleet.refused` event to the codex log, which never rotates, and sent it to every dashboard. 5,000 junk requests left 1.16 MB of identical lines, so 1M would leave about 230 MB. These refusals are now audited up to `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN` (default 60) a minute. Past that they are counted (`refused_unauth`), and one `fleet.refused.suppressed` event per window gives the count per code. `stop()` writes any pending summary. Refusals after authentication (stale, replay, allowlist, hops, capability) are still audited every time. 5,000 junk requests: 0.78 s and 1.16 MB before, 0.07 s and 14 KB after.
-- **`/api/fleet/register` now audits** its pre-HMAC refusals too, under the same limit. Before, it audited nothing.
-- **Token rotation hashed the body twice.** With `AVRONE_FLEET_TOKEN_PREV` set, `verify()` hashed the body once per token. It is now hashed once (`_mac`). A 16 MB body dropped from 21 ms to 10 ms.
-- **Big fleet bodies leave the event loop.** Bodies over 256 KB (`OFF_LOOP_BODY_BYTES`) are verified and parsed in a worker thread, both in the gateway and on the register path. Small bodies stay on the loop, so heartbeats don't hop threads.
-- Tests: `tests/test_round71_gateway_audit_flood.py` (7 tests, 5 fail on v0.63).
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -347,4 +347,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.66.0 checked out: 5,481 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.67.0 checked out: 5,489 passed, 99% coverage. Next: round <N+1> on <angle>."

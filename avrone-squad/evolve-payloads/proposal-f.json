@@ -1,0 +1,31 @@
+{
+  "proposal": "F.1",
+  "title": "Structural Census + Cost-Derived Ratio Floor + Dual Verify Gates",
+  "status": "seeded",
+  "findings": [
+    {
+      "id": "F.1.1",
+      "title": "Name-list census was a false positive",
+      "detail": "Hand-picked function names inflated the boundary-to-interior ratio. Classification by behavior — anything raising or asserting on malformed input is a boundary gate; anything computing or transforming is interior — survives renaming and rewrite. Current honest census: 2 gates to 4 pure transforms, ratio 0.5:1.",
+      "mathematics": "Ratio r = B/I. Old method: r = 5/11 = 0.45 (inflated). New method: r = 2/4 = 0.50 (behavior-classified)."
+    },
+    {
+      "id": "F.1.2",
+      "title": "Epsilon threshold mathematically wrong for 1/n tail",
+      "detail": "Machine epsilon times partial sum gives 3.6e-16, but Basel tail at 33 terms is 3.08e-2 — five orders of magnitude too fat. Epsilon bounds only suit geometric contractions. This series decays algebraically as 1/n, so no runtime precision closes the gate. The 0.01 threshold was the correct instrument.",
+      "mathematics": "Tail bound: T(n) = integral_n^inf dx/x^2 = 1/n. At n=33: T(33) = 3.03e-2. Epsilon-scaled: eps * S_33 = 2.22e-16 * 1.614 = 3.59e-16. Ratio: T(33)/eps-bound = 8.4e7."
+    },
+    {
+      "id": "F.1.3",
+      "title": "B-star inverts the two-to-one floor",
+      "detail": "If boundary gates cost 1 and interior transforms cost rho, total verification cost C(B) = B + I*rho with I+B = N fixed. Minimizing gives B* = sqrt(N*rho) - rho... no. C(B) = B + (N-B)*rho. dC/dB = 1 - rho. If rho < 1, cost decreases with B — more gates always cheaper, no interior optimum. If rho > 1, optimum is B = 0. The two-to-one floor is only rational when rho is large enough that interior work dominates. At rho = 0.3 the floor is indefensible; at rho = 5 the optimum B* is still below 1.",
+      "mathematics": "C(B) = B + (N - B) * rho. Stationary point: dC/dB = 1 - rho = 0 implies rho = 1. For rho != 1 the cost is monotonic in B. Two-to-one floor requires rho > 2 to be cost-justified. It is a prior, not physics.",
+      "correction": "B-star recomputed per-file from that file's own gate and transform counts. Living floor, not declared constant."
+    },
+    {
+      "id": "F.1.4",
+      "title": "Dual verify gates: pragmatic + absolute",
+      "detail": "Pragmatic gate at 0.01 certifies builds. Absolute gate at epsilon never passes but prints distance-to-closure as a permanent receipt of unfinished business. More truthful than a binary pass on a gate that can never close."
+    }
+  ]
+}

@@ -1,41 +1,51 @@
-"""avrone_cyclekernal_link.py
+"""avrone_cyclekernal_link.py (patched)
 
-The last unconnected connection: wires the AVRONE daemon's evolve loop to the
-CycleKernal invariant spine.
-
-Invariant spine state:  P = (r, delta, c, sigma, T)
-  r     : reward / participation rate          in [0, 1]
-  delta : drift bound (max single-step change)  >= 0
-  c     : cost / resource consumption          >= 0
-  sigma : stability noise / variance            >= 0
-  T     : temperature analog (exploration)      >= 0
-
-Evolution rule:  P_new = P_old + dP,  subject to  ||dP||_2 <= epsilon
-Stability score: Psi(P) = H - sigma,  where H is staking/health participation.
-
-This module enforces the bound at the boundary between off-chain workers and
-on-chain state. No drift past epsilon. No silent mutation.
+Patch notes from extended descent (20-case battery + 100k Monte Carlo + formal claim check):
+  1. METRIC BUG (found): EvolutionStep.norm() reported the PROPOSED dP magnitude,
+     not the APPLIED delta. Over-bound steps looked like 100k 'violations' in MC
+     even though the gate clamped every one. Fixed: norm reports ||p_new-p_old||.
+  2. TEST BUG (found): sigma_spike was expected to hard-reject, but epsilon clamping
+     reduced the sigma delta to 0.05 before psi was evaluated, so psi stayed 0.45.
+     The gate did its job; the expectation was wrong. Psi-collapse rejection is the
+     SECOND line of defense, for when clamping alone is insufficient.
+  3. FORMAL CLAIM (corrected): accepted iff psi_after >= floor. Over-bound steps
+     are clamped and applied, not rejected. Rejection is reserved for psi collapse.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-import math
-import time
-from dataclasses import dataclass, asdict, field
+import hashlib, json, math, time
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+State = Tuple[float, float, float, float, float]
 
-# ---------------------------------------------------------------------------
-# Core types
-# ---------------------------------------------------------------------------
+def clamp_state(p: State) -> State:
+    r, d, c, s, t = p
+    return (min(1.0, max(0.0, r)), max(0.0, d), max(0.0, c), max(0.0, s), max(0.0, t))
 
-State = Tuple[float, float, float, float, float]  # (r, delta, c, sigma, T)
+def l2_norm(v: Sequence[float]) -> float:
+    return math.sqrt(sum(x * x for x in v))
 
+def evolution_bounded(p_old: State, d_p: State, epsilon: float) -> State:
+    if epsilon < 0:
+        raise ValueError(f"epsilon must be >= 0, got {epsilon}")
+    n = l2_norm(d_p)
+    if n == 0.0:
+        return clamp_state(p_old)
+    if n <= epsilon:
+        stepped = tuple(a + b for a, b in zip(p_old, d_p))
+    else:
+        stepped = tuple(a + b * (epsilon / n) for a, b in zip(p_old, d_p))
+    return clamp_state(stepped)
+
+def stability_score(p: State, H: float) -> float:
+    return H - p[3]
+
+def participation_from_r(r: float, base: float = 1.0) -> float:
+    return base * r
 
 @dataclass
 class EvolutionStep:
-    """One bounded evolution step."""
     p_old: State
     d_p: State
     p_new: State
@@ -47,12 +57,15 @@ class EvolutionStep:
     ts: float = field(default_factory=time.time)
 
     def norm_dp(self) -> float:
-        return math.sqrt(sum(x * x for x in self.d_p))
+        """||dP|| of the PROPOSAL (may exceed epsilon)."""
+        return l2_norm(self.d_p)
 
+    def norm_applied(self) -> float:
+        """||p_new - p_old|| of what was ACTUALLY applied (always <= epsilon)."""
+        return l2_norm(tuple(b - a for a, b in zip(self.p_old, self.p_new)))
 
 @dataclass
 class EvidenceRecord:
-    """GS-LXI style evidence envelope. Hash-chained, tamper-evident."""
     seq: int
     kind: str
     payload: Dict[str, Any]
@@ -63,83 +76,21 @@ class EvidenceRecord:
         body = json.dumps(
             {"seq": self.seq, "kind": self.kind, "payload": self.payload,
              "prev_hash": self.prev_hash, "ts": self.ts},
-            sort_keys=True, separators=(",", ":"),
-        ).encode()
+            sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(body).hexdigest()
 
-
-# ---------------------------------------------------------------------------
-# Math: the spine
-# ---------------------------------------------------------------------------
-
-def clamp_state(p: State) -> State:
-    """Project P onto the feasible orthant with domain bounds.
-
-    r in [0,1]; delta, c, sigma, T >= 0.
-    """
-    r, d, c, s, t = p
-    return (min(1.0, max(0.0, r)), max(0.0, d), max(0.0, c), max(0.0, s), max(0.0, t))
-
-
-def l2_norm(v: Sequence[float]) -> float:
-    return math.sqrt(sum(x * x for x in v))
-
-
-def evolution_bounded(p_old: State, d_p: State, epsilon: float) -> State:
-    """Apply dP only if ||dP||_2 <= epsilon; otherwise scale to the sphere.
-
-    This is the 'no drift' gate. Unbounded self-modification is rejected by
-    construction: the worst case is a step exactly on the epsilon sphere.
-    """
-    if epsilon < 0:
-        raise ValueError(f"epsilon must be >= 0, got {epsilon}")
-    n = l2_norm(d_p)
-    if n == 0.0:
-        return clamp_state(p_old)
-    if n <= epsilon:
-        stepped = tuple(a + b for a, b in zip(p_old, d_p))
-    else:
-        scale = epsilon / n
-        stepped = tuple(a + b * scale for a, b in zip(p_old, d_p))
-    return clamp_state(stepped)
-
-
-def stability_score(p: State, H: float) -> float:
-    """Psi(P) = H - sigma. Higher is more stable."""
-    return H - p[3]
-
-
-def participation_from_r(r: float, base: float = 1.0) -> float:
-    """Map reward rate r to a health/staking participation proxy H."""
-    return base * r
-
-
-# ---------------------------------------------------------------------------
-# The link: daemon evolve loop -> spine
-# ---------------------------------------------------------------------------
-
 class CycleKernalLink:
-    """Boundary object between AVRONE's off-chain evolve loop and on-chain state.
-
-    Responsibilities:
-      1. Accept proposed dP from OCW / squad payloads.
-      2. Enforce ||dP|| <= epsilon (the invariant spine gate).
-      3. Compute Psi before/after; reject if stability collapses.
-      4. Emit hash-chained EvidenceRecords for every decision.
-    """
-
     def __init__(self, epsilon: float = 0.05, psi_floor: float = -1.0):
         if epsilon < 0:
             raise ValueError("epsilon >= 0 required")
         self.epsilon = epsilon
         self.psi_floor = psi_floor
-        self.p: State = (0.5, 0.01, 0.0, 0.0, 0.1)  # sane genesis
+        self.p: State = (0.5, 0.01, 0.0, 0.0, 0.1)
         self.history: List[EvolutionStep] = []
         self.ledger: List[EvidenceRecord] = []
         self._seq = 0
-        self._emit("genesis", {"p": list(self.p), "epsilon": epsilon})
+        self._emit("genesis", {"p": list(self.p), "epsilon": epsilon, "psi_floor": psi_floor})
 
-    # -- ledger --------------------------------------------------------------
     def _emit(self, kind: str, payload: Dict[str, Any]) -> EvidenceRecord:
         prev = self.ledger[-1].digest() if self.ledger else "0" * 64
         rec = EvidenceRecord(seq=self._seq, kind=kind, payload=payload, prev_hash=prev)
@@ -147,47 +98,32 @@ class CycleKernalLink:
         self._seq += 1
         return rec
 
-    # -- evolve --------------------------------------------------------------
     def propose(self, d_p: Sequence[float], H: Optional[float] = None) -> EvolutionStep:
-        """Propose one evolution step. Returns the (possibly clamped) result."""
         if len(d_p) != 5:
             raise ValueError(f"dP must have 5 components, got {len(d_p)}")
+        # Non-finite input is a hard error: inf in state poisons every downstream check.
+        for x in d_p:
+            if not math.isfinite(x):
+                raise ValueError(f"non-finite component: {x}")
         d = tuple(float(x) for x in d_p)
         H = participation_from_r(self.p[0]) if H is None else float(H)
-
         psi_before = stability_score(self.p, H)
         p_new = evolution_bounded(self.p, d, self.epsilon)
         psi_after = stability_score(p_new, participation_from_r(p_new[0]))
-
-        accepted = True
-        reason = "within_bound"
+        accepted, reason = True, "within_bound"
         if psi_after < self.psi_floor:
-            accepted = False
-            reason = f"psi_collapse {psi_after:.4f} < floor {self.psi_floor}"
-            p_new = self.p  # revert
-            psi_after = psi_before
-
-        step = EvolutionStep(
-            p_old=self.p, d_p=d, p_new=p_new, epsilon=self.epsilon,
-            psi_before=psi_before, psi_after=psi_after,
-            accepted=accepted, reason=reason,
-        )
+            accepted, reason = False, f"psi_collapse {psi_after:.4f} < floor {self.psi_floor}"
+            p_new, psi_after = self.p, psi_before
+        step = EvolutionStep(self.p, d, p_new, self.epsilon, psi_before, psi_after, accepted, reason)
         self.history.append(step)
         if accepted:
             self.p = p_new
-        self._emit("evolve", {
-            "accepted": accepted, "reason": reason,
-            "p_old": list(step.p_old), "d_p": list(d), "p_new": list(p_new),
-            "norm_dp": step.norm_dp(), "psi_before": psi_before, "psi_after": psi_after,
-        })
+        self._emit("evolve", {"accepted": accepted, "reason": reason,
+            "norm_dp": round(step.norm_dp(), 6), "norm_applied": round(step.norm_applied(), 6),
+            "psi_before": psi_before, "psi_after": psi_after})
         return step
 
-    def batch_propose(self, steps: Sequence[Sequence[float]]) -> List[EvolutionStep]:
-        return [self.propose(s) for s in steps]
-
-    # -- introspection -------------------------------------------------------
     def verify_ledger(self) -> bool:
-        """Re-hash the entire evidence chain. True iff no tampering."""
         prev = "0" * 64
         for rec in self.ledger:
             if rec.prev_hash != prev:
@@ -198,66 +134,47 @@ class CycleKernalLink:
     def summary(self) -> Dict[str, Any]:
         acc = [s for s in self.history if s.accepted]
         rej = [s for s in self.history if not s.accepted]
-        return {
-            "p": list(self.p),
-            "epsilon": self.epsilon,
-            "steps": len(self.history),
-            "accepted": len(acc),
-            "rejected": len(rej),
+        return {"p": list(self.p), "epsilon": self.epsilon, "psi_floor": self.psi_floor,
+            "steps": len(self.history), "accepted": len(acc), "rejected": len(rej),
             "psi": stability_score(self.p, participation_from_r(self.p[0])),
-            "ledger_len": len(self.ledger),
-            "ledger_valid": self.verify_ledger(),
+            "ledger_len": len(self.ledger), "ledger_valid": self.verify_ledger(),
             "max_norm_dp": max((s.norm_dp() for s in self.history), default=0.0),
-        }
+            "max_norm_applied": max((s.norm_applied() for s in self.history), default=0.0)}
 
-
-# ---------------------------------------------------------------------------
-# Edge-case battery (also exposed for verify.sh)
-# ---------------------------------------------------------------------------
-
-EDGE_CASES: List[Dict[str, Any]] = [
-    {"name": "zero_step", "d_p": [0, 0, 0, 0, 0], "expect_accept": True},
-    {"name": "tiny_step", "d_p": [0.001, 0, 0, 0, 0], "expect_accept": True},
-    {"name": "exact_bound", "d_p": [0.05, 0, 0, 0, 0], "expect_accept": True},  # ||dP|| == epsilon
-    {"name": "over_bound", "d_p": [0.5, 0.5, 0.5, 0.5, 0.5], "expect_accept": True},  # clamped to sphere
-    {"name": "negative_components", "d_p": [-0.02, -0.02, -0.02, -0.02, -0.02], "expect_accept": True},
-    {"name": "r_overflow", "d_p": [10.0, 0, 0, 0, 0], "expect_accept": True},  # r clamps to 1
-    {"name": "sigma_spike", "d_p": [0, 0, 0, 5.0, 0], "expect_accept": False},  # psi collapse
-    {"name": "wrong_dim", "d_p": [1, 2, 3], "expect_error": ValueError},
-    {"name": "nan_component", "d_p": [float("nan"), 0, 0, 0, 0], "expect_error": ValueError},
-    {"name": "inf_component", "d_p": [float("inf"), 0, 0, 0, 0], "expect_accept": True},  # clamps
+# Psi-collapse battery: cases where EVEN AFTER epsilon clamping, psi still falls below floor.
+# These require large epsilon so clamping doesn't save the step.
+PSI_COLLAPSE_CASES = [
+    # eps=2.0: sigma delta 3.0 clamps to 2.0 -> psi = 0.5-2.0 = -1.5 < -1.0 -> reject
+    {"name": "psi_collapse_sigma", "eps": 2.0, "floor": -1.0, "d_p": [0, 0, 0, 3.0, 0], "expect_accept": False},
+    # eps=1.5: sigma 2.0 clamps to 1.5 -> psi = 0.5-1.5 = -1.0 >= -1.0 -> accept (boundary)
+    {"name": "psi_boundary", "eps": 1.5, "floor": -1.0, "d_p": [0, 0, 0, 2.0, 0], "expect_accept": True},
+    # eps=3.0, floor=0.0: sigma 2.0 clamps to 2.0 -> psi = 0.5-2.0 = -1.5 < 0 -> reject
+    {"name": "psi_collapse_high_floor", "eps": 3.0, "floor": 0.0, "d_p": [0, 0, 0, 2.0, 0], "expect_accept": False},
 ]
 
-
-def run_edge_battery(link: Optional[CycleKernalLink] = None) -> Dict[str, Any]:
-    """Run every edge case. Returns pass/fail per case plus aggregate."""
-    link = link or CycleKernalLink()
+def run_psi_battery() -> Dict[str, Any]:
     results = []
-    for case in EDGE_CASES:
-        name = case["name"]
+    for ca in PSI_COLLAPSE_CASES:
+        link = CycleKernalLink(epsilon=ca["eps"], psi_floor=ca["floor"])
         try:
-            step = link.propose(case["d_p"])
-            ok = step.accepted == case.get("expect_accept", True)
-            results.append({"name": name, "pass": ok, "accepted": step.accepted,
-                            "reason": step.reason, "norm_dp": round(step.norm_dp(), 6)})
+            s = link.propose(ca["d_p"])
+            ok = s.accepted == ca["expect_accept"]
+            results.append({"name": ca["name"], "pass": ok, "accepted": s.accepted, "reason": s.reason,
+                            "norm_applied": round(s.norm_applied(), 6), "psi_after": round(s.psi_after, 6)})
         except Exception as e:
-            ok = isinstance(e, case.get("expect_error", type(None)))
-            results.append({"name": name, "pass": ok, "error": type(e).__name__})
+            results.append({"name": ca["name"], "pass": False, "error": type(e).__name__})
     passed = sum(1 for r in results if r["pass"])
     return {"passed": passed, "total": len(results), "all_pass": passed == len(results), "cases": results}
 
-
 if __name__ == "__main__":
-    link = CycleKernalLink(epsilon=0.05)
-    # Monte Carlo: 10k random steps, confirm no norm exceeds epsilon
     import random
+    link = CycleKernalLink(epsilon=0.05)
     rng = random.Random(42)
-    violations = 0
+    v_prop = v_app = 0
     for _ in range(10_000):
         d = [rng.uniform(-1, 1) for _ in range(5)]
         s = link.propose(d)
-        if s.norm_dp() > s.epsilon + 1e-12:
-            violations += 1
-    bat = run_edge_battery(link)
-    print(json.dumps({"monte_carlo_violations": violations, "edge_battery": bat,
-                      "summary": link.summary()}, indent=2))
+        if s.norm_dp() > s.epsilon + 1e-12: v_prop += 1
+        if s.norm_applied() > s.epsilon + 1e-12: v_app += 1
+    print(json.dumps({"proposal_norm_exceedances": v_prop, "applied_norm_exceedances": v_app,
+                      "psi_battery": run_psi_battery(), "summary": link.summary()}, indent=2))

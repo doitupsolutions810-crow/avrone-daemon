@@ -205,3 +205,97 @@ def test_server_exposes_receiver_route():
     assert sum(1 for route in app.routes
                if getattr(route, "path", None) == PATH
                and "POST" in getattr(route, "methods", set())) == 1
+
+
+def test_content_length_must_match_streamed_body(tmp_path, monkeypatch):
+    async def go():
+        async with client(tmp_path, monkeypatch) as c:
+            body = canonical(event())
+            for declared in (str(len(body)-1), str(len(body)+1)):
+                h = headers(body)
+                h["content-length"] = declared
+                response = await c.post(PATH, content=body, headers=h)
+                assert response.status_code == 400
+            h = headers(body)
+            h["content-length"] = "000" + str(len(body))
+            assert (await c.post(PATH, content=body, headers=h)).status_code == 201
+    run(go())
+
+
+def test_deeply_nested_and_top_level_non_object_json_rejected(tmp_path, monkeypatch):
+    async def go():
+        async with client(tmp_path, monkeypatch) as c:
+            cases = [b"[" * 2000 + b"0" + b"]" * 2000, b"null", b"[]", b'"string"']
+            for raw in cases:
+                response = await c.post(PATH, content=raw, headers=headers(raw))
+                assert response.status_code in (400, 422)
+                assert response.status_code != 201
+    run(go())
+
+
+def test_receipt_tamper_and_wrong_secret_fail_verification():
+    unsigned = {"receipt_id": "8c3a3d2c-1f7d-4a61-9e0d-5f4d9a0c72a1",
+                "event_digest": "a"*64, "stored_at": 1, "duplicate": False}
+    sig = hmac.new(RECEIPT_SECRET.encode(), canonical(unsigned), hashlib.sha256).hexdigest()
+    receipt = {**unsigned, "signature": sig}
+    assert verify_receipt(RECEIPT_SECRET, receipt)
+    for secret, altered in [
+        ("wrong-" + RECEIPT_SECRET, receipt),
+        (RECEIPT_SECRET, {**receipt, "event_digest": "b"*64}),
+        (RECEIPT_SECRET, {**receipt, "extra": True}),
+        (RECEIPT_SECRET, {**receipt, "signature": "0"*64}),
+        (RECEIPT_SECRET, {**receipt, "stored_at": True}),
+        (RECEIPT_SECRET, {**receipt, "receipt_id": "not-a-uuid"}),
+        (RECEIPT_SECRET, {**receipt, "event_digest": "Z"*64}),
+        (RECEIPT_SECRET, {**receipt, "extra": object()}),
+    ]:
+        assert not verify_receipt(secret, altered)
+
+
+def test_duplicate_security_headers_fail_closed(tmp_path, monkeypatch):
+    async def go():
+        async with client(tmp_path, monkeypatch) as c:
+            body = canonical(event())
+            h = list(headers(body).items())
+            h.extend([("x-avrone-evidence-signature", "0"*64)])
+            response = await c.post(PATH, content=body, headers=h)
+            assert response.status_code == 401
+            h = list(headers(body).items())
+            h.append(("content-type", "text/plain"))
+            response = await c.post(PATH, content=body, headers=h)
+            assert response.status_code == 415
+    run(go())
+
+
+def test_unwritable_database_parent_returns_service_unavailable(tmp_path, monkeypatch):
+    async def go():
+        blocker = tmp_path / "not-a-directory"
+        blocker.write_text("x")
+        monkeypatch.setenv("AVRONE_EVIDENCE_HMAC_SECRET", SECRET)
+        monkeypatch.setenv("AVRONE_EVIDENCE_RECEIPT_SECRET", RECEIPT_SECRET)
+        monkeypatch.setenv("AVRONE_EVIDENCE_DB", str(blocker / "evidence.db"))
+        app = FastAPI(); app.add_api_route(PATH, ingest_evidence, methods=["POST"])
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c:
+            body = canonical(event())
+            response = await c.post(PATH, content=body, headers=headers(body))
+            assert response.status_code == 503
+    run(go())
+
+
+def test_concurrent_api_ingest_is_one_logical_commit(tmp_path, monkeypatch):
+    async def go():
+        async with client(tmp_path, monkeypatch) as c:
+            body = canonical(event())
+            responses = await asyncio.gather(*[
+                c.post(PATH, content=body, headers=headers(body))
+                for _ in range(16)
+            ])
+            assert all(r.status_code in (200, 201) for r in responses), [
+                (r.status_code, r.text) for r in responses
+            ]
+            assert sum(r.status_code == 201 for r in responses) == 1
+            ids = {r.json()["receipt"]["receipt_id"] for r in responses}
+            assert len(ids) == 1
+            assert all(verify_receipt(RECEIPT_SECRET, r.json()["receipt"])
+                       for r in responses)
+    run(go())

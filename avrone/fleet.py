@@ -2040,7 +2040,24 @@ class FleetManager:
                                        str(payload.get("from", "?")), hops, payload.get("wait") is True)
 
     async def run_job(self, kind: str, p: dict[str, Any]) -> dict[str, Any]:
-        """Queue handler: retried by the JobQueue if the target node is down."""
+        """Queue handler: retried by the JobQueue if the target node is down.
+
+        The payload is re-checked here: jobs.db is shared by every process on the data dir and
+        outlives versions. A job without "task" (or "agent"/"message") failed with KeyError on
+        each of its attempts, a non-string task reached squad()/dispatch() as is, and an unknown
+        kind ran as a dispatch (round 78). Those now go dead at once."""
+        from .jobqueue import PermanentJobError
+        if kind not in ("run", "message"):
+            raise PermanentJobError(f"unknown job kind {str(kind)[:40]!r}")
+        if kind == "message":
+            if not all(isinstance(p.get(k), str) and p.get(k) for k in ("agent", "message")):
+                raise PermanentJobError("message job needs non-empty string 'agent' and 'message'")
+        elif not isinstance(p.get("task"), str) or not p["task"].strip():
+            raise PermanentJobError("run job needs a non-empty string 'task'")
+        elif len(p["task"].encode("utf-8", "replace")) > QUEUE_TASK_MAX:
+            raise PermanentJobError(f"run job task is over {QUEUE_TASK_MAX} bytes")
+        if p.get("node") is not None and not isinstance(p.get("node"), str):
+            raise PermanentJobError("job 'node' must be a string")
         route = [x for x in str(p.get("node", "local")).split("/") if x and x != "local"]
         if kind == "message":
             return await self.send_message(route, p["agent"], p["message"], p.get("from", self.node_id), 0, True)

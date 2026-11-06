@@ -39,6 +39,7 @@ import json
 import uuid
 import math
 import os
+import stat
 import re
 import shlex
 import shutil
@@ -61,6 +62,37 @@ def _repo_root(ctx: "AgentContext") -> Path:
         return Path(env).resolve()
     # package lives at <repo>/avrone/evolve.py
     return Path(__file__).resolve().parent.parent
+
+
+STATE_JSON_MAX_BYTES = 16 * 1024 * 1024
+HISTORY_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _read_state(path: Path, cap: int | None = None) -> bytes:
+    """Bytes of one evolve state file: a regular file, not a symlink, at most `cap` bytes.
+
+    Proposal, loop and history files were read with read_text(), which follows symlinks, blocks
+    forever on a FIFO and reads any size whole. reconcile_interrupted() runs at boot over
+    evolve/loops/*.json, so one FIFO named x.json there hung startup; a symlink there read (and
+    then rewrote as a copy) a file from outside the data dir (round 78). Raises OSError or
+    ValueError for anything that is not a plain, bounded file."""
+    cap = STATE_JSON_MAX_BYTES if cap is None else cap
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError("not a regular file")
+        if st.st_size > cap:
+            raise ValueError(f"over {cap} bytes")
+        data = fh.read(cap + 1)
+    if len(data) > cap:
+        raise ValueError(f"over {cap} bytes")
+    return data
+
+
+def _load_json(path: Path) -> Any:
+    """json of a state file read through _read_state (UnicodeDecodeError is a ValueError)."""
+    return json.loads(_read_state(path).decode("utf-8"))
 
 
 def _data(ctx: "AgentContext") -> Path:
@@ -100,7 +132,7 @@ def _proposal(ctx: "AgentContext", pid: str) -> tuple[Path | None, dict[str, Any
     if not mp.is_file():
         return None, None, None, f"ERROR: no proposal {pid}"
     try:
-        meta = json.loads(mp.read_text())
+        meta = _load_json(mp)
     except (OSError, ValueError, RecursionError):
         meta = None
     if not isinstance(meta, dict):
@@ -638,8 +670,8 @@ def _settings_loops_dir(settings) -> Path:
 def _read_history(path: Path) -> list[dict[str, Any]]:
     out = []
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeDecodeError):
+        lines = _read_state(path, HISTORY_MAX_BYTES).decode("utf-8").splitlines()
+    except (OSError, UnicodeDecodeError, ValueError):
         return out
     for line in lines:
         try:
@@ -848,7 +880,7 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
                 "loop_id": None}
     p = _loop_path(ctx, loop_id)
     try:
-        raw = json.loads(p.read_text())
+        raw = _load_json(p)
     except (OSError, ValueError, RecursionError):
         raw = None
     if not isinstance(raw, dict):
@@ -908,7 +940,7 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
 def _finish_abnormally(ctx: "AgentContext", loop_id: str, status: str, stopped: str) -> None:
     p = _loop_path(ctx, loop_id)
     try:
-        m = json.loads(p.read_text())
+        m = _load_json(p)
     except (OSError, ValueError, RecursionError):
         m = {"loop_id": loop_id, "iterations": []}
     if not isinstance(m, dict):
@@ -979,7 +1011,7 @@ def reconcile_interrupted(settings) -> list[str]:
         return marked
     for f in sorted(d.glob("*.json")):
         try:
-            lp = json.loads(f.read_text())
+            lp = _load_json(f)
         except (OSError, ValueError, RecursionError):
             continue
         if not isinstance(lp, dict) or not isinstance(lp.get("loop_id"), str) or not lp["loop_id"] \
@@ -1189,7 +1221,7 @@ async def t_evolve_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     rows = []
     for f in sorted(_data(ctx).glob("*.json")):
         try:
-            m = json.loads(f.read_text())
+            m = _load_json(f)
         except (OSError, ValueError, RecursionError):
             continue
         if not isinstance(m, dict) or not all(k in m for k in ("pid", "passed", "goal", "files", "by")):
@@ -1238,7 +1270,7 @@ def list_loops(settings) -> list[dict[str, Any]]:
     if d.exists():
         for f in d.glob("*.json"):
             try:
-                lp = json.loads(f.read_text())
+                lp = _load_json(f)
             except (OSError, ValueError, RecursionError):
                 continue
             if isinstance(lp, dict) and isinstance(lp.get("loop_id"), str) and lp["loop_id"]:
@@ -1328,7 +1360,7 @@ def list_accepted(settings) -> list[dict[str, Any]]:
     if d.exists():
         for f in sorted(d.glob("*.json")):
             try:
-                m = json.loads(f.read_text())
+                m = _load_json(f)
             except (OSError, ValueError, RecursionError):
                 continue
             if isinstance(m, dict) and m.get("passed") is True and isinstance(m.get("pid"), str):

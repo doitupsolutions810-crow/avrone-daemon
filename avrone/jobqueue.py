@@ -59,6 +59,11 @@ def retain_s() -> int:
     return _env_int("AVRONE_QUEUE_RETAIN_S", DEFAULT_RETAIN_S, 0, 10 * 365 * 86400)
 
 
+class PermanentJobError(Exception):
+    """A job that can never succeed (a malformed payload): the Worker marks it dead at once
+    instead of retrying it max_attempts times with backoff."""
+
+
 def _encode_result(result: Any) -> str:
     """Always valid JSON. The old `json.dumps(result)[:100000]` raised TypeError on a non-JSON
     result (the finished job was then failed and RE-RUN) and cut long results mid-token, so get()
@@ -282,8 +287,9 @@ class JobQueue:
             (text, time.time(), jid, *extra)))
         return cur.rowcount > 0
 
-    async def fail(self, jid: str, error: Any, token: str | None = None) -> str:
-        """'dead', 'requeued', 'missing' (no such job) or 'stale' (the lease was lost)."""
+    async def fail(self, jid: str, error: Any, token: str | None = None, permanent: bool = False) -> str:
+        """'dead', 'requeued', 'missing' (no such job) or 'stale' (the lease was lost).
+        permanent=True: dead now, whatever attempts remain."""
         err = _err_text(error)
         clause, extra = self._owner(token)
 
@@ -293,7 +299,7 @@ class JobQueue:
             if r is None:
                 exists = self._db.execute("SELECT 1 FROM jobs WHERE id=?", (jid,)).fetchone()
                 return "stale" if exists else "missing"
-            if r[0] >= r[1]:
+            if permanent or r[0] >= r[1]:
                 self._db.execute("UPDATE jobs SET status='dead', error=?, updated=? WHERE id=?", (err, now, jid))
                 return "dead"
             backoff = min(2 ** max(1, int(r[0])), 60)
@@ -414,7 +420,8 @@ class Worker:
                 raise
             except Exception as e:  # noqa: BLE001
                 try:
-                    await self.q.fail(jid, f"{type(e).__name__}: {e}", token)
+                    await self.q.fail(jid, f"{type(e).__name__}: {e}", token,
+                                      permanent=isinstance(e, PermanentJobError))
                 except asyncio.CancelledError:
                     raise
                 except Exception:  # noqa: BLE001

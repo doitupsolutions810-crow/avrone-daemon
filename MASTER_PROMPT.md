@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.70.0)
+# AVRONE MASTER PROMPT (v0.71.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -99,7 +99,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 243 test files, offline by default
+├── tests/                  # 244 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -348,4 +348,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.70.0 checked out: 5,510 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.71.0 checked out: 5,510 passed, 99% coverage. Next: round <N+1> on <angle>."

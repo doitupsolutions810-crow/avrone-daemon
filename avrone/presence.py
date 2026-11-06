@@ -113,7 +113,40 @@ def _s(v: Any, n: int = 200) -> str | None:
     return None if v is None else str(v)[:n]
 
 
+_ENV_KEYS = {"device": ("hostname", "os", "arch", "python", "pid"),
+             "runner": ("kind", "workspace"),
+             "container": ("name", "image", "hostname"),
+             "services": ("public_url", "tools", "mcp_servers", "model", "provider_url")}
+AGENT_KEYS = ("role", "status", "parent", "run_id", "task", "depth", "started")
+FIELD_MAX = 300
+TASK_MAX = 2000
+
+
+def _val(v: Any, n: int = FIELD_MAX) -> Any:
+    """A peer-supplied scalar kept small: str clipped, finite numbers kept, a short list of short
+    strings kept, anything else dropped (None)."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v[:n]
+    if isinstance(v, int):
+        return v if -2**53 <= v <= 2**53 else None
+    if isinstance(v, float):
+        return v if v == v and v not in (float("inf"), float("-inf")) else None
+    if isinstance(v, list):
+        return [str(x)[:120] for x in v[:64] if isinstance(x, (str, int, float)) and not isinstance(x, bool)]
+    return None
+
+
+def _pick(d: Any, keys: tuple[str, ...]) -> dict[str, Any]:
+    d = _d(d)
+    return {k: _val(d[k]) for k in keys if k in d}
+
+
 def _clean_env(env: Any) -> dict[str, Any]:
+    """Only the known presence fields, each clipped. Unknown keys and nested blobs used to pass
+    through whole: a peer could put megabytes into every /api/fleet/directory answer and into the
+    rows fleet_agents filters with json.dumps (round 75)."""
     env = _d(env)
     nets = []
     for i in env.get("networks") if isinstance(env.get("networks"), list) else []:
@@ -121,22 +154,34 @@ def _clean_env(env: Any) -> dict[str, Any]:
             addrs = i.get("addrs") if isinstance(i.get("addrs"), list) else []
             nets.append({"name": _s(i.get("name"), 64) or "?", "state": _s(i.get("state"), 32),
                          "addrs": [str(a)[:64] for a in addrs[:32]]})
-    run = dict(_d(env.get("runner")))
-    cont = run.get("container")
+        if len(nets) >= 32:
+            break
+    raw_run = _d(env.get("runner"))
+    run = _pick(raw_run, _ENV_KEYS["runner"])
+    cont = raw_run.get("container")
     if cont is not None:
-        cont = _d(cont)
-        run["container"] = {**cont, "addrs": [str(a)[:64] for a in cont.get("addrs", [])[:32]]
-                            if isinstance(cont.get("addrs"), list) else []}
-    return {**env, "device": _d(env.get("device")), "runner": run, "services": _d(env.get("services")),
-            "networks": nets[:32]}
+        c = _d(cont)
+        run["container"] = {**_pick(c, _ENV_KEYS["container"]),
+                            "addrs": [str(a)[:64] for a in c.get("addrs", [])[:32]]
+                            if isinstance(c.get("addrs"), list) else []}
+    else:
+        run["container"] = None
+    return {"device": _pick(env.get("device"), _ENV_KEYS["device"]), "runner": run,
+            "services": _pick(env.get("services"), _ENV_KEYS["services"]), "networks": nets}
 
 
 def _clean_agents(v: Any) -> list[dict[str, Any]]:
     out = []
     for a in v if isinstance(v, list) else []:
         if isinstance(a, dict) and isinstance(a.get("name"), str) and a["name"]:
-            out.append({**a, "name": a["name"][:120]})
-    return out[:MAX_AGENTS]
+            row = {"name": a["name"][:120]}
+            for k in AGENT_KEYS:
+                if k in a:
+                    row[k] = _val(a[k], TASK_MAX if k == "task" else FIELD_MAX)
+            out.append(row)
+            if len(out) >= MAX_AGENTS:
+                break
+    return out
 
 
 def flatten(snap: dict[str, Any], path: tuple[str, ...] = (), _rows: list | None = None) -> list[dict[str, Any]]:

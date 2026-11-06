@@ -453,13 +453,13 @@ def health_score(n: dict[str, Any]) -> float:
     + 20 * (1 - min(busy, 10) / 10)  where busy = max(in-flight load, active agents)
     """
     h = n.get("health") if isinstance(n.get("health"), dict) else {}
-    headroom = float(h.get("headroom", 0.5))
-    ratio = float(h.get("load", 1.0))
-    try:
-        busy = max(float(n.get("load", 0) or 0), float(h.get("active_agents", 0) or 0))
-    except (TypeError, ValueError):
-        busy = 10.0
-    return round(60 * headroom + 20 * (1 - min(max(ratio, 0.0), 2.0) / 2) + 20 * (1 - min(max(busy, 0.0), 10.0) / 10), 3)
+    # every field through _finite and clamped: records come from fleet.json too (older versions, a
+    # hand edit), where "abc" raised ValueError out of select_nodes (every auto dispatch failed) and
+    # health_table, NaN poisoned the sort and headroom 1e308 scored inf and won every pick (round 75)
+    headroom = min(1.0, max(0.0, _finite(h.get("headroom", 0.5), 0.5)))
+    ratio = min(2.0, max(0.0, _finite(h.get("load", 1.0), 1.0)))
+    busy = max(_finite(n.get("load", 0) or 0, 10.0), _finite(h.get("active_agents", 0) or 0, 10.0))
+    return round(60 * headroom + 20 * (1 - ratio / 2) + 20 * (1 - min(max(busy, 0.0), 10.0) / 10), 3)
 
 
 def node_has(n: dict[str, Any], need: str | None) -> bool:
@@ -2064,14 +2064,37 @@ def _fleet(ctx: "AgentContext") -> FleetManager:
 async def t_fleet_nodes(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = _fleet(ctx)
     rows = [f"this node: {f.node_id} (parent: {f.parent or 'none'})"]
-    for n in f.list_nodes():
+    nodes = f.list_nodes()
+    size = 0
+    for i, n in enumerate(nodes):
+        if size > FLEET_NODES_MAX_CHARS:
+            rows.append(f"...[output capped: {i} of {len(nodes)} nodes shown]")
+            break
         h = n.get("health") if isinstance(n.get("health"), dict) else {}
-        hs = f.node_state(n)
+        hs = _clip1(f.node_state(n), 32)
         hp = "" if not h else (f" health={hs} score={health_score(n)}" if n["status"] == "online" else f" health={hs}")
-        temp = f" temp={h['temp_c']}C" if h.get("temp_c") is not None and n["status"] == "online" else ""
-        rows.append(f"- {n['node_id']} [{n['status']}] load={n.get('load', 0)} children={n.get('children', [])} "
-                    f"runner={n.get('capabilities', {}).get('runner', '?')}{hp}{temp}")
+        temp = (f" temp={_clip1(h['temp_c'], 16)}C" if h.get("temp_c") is not None and n["status"] == "online" else "")
+        caps = n.get("capabilities") if isinstance(n.get("capabilities"), dict) else {}
+        kids = n.get("children") if isinstance(n.get("children"), list) else []
+        kid_txt = ", ".join(_clip1(k, 64) for k in kids[:FLEET_NODES_CHILDREN_SHOWN])
+        if len(kids) > FLEET_NODES_CHILDREN_SHOWN:
+            kid_txt += f", ... +{len(kids) - FLEET_NODES_CHILDREN_SHOWN} more"
+        row = (f"- {_clip1(n.get('node_id'), 120)} [{_clip1(n['status'], 32)}] load={node_load(n)} "
+               f"children=[{kid_txt}] runner={_clip1(caps.get('runner', '?'), 64)}{hp}{temp}")
+        rows.append(row)
+        size += len(row) + 1
     return "\n".join(rows) if len(rows) > 1 else rows[0] + "\nno child nodes registered"
+
+
+FLEET_NODES_MAX_CHARS = 200_000
+FLEET_NODES_CHILDREN_SHOWN = 16
+_CTRL1 = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]+")
+
+
+def _clip1(v: Any, n: int) -> str:
+    """A peer-supplied value as one short line: fleet_nodes printed every node's 1,000 children
+    and a megabyte `runner` string whole, and a newline in either forged extra node rows."""
+    return _CTRL1.sub(" ", "" if v is None else str(v))[:n]
 
 
 async def t_remote_spawn(ctx: "AgentContext", args: dict[str, Any]) -> str:

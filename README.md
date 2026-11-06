@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.68: Round 75: junk fleet records and peer presence can't break node selection. 5,496 tests + 19 integration
+
+- **`health_score` is total.** It cast raw fields with `float()`. A record loaded from `fleet.json` (written by an older version, or edited by hand) with headroom `"abc"` raised `ValueError` out of `select_nodes`, so every auto dispatch failed, along with `health_table` and `fleet_nodes`. NaN poisoned the ranking, and headroom `1e308` scored `inf` and won every pick. Each field now goes through `_finite` and is clamped, so the score is always within 0..100. Scores for valid values are unchanged.
+- **`fleet_nodes` is bounded.** It shows 16 children plus a count, clips `runner` and the state to one line (control characters can no longer forge rows), and caps output at 200,000 characters. A non-dict `capabilities` no longer raises `AttributeError`.
+- **Directory rows keep only known fields.** `_clean_env` and `_clean_agents` passed unknown keys and nested blobs through whole into `/api/fleet/directory` and the `fleet_agents` filter. Now only known presence fields survive: strings are clipped to 300 characters (task 2,000), non-finite numbers are dropped, and lists are short. The local node's environment is unchanged.
+- Tests: `tests/test_round75_fleet_health_junk.py`, 7 tests, 5 fail on v0.67.
+
 ## v0.67: Round 74: the fleet directory holds up at 2,000 nodes. 5,489 tests + 19 integration
 
 - **`find_agent` is one pass.** It used to rescan the whole directory for every match. With 2,000 rows x 50 agents all named `Worker-1` (peers control their presence), each `fleet_tell` / `agent_message` held the event loop for 9.6 s. Now it takes well under a second. The ambiguity error lists 20 matches plus a count instead of all 100,000. Lookup results are unchanged: a live agent still wins, and route/name still resolves directly.

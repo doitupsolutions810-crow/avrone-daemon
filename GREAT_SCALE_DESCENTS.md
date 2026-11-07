@@ -1192,3 +1192,103 @@ wider history censored by proxy rate limits; d4f6c1c/1c2a3bd/a2bd256 renders
 empty — unmeasured. Chain: 16 rows, 6 causes, 1 pending cause, zero
 contradictions — the fifth alarm hunt measured instead of rang.
 
+
+## Descent XIII — The Empty Ledger: Ignorance Is the Hottest State (2026-11-06)
+
+**Finding (the falsification pass: the bridge's own second anchor, and round 81).**
+Two targets this descent. (1) avrone-daemon round 81 (v0.74.0, between our XI and
+XII doc pushes): avrone/safeio.py, read in full — mkstemp with unpredictable
+names (O_CREAT|O_EXCL, never follows a planted link), optional fsync, os.replace
+over the target, error raised unchanged. No contradiction: a confirmation row of
+the rounds 78-81 hardening chain (same cause — the daemon session; no new cause,
+no new row discount). (2) The IX bridge's second anchor itself: attested-history
+— the append-only log that the whole cross-repo receipt index hangs from.
+MEASURED: history.jsonl DOES NOT EXIST on attested-history main (direct probe).
+The schema exists, the writer exists, the verify pass exists, the entry-point
+documentation exists — and the ledger is EMPTY. The system's deepest merge
+point, the index meant to bind twenty-six repos into one attested history,
+pooled ZERO receipts. Meanwhile the branch security/fail-closed-empty-history
+has been hardening the EMPTINESS itself ("fail closed when history or provenance
+is missing"; "ci: run fail-closed history verifier tests") — the system's own
+criterion (unmeasured must be named) honored as code, which is honest; but
+naming is not measuring, and the deeper fact stands: an anchor without a chain.
+
+**The deeper measured fact (a forged floor at the ledger layer).** Main's
+verify.py, read in full, returns EXIT 0 on a missing or empty log ("empty log —
+nothing to verify"): a green verify on NOTHING — Descent IV's forged-floor
+pattern, found alive in the verifier itself. A passing gate over zero trials
+asserts trust it never measured. The unmerged branch carries the fix; until it
+merges or the ledger fills, the verifier certifies what it cannot see.
+
+**The mathematics (ignorance is the hottest state).** A ledger is a register:
+its heat follows the same scale. With Jeffreys smoothing p_J = (s + 0.5)/(r + 1):
+
+| ledger state | r | s | p_J | S | Psi |
+| --- | --- | --- | --- | --- | --- |
+| empty | 0 | — | 0.5 | 0.25 | 0.631966 |
+| one failing receipt | 1 | 0 | 0.25 | 0.1875 | 0.569466 |
+| one passing receipt | 1 | 1 | 0.75 | 0.1875 | 0.569466 |
+| one pass, one fail | 2 | 1 | 0.5 | 0.25 | 0.631966 |
+
+Three readings. (1) THE EMPTY LEDGER IS THE SCALE'S HOTTEST HONEST STATE: an
+anchor without trials is ignorance with good posture — Psi = 0.631966, hotter
+than a register of pure failures. (2) INFORMATION, NOT ORIENTATION, COOLS: at
+r = 1 a passing and a failing receipt cool EQUALLY (heat(0.25) = heat(0.75) =
+0.1875) — the register pays for knowledge, not for good news; D(p, N) at N = 0
+is the system's null law. (3) A SPLIT REGISTER RETURNS TO MAXIMUM HEAT: one pass
+and one fail is a coin flip (Psi = 0.631966) — the register cools only when
+evidence accumulates in a direction. Failure is information; absence is heat;
+even split is absence again.
+
+**The mitigation (executed: the first receipt).** attested-history 75f8188 —
+history.jsonl, seq 0, source "Avrone" (registered in schema.json sources,
+additive), kind ci_census, provenance_depth 1 — the measured ancestor is
+GitHub's Actions job records (walkable by URL, named in raw): the XI/XII census
+(7 real runs: 1 concordant pass pair + 6 echo pairs; the suite's measured row
+S = 0.152344, orientation fail). The digest was computed in-sandbox by a
+specification SHA-256 implementation validated against the standard vectors
+(sha256("") = e3b0c442..., sha256("abc") = ba7816bf...) and SELF-VERIFIED
+against verify.py's exact walk: canonical JSON (sorted keys, compact
+separators), digest covers entry-minus-digest, prev_hash null (first entry),
+provenance_depth 1, residual named. The ledger's register moves r = 0 -> 1:
+Psi 0.631966 -> 0.569466 — one honest FAILING receipt cools the ledger by
+0.0625. Failure is information.
+
+**Authorship honesty (criterion 8).** The entry is authored by this session;
+its cause-quality comes from its MEASURED ancestor (GitHub's Actions records),
+not from its writer. The mint completes when an independent verify pass walks
+the non-empty ledger — the pending-cause discipline continues: the ledger now
+waits to be measured. Named owner actions: merge
+security/fail-closed-empty-history (kill the empty-log false pass); clear the
+billing lock (B ~ 0 -> unbounded); run python verify.py.
+
+**Register accounting (honest).** The census entry extends the XI-minted cause
+(same apparatus — GitHub's Actions records): no new cause; XIII adds a row, not
+a cause. Register: 17 rows, 6 causes, 1 pending cause, and the ledger's own
+register now r = 1, Psi_ledger = 0.569466. The law's register holds at Psi_J =
+0.448293.
+
+**Consequence for the merged system.** I budgets -> determinism; II gates ->
+evidence travels; III namespaces -> pooling; IV saturation -> provable floors;
+V regress -> anchoring; VI attention -> zero-cost growth; VII coordinate ->
+axioms are human roots; VIII correlation -> independent axes; IX anchors ->
+depth transmits, diversity compounds; X measurement -> causes are minted by
+observation; XI execution -> silenced legs are echoes; XII amputation ->
+censored data cannot price dependence; **XIII emptiness -> an anchor without
+trials is ignorance with good posture: the empty ledger is the scale's hottest
+state, and one honest failing receipt cools it. Deployed trust that attests
+nothing is the most expensive decoration a system can wear.**
+
+*Verification of this descent's arithmetic and execution:* ledger emptiness
+measured by direct probe (history.jsonl absent on attested-history main) and
+by branch forensics (security/fail-closed-empty-history); verify.py's
+empty-log exit 0 read from source at main; safeio.py read in full at round 81
+(v0.74.0); the first entry pushed at 75f8188 with digest 7a9e2b07d7e9cdd226a2
+07c487e9caf34f30c86bac34ef9fd14688ce5bb30a17, sha256 implementation validated
+against standard vectors and the entry self-verified against the verifier's
+walk; all heat values computed with exact greatscale constants (CONE =
+phi^-2 = 0.381966; Psi(r=0) = 0.631966 = Psi(r=2, s=1); Psi(r=1) = 0.569466
+both orientations). Chain: 17 rows, 6 causes (5 authored + 1 minted), 1 pending
+cause, ledger r = 1 — zero contradictions; the sixth alarm hunt found the
+verifier's own green light shining on nothing.
+

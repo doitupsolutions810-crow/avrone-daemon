@@ -77,3 +77,10 @@ Can the runtime emit a single, uniquely identified capability receipt that is (a
 The live `.github/workflows/ci.yml` had a second false-negative path: both checkout-hygiene scans ran `grep | while` under `set -o pipefail`. On a clean checkout with no wrapper lines, `grep` returns 1 and the job exits before dependency installation. GitHub Actions run 42322491312 on main confirms that the install step failed before pytest. The fix is included in AVRONE PR #10; its new run has passed dependency installation and is executing the test matrix.
 
 The same principle appears at two layers: an empty evidence search must not abort a healthy build, and an empty evidence ledger must not certify a healthy system. In both cases, absence must be represented explicitly rather than treated as success or an unhandled failure.
+## Squad and Docker execution availability
+
+The Grok Bot repository's `verify.sh` is a real local Docker verifier, not a harmless read-only probe. If `.env` is absent it copies `.env.full`; it then checks Docker/Compose, validates core and full Compose, builds and starts the full stack, runs live inference/browser/squad tests, writes `data/EVOLVE.md` and `data/VERIFY.md`, and optionally installs/runs the adjacent AVRONE suite in a virtual environment. Its default boot budget is 3600 seconds; 7200 can be selected for slower hosts. The script does not provide an unbounded wait.
+
+The script defaults `AVRONE_DIR` to `../Avrone`; in a workspace where the repository is named `avrone-daemon`, the combined gate should explicitly set `AVRONE_DIR=../avrone-daemon VERIFY_REQUIRE_AVRONE=true` after confirming the actual checkout layout.
+
+GitHub Actions metadata for Grok Bot main shows the latest `live-tests` run (40801560492) and scheduled `model-bench` run (41439417592) failed with `runner_id=0` and empty job steps. Those runs did not provide test execution evidence. In this session, the local environment has no Docker executable, and the connected browser cannot access the originating Codespaces tab. Therefore neither `verify.sh` nor a live Grok squad run was executed.

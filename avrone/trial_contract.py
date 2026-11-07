@@ -35,15 +35,19 @@ def make_trial(*, system: str, node: str, run_id: str, check_id: str, check_vers
     config_sha = hashlib.sha256(config).hexdigest()
     identity = {"schema": SCHEMA_VERSION, "system": system, "node": node, "run_id": run_id, "check_id": check_id, "check_version": check_version, "check_config_sha256": config_sha, "attempt_id": attempt_id}
     trial_id = hashlib.sha256(_canonical(identity)).hexdigest()
-    return {"schema": SCHEMA_VERSION, "trial_id": trial_id, "source": f"{system}:{node}", "run_id": run_id, "check_id": check_id, "check_version": check_version, "check_config_sha256": config_sha, "attempt_id": attempt_id, "failed": failed}
+    return {"schema": SCHEMA_VERSION, "trial_id": trial_id, "system": system, "node": node, "source": f"{system}:{node}", "run_id": run_id, "check_id": check_id, "check_version": check_version, "check_config_sha256": config_sha, "attempt_id": attempt_id, "failed": failed}
 
 def validate_trial_envelope(record: Any) -> bool:
-    required = {"schema", "trial_id", "source", "run_id", "check_id", "check_version", "check_config_sha256", "attempt_id", "failed"}
+    required = {"schema", "trial_id", "system", "node", "source", "run_id", "check_id", "check_version", "check_config_sha256", "attempt_id", "failed"}
     if not isinstance(record, dict) or set(record) != required: return False
     if record.get("schema") != SCHEMA_VERSION or not isinstance(record.get("failed"), bool): return False
     if not isinstance(record.get("trial_id"), str) or not _HEX64.fullmatch(record["trial_id"]): return False
     if not isinstance(record.get("check_config_sha256"), str) or not _HEX64.fullmatch(record["check_config_sha256"]): return False
     try:
-        for field in ("source", "run_id", "check_id", "check_version", "attempt_id"): _identity(record[field], field, 513 if field == "source" else MAX_FIELD_CHARS)
+        for field in ("system", "node", "run_id", "check_id", "check_version", "attempt_id"): _identity(record[field], field)
+        if record["source"] != record["system"] + ":" + record["node"]: return False
+        identity = {"schema": SCHEMA_VERSION, "system": record["system"], "node": record["node"], "run_id": record["run_id"], "check_id": record["check_id"], "check_version": record["check_version"], "check_config_sha256": record["check_config_sha256"], "attempt_id": record["attempt_id"]}
+        expected = hashlib.sha256(_canonical(identity)).hexdigest()
+        if not __import__("hmac").compare_digest(expected, record["trial_id"]): return False
     except ValueError: return False
     return True

@@ -97,3 +97,6 @@ The `avrone-squad/harmonic/harmonic_dash.py` proposal is also not connected to t
 The two isolated squad test files were run against the fetched source in a clean temporary workspace: **7 passed**. This proves the helper and synthetic smoke harness work; it does not prove dashboard integration.
 
 Mitigation: do not connect the gauge by merely changing the URL to `/ws/events`. First define a real debt metric and its provenance, add a producer to CodeX events, implement a WebSocket consumer with freshness/error states, inject the UI through the actual static-app startup path, and test it against the real app with no-data, 404, disconnect, reconnect, malformed event, and stale-event cases. Missing metrics must render UNKNOWN, never zero.
+## Latest parser/CI verification result
+
+AVRONE PR #10's corrected branch completed the full GitHub Actions matrix on both supported Python versions: Python 3.11 = 5,677 passed / 318 skipped in 195.04s; Python 3.12 = 5,677 passed / 318 skipped in 206.52s. This followed an earlier full run with 5,669 passed / 318 skipped / 6 failed. The five parser recursion failures and one generated-prompt count mismatch were corrected and the full matrix then passed. This validates the parser/CI/capgate-selftest patch; it does not validate Docker, the external ledger, or the dormant runtime integrations.

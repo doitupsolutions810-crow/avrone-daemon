@@ -40,7 +40,11 @@ def test_envelope_rejects_extra_or_tampered_fields():
     assert validate_trial_envelope(record)
     extra = copy.deepcopy(record); extra["untrusted_extra"] = True
     assert not validate_trial_envelope(extra)
-    bad = copy.deepcopy(record); bad["trial_id"] = "not-a-digest"
+    bad = copy.deepcopy(record); bad["trial_id"] = "0" * 64
+    assert not validate_trial_envelope(bad)
+    bad = copy.deepcopy(record); bad["check_version"] = "tampered"
+    assert not validate_trial_envelope(bad)
+    bad = copy.deepcopy(record); bad["source"] = "forged:node"
     assert not validate_trial_envelope(bad)
 
 def test_composite_source_accepts_maximum_component_lengths():

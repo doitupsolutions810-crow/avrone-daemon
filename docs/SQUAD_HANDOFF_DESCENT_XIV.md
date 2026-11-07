@@ -53,3 +53,12 @@ Independently review the dormant AVRONE-to-attested-history edge and design a no
 - `verify.sh` copies `.env.full` to `.env` only when `.env` is absent, starts the full Docker profile, writes `data/VERIFY.md` and `data/EVOLVE.md`, and runs the adjacent AVRONE suite only if `AVRONE_DIR` resolves. Its default `AVRONE_DIR=../Avrone` may not match the `avrone-daemon` checkout name.
 - On the intended Docker host, after reviewing `.env` and confirming the checkout paths, use `AVRONE_DIR=../avrone-daemon VERIFY_REQUIRE_AVRONE=true VERIFY_BOOT_TIMEOUT_SECONDS=7200 ./verify.sh`. This is a bounded 2-hour boot wait, not an infinite no-timeout mode.
 - Preserve `data/VERIFY.md`, `data/EVOLVE.md`, container logs, exact image digests, and the final Git status as evidence. Do not auto-merge or enable attestation based only on a successful boot.
+## Harmonic dashboard review
+
+- `inject_into_index()` has no production call site; only unit/smoke tests use it.
+- `/api/codex/events?follow=1` is not a repository route; `/ws/events` is the actual live stream protocol.
+- `ThermoLedger` and `restart_cost` have no implementation/producer in the repository.
+- Current UI logic defaults to zero debt and does not check HTTP status, so absent telemetry can appear green.
+- The current smoke test only serves a synthetic static page; it does not prove the real app mounts the gauge or emits the expected metric.
+- The two existing squad tests were executed in isolation: 7 passed. Treat this as helper/synthetic-page verification only.
+- Do not substitute the WebSocket endpoint without defining the metric producer and event schema. Add visible UNKNOWN/STALE states and integration tests for 404, empty feed, disconnect, reconnect, malformed events, and delayed updates.

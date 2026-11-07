@@ -105,3 +105,8 @@ AVRONE PR #10's corrected branch completed the full GitHub Actions matrix on bot
 Clarification: capgate's own receipt recording is already integrated into the gated tool path (`avrone/tools.py::_receipt` calls `capgate.record` in a worker thread after the tool result). The missing connection is specifically the *external head-attestation* call: `attest_if_enabled()` has no production caller.
 
 Do not naively call `attest_if_enabled()` after every receipt. `attest_head()` performs a full `capgate.verify_chain()` walk before appending an external history entry. Repeating a full O(n) walk after each of n tool calls creates O(n²) cumulative verification work. A safer design is one idempotent checkpoint at `run.done` (or a measured, bounded checkpoint cadence), with the run ID and receipt-head hash as the idempotency key. The checkpoint must report failure separately from the already-completed tool action so an agent does not repeat a side effect.
+## Harmonic asset supply-chain boundary
+
+The proposed injector adds D3 from `https://d3js.org/d3.v7.min.js` without a pinned local asset or integrity attribute. AVRONE's current admin UI reads its admin token from the password field or `localStorage` key `avrone_tok`. If a third-party script is injected into that same-origin page, it executes with the page's privileges and can read the token. This is not an active exposure today because the injector has no production caller; it becomes a high-impact risk if integrated naively.
+
+Integration requirement: vendor a reviewed, version-pinned D3 asset inside the repository (or use a rigorously pinned SRI/CSP design), never load a floating third-party script into the privileged console, and add a test that rejects external script URLs in the admin UI.

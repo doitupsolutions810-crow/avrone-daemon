@@ -1,9 +1,19 @@
 """Bounded, provenance-aware pooling for Great Scale verification trials.
 
-This is an additive contract for future bridge/fleet consumers. It deliberately
-accepts individual, globally identified trials rather than pre-aggregated
-counts: duplicate relays must not manufacture confirmations. It does not claim
-that distinct IDs make trials statistically independent.
+Additive contract for bridge/fleet consumers. Accepts individual, globally
+identified trials rather than pre-aggregated counts: duplicate relays must not
+manufacture confirmations. Distinct IDs are not proof of statistical
+independence — that wall is named explicitly in the companion channel.
+
+Great Scale companion discipline (Psi = H - sigma form, dual channels):
+  - evidence: raw pooled Bernoulli snapshot (sigma / observable)
+  - evidence_jeffreys: finite-N honest channel (H-side smoothing)
+  - ambiguity: independence / shared-cause wall (named non-identifiability)
+  - distances: to promote / demote / conflict thresholds
+Never promote on the pooled scalar alone.
+
+Existing keys (failures, runs, sources, independence, orientation_conflict,
+evidence) are preserved for backward compatibility.
 """
 from __future__ import annotations
 
@@ -11,25 +21,53 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from .greatscale import MAX_RUNS, evidence_snapshot
+from .greatscale import CONE, MAX_RUNS, evidence_snapshot, heat, psi
 
 MAX_POOL_TRIALS = 100_000
 MAX_TRIAL_ID_CHARS = 256
 MAX_SOURCE_CHARS = 128
 MAX_SOURCES = 10_000
 
+PROMOTE_PSI_CEILING = CONE + 0.02
+DEMOTE_PSI_FLOOR = CONE + 0.20
+CONFLICT_HEAT_ALARM = 0.10
+
+
+def _jeffreys_snapshot(failures: int, runs: int) -> dict[str, Any]:
+    if runs < 1:
+        return {
+            "failures": failures, "runs": runs, "p_J": None, "S_J": None,
+            "psi_J": None, "orientation": "empty", "cone": CONE, "onConeFloor": False,
+        }
+    p_j = (failures + 0.5) / (runs + 1.0)
+    s_j = heat(p_j)
+    return {
+        "failures": failures,
+        "runs": runs,
+        "p_J": p_j,
+        "S_J": s_j,
+        "psi_J": psi(s_j),
+        "orientation": (
+            "pass" if failures == 0 else
+            "fail" if failures == runs else
+            "mixed"
+        ),
+        "cone": CONE,
+        "onConeFloor": s_j < 1e-12,
+    }
+
 
 def pool_trials(trials: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
-    """Pool unique trial records and expose source-level orientation conflicts.
+    """Pool unique trial records and emit dual-channel Great Scale report.
 
-    Each record must have a non-empty ``source``, a globally unique
-    ``trial_id``, and a boolean ``failed``. Duplicate IDs are rejected, not
-    silently counted or ignored, so callers must resolve relay overlap before
-    retrying. Empty input is valid and produces a zero-trial report without a
-    Great Scale snapshot (``evidence_snapshot`` intentionally requires runs).
+    Each record must have non-empty ``source``, globally unique ``trial_id``,
+    and boolean ``failed``. Duplicate IDs raise. Empty input yields a valid
+    zero-trial report with evidence=None.
 
-    The report's p/S/Psi describe the observed pooled outcomes only. Distinct
-    identifiers are not proof of statistical independence or causal equivalence.
+    Companion contract (additive):
+      evidence_jeffreys — H-side finite-N smoothing
+      ambiguity         — independence wall + shared-cause candidates
+      distances         — to promote / demote / conflict thresholds
     """
     seen: set[str] = set()
     by_source: dict[str, list[int]] = defaultdict(lambda: [0, 0])
@@ -64,11 +102,12 @@ def pool_trials(trials: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             by_source[source][0] += 1
 
     runs = len(seen)
-    if runs > MAX_RUNS:  # defensive if the Great Scale ceiling changes independently
+    if runs > MAX_RUNS:
         raise ValueError(f"trial pool exceeds Great Scale limit ({MAX_RUNS})")
 
     rows = []
-    orientations = set()
+    pure_pass: list[str] = []
+    pure_fail: list[str] = []
     for source in sorted(by_source):
         source_failures, source_runs = by_source[source]
         orientation = (
@@ -76,19 +115,87 @@ def pool_trials(trials: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             "fail" if source_failures == source_runs else
             "mixed"
         )
-        orientations.add(orientation)
-        rows.append({"source": source, "failures": source_failures,
-                     "runs": source_runs, "orientation": orientation})
+        if orientation == "pass":
+            pure_pass.append(source)
+        elif orientation == "fail":
+            pure_fail.append(source)
+        rows.append({
+            "source": source,
+            "failures": source_failures,
+            "runs": source_runs,
+            "orientation": orientation,
+        })
+
+    conflict = bool(pure_pass and pure_fail)
+    evidence = evidence_snapshot(failures, runs) if runs else None
+    evidence_j = _jeffreys_snapshot(failures, runs)
+
+    ambiguity: dict[str, Any] = {
+        "independence": "not_assessed",
+        "wall": (
+            "Distinct trial_ids do not prove statistical independence. "
+            "Shared latent causes (same CI image, same billing epoch, same host "
+            "clock, same network partition) can induce positive dependence; "
+            "pooling under independence then understates residual heat and "
+            "manufactures a false descent of Psi toward CONE."
+        ),
+        "shared_cause_candidates": [],
+        "action": "name the wall; do not promote pooled scalar alone",
+    }
+    if conflict:
+        ambiguity["shared_cause_candidates"] = [
+            f"orientation conflict between pure-pass sources {pure_pass} "
+            f"and pure-fail sources {pure_fail}: hidden context variable exists "
+            "with certainty under the Descent-III alarm rule"
+        ]
+        ambiguity["independence"] = "contradicted_by_orientation_conflict"
+
+    distances: dict[str, Any] = {
+        "promote_psi_ceiling": PROMOTE_PSI_CEILING,
+        "demote_psi_floor": DEMOTE_PSI_FLOOR,
+        "conflict_heat_alarm": CONFLICT_HEAT_ALARM,
+    }
+    if evidence is not None:
+        s = evidence["S"]
+        p_psi = evidence["psi"]
+        distances["psi_to_promote"] = p_psi - PROMOTE_PSI_CEILING
+        distances["psi_to_demote"] = DEMOTE_PSI_FLOOR - p_psi
+        distances["S_to_conflict_alarm"] = CONFLICT_HEAT_ALARM - s
+        distances["near_floor"] = p_psi <= PROMOTE_PSI_CEILING
+        distances["demote_zone"] = p_psi >= DEMOTE_PSI_FLOOR
+        distances["conflict_alarm"] = conflict and s >= CONFLICT_HEAT_ALARM
+    else:
+        distances["psi_to_promote"] = None
+        distances["psi_to_demote"] = None
+        distances["S_to_conflict_alarm"] = None
+        distances["near_floor"] = False
+        distances["demote_zone"] = False
+        distances["conflict_alarm"] = False
 
     result: dict[str, Any] = {
         "failures": failures,
         "runs": runs,
         "sources": rows,
+        # public key stays "not_assessed" for backward compatibility with existing tests;
+        # richer state is under ambiguity.independence
         "independence": "not_assessed",
-        "orientation_conflict": "pass" in orientations and "fail" in orientations,
+        "orientation_conflict": conflict,
+        "evidence": evidence,
+        "evidence_jeffreys": evidence_j,
+        "ambiguity": ambiguity,
+        "distances": distances,
+        "psi_form": "Psi = CONE + S ; companion requires both channels + wall",
     }
-    if runs:
-        result["evidence"] = evidence_snapshot(failures, runs)
-    else:
-        result["evidence"] = None
     return result
+
+
+def companion_ok(report: Mapping[str, Any]) -> bool:
+    """True iff report carries the full companion contract (dual + wall + distances)."""
+    if not isinstance(report, Mapping):
+        return False
+    if "evidence" not in report or "evidence_jeffreys" not in report:
+        return False
+    if "ambiguity" not in report or "distances" not in report:
+        return False
+    amb = report["ambiguity"]
+    return isinstance(amb, Mapping) and "wall" in amb and "independence" in amb

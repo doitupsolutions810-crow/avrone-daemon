@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.87: Round 94: state_health reads safely, bounded, off the loop. 5,650 tests + 19 integration
+
+- **`_check_jsonl` reads through `read_capped`** (`O_NOFOLLOW|O_NONBLOCK`, regular files only).
+  - Before, it used `stat()` + `read_bytes()`. A symlinked `memory.jsonl` or bridge log was read from any host file. The host file's shape was then reported back (for example, "torn last line"). A FIFO swapped in after the listing hung the tool.
+  - Now symlinks and special files are reported as "not a regular file".
+- **Area listings** read one bounded level through `TreeWalk(recurse=False)` (`AREA_SCAN_MAX` 50,000). Before, each area did a `sorted(glob)` of the whole directory and only then applied the 2,000 cap. `fleet.json` and `memory.jsonl` are checked by `lexists`, not `is_file`, so a link is reported, not followed.
+- **The `*.corrupt-*` sweep** uses `TreeWalk(CORRUPT_SCAN_MAX` 200,000) and skips `.git` and `runs/`. `runs/` holds only codex logs, which are never set aside. When the sweep is cut short, the count shows a `+`. Before, it ran `rglob` over the whole data_dir.
+- **`t_state_health` is now `@off_loop`.** With 150,000 run logs plus 3,000 checkpoints: 17.6 s on the event loop before, 3.35 s off the loop now.
+- **Tests:** `tests/test_round94_state_health.py` has 7 tests. On v0.86, 5 fail. The FIFO-in-area test and the skip-runs test are guards.
+
 ## v0.86: Round 93: bounded evolve loop listings, evolve_status off the loop. 5,643 tests + 19 integration
 
 - **`list_loops(settings, loop_id=None)`.** Before, each call opened every loop file twice: once to reconcile and once to list. It now reads only the newest `LOOPS_LIST_MAX` (500) files, or just the one named loop's file. `reconcile_interrupted(settings, paths)` checks only that set. The first call per data dir still sweeps everything, so an old orphaned "running" loop is still marked interrupted. `evolve_history` uses the same bounded set.

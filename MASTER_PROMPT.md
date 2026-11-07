@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.86.0)
+# AVRONE MASTER PROMPT (v0.87.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,643 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,650 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 260 test files, offline by default
+├── tests/                  # 261 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,16 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.87: Round 94: state_health reads safely, bounded, off the loop. 5,650 tests + 19 integration
+
+- **`_check_jsonl` reads through `read_capped`** (`O_NOFOLLOW|O_NONBLOCK`, regular files only).
+  - Before, it used `stat()` + `read_bytes()`. A symlinked `memory.jsonl` or bridge log was read from any host file. The host file's shape was then reported back (for example, "torn last line"). A FIFO swapped in after the listing hung the tool.
+  - Now symlinks and special files are reported as "not a regular file".
+- **Area listings** read one bounded level through `TreeWalk(recurse=False)` (`AREA_SCAN_MAX` 50,000). Before, each area did a `sorted(glob)` of the whole directory and only then applied the 2,000 cap. `fleet.json` and `memory.jsonl` are checked by `lexists`, not `is_file`, so a link is reported, not followed.
+- **The `*.corrupt-*` sweep** uses `TreeWalk(CORRUPT_SCAN_MAX` 200,000) and skips `.git` and `runs/`. `runs/` holds only codex logs, which are never set aside. When the sweep is cut short, the count shows a `+`. Before, it ran `rglob` over the whole data_dir.
+- **`t_state_health` is now `@off_loop`.** With 150,000 run logs plus 3,000 checkpoints: 17.6 s on the event loop before, 3.35 s off the loop now.
+- **Tests:** `tests/test_round94_state_health.py` has 7 tests. On v0.86, 5 fail. The FIFO-in-area test and the skip-runs test are guards.
+
 ## v0.86: Round 93: bounded evolve loop listings, evolve_status off the loop. 5,643 tests + 19 integration
 
 - **`list_loops(settings, loop_id=None)`.** Before, each call opened every loop file twice: once to reconcile and once to list. It now reads only the newest `LOOPS_LIST_MAX` (500) files, or just the one named loop's file. `reconcile_interrupted(settings, paths)` checks only that set. The first call per data dir still sweeps everything, so an old orphaned "running" loop is still marked interrupted. `evolve_history` uses the same bounded set.
@@ -331,20 +341,6 @@ landed and the suite is green. End with what is still open.
 - **`list_accepted` and `checkpoint.list_managed`.** `/api/evolve` and the CLI read at most `ACCEPTED_SCAN_MAX` (5,000) of the newest proposal files. `/api/checkpoints` reads at most `LIST_MANAGED_MAX` (1,000).
 - **Tests.** `tests/test_round92_bounded_listings.py` has 5 tests. On v0.84, 4 fail; the symlink/FIFO test is a guard.
 
-## v0.84: Round 91: run-log secret fixes that miss nothing and lose nothing. 5,633 tests + 19 integration
-
-- **`secret_scan` now reads rotated archives.**
-  - Before: it read only `<run>.jsonl`. A secret that had rotated into `<run>.jsonl.N` was reported CLEAN and never fixed. `fix_runs` skipped archives too.
-  - Now: `tools_secrets.is_run_log` matches both the active log and its archives.
-- **`fix_runs` no longer drops events.**
-  - Before: it read, redacted and `os.replace()`d each log with no lock. Every event emitted during the redaction was lost. If the log rotated meanwhile, the archived content was put back as the active log.
-  - Now: it redacts outside the lock. It then takes the Codex write lock (`t_secret_scan` passes `core.codex._write_lock`), redacts any appended tail, and swaps the file. If the inode changed or the file shrank, it leaves the log alone.
-  - Reads use `read_capped` with `FIX_MAX_BYTES` (256 MB), so FIFOs and symlinks are never read. The file mode is kept.
-- **Faster newest-runs listing.** `codex.newest_logs(log_dir, n)` does one `scandir` plus one `lstat` per entry and keeps a bounded heap. It skips symlinks and special files. `Codex.runs` and `codex_search` use it. With 100,000 logs, `runs(50)` went from 4.4 s to 3.0 s on a warm cache, and from 16.9 s on a cold one.
-- **Tests.**
-  - `tests/test_round91_run_logs.py` has 6 tests. On v0.83, 5 fail, 4 of them on real behaviour: the archive is not scanned, the archive is not fixed, the appended event is lost, and the rotated log is overwritten. The FIFO test is a guard.
-  - `test_cov14_a::test_fix_runs_unreadable_and_replace_failure` now patches `safeio.read_capped`.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -356,4 +352,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.86.0 checked out: 5,643 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.87.0 checked out: 5,650 passed, 99% coverage. Next: round <N+1> on <angle>."

@@ -14,11 +14,13 @@ node's durability and its own toolset. Both read-only, both bounded.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
 MAX_FILES_PER_AREA = 2000
 MAX_PROBLEMS_SHOWN = 15
 MAX_JSONL_BYTES = 8 * 1024 * 1024
+AREA_SCAN_MAX = 50_000        # directory entries read per area (round 94)
+CORRUPT_SCAN_MAX = 200_000    # entries the *.corrupt-* sweep reads over the whole data_dir
 # tools that change something outside the agent's own reply (files, processes, network, other nodes)
 ACTING = {"run_logs", "fleet_forget", "secret_scan", "shell", "python", "git", "write_file", "edit_file", "fs_write", "fs_delete", "env_install", "docker_run",
           "spawn", "spawn_agent", "spawn_squad", "remote_spawn", "remote_spawn_many", "priv_shell", "priv_admin",
@@ -54,13 +58,17 @@ def _check_json(p: Path) -> str | None:
 
 
 def _check_jsonl(p: Path) -> str | None:
+    # round 94: stat() + read_bytes() followed a symlink to any host file and hung on a FIFO
+    # swapped in after the listing; read_capped opens O_NOFOLLOW|O_NONBLOCK, regular files only.
+    from .safeio import FileTooBig, read_capped
     try:
-        size = p.stat().st_size
-        if size > MAX_JSONL_BYTES:
-            return None  # too big to scan here; not a problem in itself
-        data = p.read_bytes()
+        data = read_capped(p, MAX_JSONL_BYTES)
+    except FileTooBig:
+        return None  # too big to scan here; not a problem in itself
     except OSError as e:
         return f"unreadable ({type(e).__name__})"
+    if data is None:
+        return "not a regular file"
     if data and not data.endswith(b"\n"):
         return "torn last line"
     bad = 0
@@ -75,18 +83,28 @@ def _check_jsonl(p: Path) -> str | None:
 
 
 def _areas(data_dir: Path) -> list[tuple[str, list[Path], Any]]:
+    from .safeio import TreeWalk
+
     def g(d: Path, pat: str) -> list[Path]:
-        if not d.is_dir():
-            return []
+        # round 94: one bounded level (was sorted(glob) of the whole dir before the cap). Symlinks
+        # and special files are listed so the check reports them, never followed or opened.
         out: list[Path] = []
-        for f in sorted(d.glob(pat)):
+        for _rel, de in TreeWalk(d, AREA_SCAN_MAX, recurse=False):
             if len(out) >= MAX_FILES_PER_AREA:
                 break
-            if f.is_file() and not f.name.startswith("."):
-                out.append(f)
+            try:
+                if de.name.startswith(".") or de.is_dir(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            if fnmatch.fnmatchcase(de.name, pat):
+                out.append(Path(de.path))
         return out
-    fleet = [data_dir / "fleet.json"] if (data_dir / "fleet.json").is_file() else []
-    mem = [data_dir / "memory.jsonl"] if (data_dir / "memory.jsonl").is_file() else []
+
+    def one(p: Path) -> list[Path]:
+        return [p] if os.path.lexists(p) and not p.is_dir() else []
+    fleet = one(data_dir / "fleet.json")
+    mem = one(data_dir / "memory.jsonl")
     return [("fleet", fleet, _check_json),
             ("evolve proposals", g(data_dir / "evolve", "*.json"), _check_json),
             ("evolve loops", g(data_dir / "evolve" / "loops", "*.json"), _check_json),
@@ -108,11 +126,17 @@ def state_health(data_dir: Any) -> dict[str, Any]:
                 bad += 1
                 problems.append({"area": name, "path": str(f.relative_to(root)), "problem": why})
         areas[name] = {"files": len(files), "bad": bad}
-    corrupt = sorted(str(p.relative_to(root)) for p in root.rglob("*.corrupt-*")) if root.is_dir() else []
+    # round 94: rglob walked the whole data_dir (every run log, every evolve worktree) unbounded
+    from .safeio import TreeWalk
+    # runs/ holds only codex logs (never set aside as *.corrupt-*) and can hold 100k+ files
+    walk = TreeWalk(root, CORRUPT_SCAN_MAX, skip=lambda n: n in (".git", "runs"))
+    corrupt = [rel for rel, de in walk if fnmatch.fnmatchcase(de.name, "*.corrupt-*")] if root.is_dir() else []
     return {"data_dir_exists": root.is_dir(), "areas": areas, "problems": problems,
-            "set_aside": corrupt[:MAX_PROBLEMS_SHOWN], "set_aside_count": len(corrupt)}
+            "set_aside": corrupt[:MAX_PROBLEMS_SHOWN], "set_aside_count": len(corrupt),
+            "set_aside_truncated": walk.truncated}
 
 
+@off_loop  # round 94: up to 7 x 2000 file reads plus a data_dir walk ran on the event loop
 async def t_state_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     data_dir = getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)
     if data_dir is None:
@@ -123,7 +147,8 @@ async def t_state_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     verbose = args.get("verbose") is True
     total_bad = sum(a["bad"] for a in st["areas"].values())
     head = "HEALTHY" if not total_bad and not st["set_aside_count"] else "ATTENTION"
-    lines = [f"state_health: {head} ({total_bad} bad file(s), {st['set_aside_count']} set aside as *.corrupt-*)"]
+    more = "+" if st.get("set_aside_truncated") else ""
+    lines = [f"state_health: {head} ({total_bad} bad file(s), {st['set_aside_count']}{more} set aside as *.corrupt-*)"]
     for name, a in st["areas"].items():
         if a["files"] or verbose:
             lines.append(f"- {name}: {a['files']} file(s), {a['bad']} bad")

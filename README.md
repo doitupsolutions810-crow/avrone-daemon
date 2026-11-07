@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.86: Round 93: bounded evolve loop listings, evolve_status off the loop. 5,643 tests + 19 integration
+
+- **`list_loops(settings, loop_id=None)`.** Before, each call opened every loop file twice: once to reconcile and once to list. It now reads only the newest `LOOPS_LIST_MAX` (500) files, or just the one named loop's file. `reconcile_interrupted(settings, paths)` checks only that set. The first call per data dir still sweeps everything, so an old orphaned "running" loop is still marked interrupted. `evolve_history` uses the same bounded set.
+- **`t_evolve_status` is now `@off_loop`.** Before, it did all of that file I/O on the event loop. Timings at 3,000 loops: 6.56 s down to 0.97 s, and `evolve_status loop_id=…` from 3.9 s down to 0.013 s.
+- **`evolve_list`** prints the newest `LOOPS_SHOWN_MAX` (50) loop lines with "(newest 50 of N shown)".
+- **Tests.** `tests/test_round93_loop_listings.py` has 5 tests. On v0.85, 4 fail; the old-orphan sweep test is a guard. `test_tools_extra::test_search_files` failed once under full-suite load (`rg` exit 255) and passes alone.
+
 ## v0.85: Round 92: bounded proposal and checkpoint listings. 5,638 tests + 19 integration
 
 - **`safeio.newest_files(dir, suffix, n)`.** Returns the n newest regular files (oldest first) and the total count. It does one `scandir` and one `lstat` per entry and keeps a bounded heap. It skips symlinks, special files and dot-files. `codex.newest_logs` now uses it.

@@ -738,7 +738,7 @@ def _record_history_at(path: Path, loop_meta: dict[str, Any]) -> None:
 
 def evolve_history(ctx: "AgentContext", limit: int | None = None) -> list[dict[str, Any]]:
     """Finished-loop summaries, oldest first (at most `limit`, newest kept)."""
-    reconcile_interrupted(ctx.core.settings)
+    reconcile_interrupted(ctx.core.settings, _loop_files(ctx.core.settings))
     rows = _read_history(_history_path(ctx))[-history_cap():]
     if limit is not None:
         n = int(_clamp(limit, history_cap(), history_cap()))
@@ -991,7 +991,27 @@ def _resume_hint(lp: dict[str, Any]) -> str:
             "the candidates not yet tried (see this loop's iterations); evolve_history lists it.")
 
 
-def reconcile_interrupted(settings) -> list[str]:
+LOOPS_LIST_MAX = 500      # newest loop files list_loops / evolve_status read
+LOOPS_SHOWN_MAX = 50      # loop lines evolve_list prints
+_FULL_RECONCILED: set[str] = set()
+_FULL_RECONCILED_LOCK = threading.Lock()
+
+
+def _loop_files(settings, loop_id: str | None = None) -> list[Path]:
+    """Loop meta files to look at (round 92/93): the one named loop, else the newest LOOPS_LIST_MAX.
+    Every listing used to open every loop file twice (reconcile, then list)."""
+    d = _settings_loops_dir(settings)
+    if loop_id:
+        p = d / f"{SAFE_ID.sub('-', loop_id)}.json"
+        try:
+            return [p] if stat.S_ISREG(os.lstat(p).st_mode) else []
+        except OSError:
+            return []
+    from .safeio import newest_files
+    return newest_files(d, ".json", LOOPS_LIST_MAX)[0]
+
+
+def reconcile_interrupted(settings, paths: list[Path] | None = None) -> list[str]:
     """Mark every orphaned "running" loop as "interrupted" ON DISK (never resumes it: a half-run loop's
     candidates and gate are not re-run behind the operator's back), add a resume_hint, drop any stale
     cancel file, and record it in history. Idempotent and best effort. Returns the loop_ids marked."""
@@ -999,7 +1019,15 @@ def reconcile_interrupted(settings) -> list[str]:
     marked: list[str] = []
     if not d.exists():
         return marked
-    for f in sorted(d.glob("*.json")):
+    if paths is None:
+        files = sorted(d.glob("*.json"))
+    else:  # a bounded set from a listing; the first call per data dir still sweeps everything
+        key = str(d.resolve())
+        with _FULL_RECONCILED_LOCK:
+            full = key not in _FULL_RECONCILED
+            _FULL_RECONCILED.add(key)
+        files = sorted(d.glob("*.json")) if full else sorted(paths)
+    for f in files:
         try:
             lp = _load_json(f)
         except (OSError, ValueError, RecursionError):
@@ -1021,7 +1049,7 @@ def reconcile_interrupted(settings) -> list[str]:
 
 def evolve_status(ctx: "AgentContext", loop_id: str | None = None) -> dict[str, Any] | None:
     """Structured progress of a loop (latest when loop_id is None); None if unknown."""
-    loops = list_loops(ctx.core.settings)
+    loops = list_loops(ctx.core.settings, loop_id or None)
     if loop_id:
         loops = [lp for lp in loops if lp.get("loop_id") == loop_id]
     if not loops:
@@ -1232,8 +1260,9 @@ async def t_evolve_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
                     f"({', '.join(m['files'])}) by {m['by']}{dur}{tag}")
     loops = list_loops(ctx.core.settings)
     if loops:
-        rows.append("loops:")
-        rows += ["  " + _loop_line(lp) for lp in loops]
+        rows.append("loops:" + (f" (newest {LOOPS_SHOWN_MAX} of {len(loops)} shown)"
+                                if len(loops) > LOOPS_SHOWN_MAX else ""))
+        rows += ["  " + _loop_line(lp) for lp in loops[-LOOPS_SHOWN_MAX:]]
     return "\n".join(rows) or "no proposals yet"
 
 
@@ -1261,13 +1290,14 @@ def _clean_loop(lp: dict[str, Any]) -> dict[str, Any]:
     return {**lp, "iterations": its, "accepted": acc, "goal": str(lp.get("goal") or "")}
 
 
-def list_loops(settings) -> list[dict[str, Any]]:
-    """Every evolve loop's meta (oldest first), for evolve_list / evolve_status."""
-    reconcile_interrupted(settings)
-    d = _settings_loops_dir(settings)
+def list_loops(settings, loop_id: str | None = None) -> list[dict[str, Any]]:
+    """Evolve loop metas (oldest first), for evolve_list / evolve_status: the newest LOOPS_LIST_MAX
+    files, or just the named loop's file (round 93: this read every loop file twice per call)."""
+    files = _loop_files(settings, loop_id)
+    reconcile_interrupted(settings, files)
     out = []
-    if d.exists():
-        for f in d.glob("*.json"):
+    if files:
+        for f in files:
             try:
                 lp = _load_json(f)
             except (OSError, ValueError, RecursionError):
@@ -1277,9 +1307,10 @@ def list_loops(settings) -> list[dict[str, Any]]:
     return sorted(out, key=lambda m: _num(m.get("ts")))  # a str ts raised TypeError in the sort
 
 
+@off_loop  # round 93: it read every loop file on the event loop
 async def t_evolve_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    loops = list_loops(ctx.core.settings)
     lid = str(args.get("loop_id") or "")
+    loops = list_loops(ctx.core.settings, lid or None)
     if lid:
         loops = [lp for lp in loops if lp.get("loop_id") == lid]
         if not loops:

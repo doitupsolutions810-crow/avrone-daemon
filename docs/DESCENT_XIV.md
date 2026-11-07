@@ -84,3 +84,16 @@ The Grok Bot repository's `verify.sh` is a real local Docker verifier, not a har
 The script defaults `AVRONE_DIR` to `../Avrone`; in a workspace where the repository is named `avrone-daemon`, the combined gate should explicitly set `AVRONE_DIR=../avrone-daemon VERIFY_REQUIRE_AVRONE=true` after confirming the actual checkout layout.
 
 GitHub Actions metadata for Grok Bot main shows the latest `live-tests` run (40801560492) and scheduled `model-bench` run (41439417592) failed with `runner_id=0` and empty job steps. Those runs did not provide test execution evidence. In this session, the local environment has no Docker executable, and the connected browser cannot access the originating Codespaces tab. Therefore neither `verify.sh` nor a live Grok squad run was executed.
+## Harmonic gauge: a second absence-to-zero defect
+
+The `avrone-squad/harmonic/harmonic_dash.py` proposal is also not connected to the live app:
+
+- `inject_into_index()` appears only in its module and tests; no production caller injects the gauge into `avrone/static/index.html`.
+- The snippet requests `/api/codex/events?follow=1`; repository search finds no such route. AVRONE's live event interface is `/ws/events` (WebSocket), which is a different protocol.
+- The repository contains no `ThermoLedger` implementation and no producer for the referenced `restart_cost` event field.
+- The fetch logic does not check `response.ok`; it initializes `worst=0`, ignores non-JSON lines, then renders zero debt. A 404 or empty feed can therefore appear green. Network failures are swallowed without a visible stale/unknown state.
+- The existing smoke test serves a synthetic page and asserts that strings were injected. It does not load the real AVRONE static page, connect to a real event route, or verify a live debt measurement. Its `.smoke-tmp/index.html` write is also a persistent test side effect.
+
+The two isolated squad test files were run against the fetched source in a clean temporary workspace: **7 passed**. This proves the helper and synthetic smoke harness work; it does not prove dashboard integration.
+
+Mitigation: do not connect the gauge by merely changing the URL to `/ws/events`. First define a real debt metric and its provenance, add a producer to CodeX events, implement a WebSocket consumer with freshness/error states, inject the UI through the actual static-app startup path, and test it against the real app with no-data, 404, disconnect, reconnect, malformed event, and stale-event cases. Missing metrics must render UNKNOWN, never zero.

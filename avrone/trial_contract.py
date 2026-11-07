@@ -12,10 +12,10 @@ MAX_FIELD_CHARS = 256
 MAX_CONFIG_BYTES = 16_384
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
-def _identity(value: Any, field: str) -> str:
+def _identity(value: Any, field: str, max_chars: int = MAX_FIELD_CHARS) -> str:
     if not isinstance(value, str): raise ValueError(f"{field} must be a string")
     value = unicodedata.normalize("NFC", value).strip()
-    if not value or len(value) > MAX_FIELD_CHARS: raise ValueError(f"{field} must contain 1..{MAX_FIELD_CHARS} characters")
+    if not value or len(value) > max_chars: raise ValueError(f"{field} must contain 1..{max_chars} characters")
     if any(ord(ch) < 32 or ord(ch) == 127 for ch in value): raise ValueError(f"{field} must not contain control characters")
     return value
 
@@ -44,6 +44,6 @@ def validate_trial_envelope(record: Any) -> bool:
     if not isinstance(record.get("trial_id"), str) or not _HEX64.fullmatch(record["trial_id"]): return False
     if not isinstance(record.get("check_config_sha256"), str) or not _HEX64.fullmatch(record["check_config_sha256"]): return False
     try:
-        for field in ("source", "run_id", "check_id", "check_version", "attempt_id"): _identity(record[field], field)
+        for field in ("source", "run_id", "check_id", "check_version", "attempt_id"): _identity(record[field], field, 513 if field == "source" else MAX_FIELD_CHARS)
     except ValueError: return False
     return True

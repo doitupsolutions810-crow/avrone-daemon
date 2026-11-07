@@ -251,7 +251,9 @@ def _selftest() -> int:
         record("torn evidence kept", (attested / "history.jsonl.torn").exists())
 
         lines = log.read_text().splitlines()
-        lines[0] = lines[0].replace('"seq": 0', '"seq": 9')
+        first = json.loads(lines[0])
+        first["seq"] = 9
+        lines[0] = _canon(first).decode("utf-8")
         log.write_text(NL.join(lines) + NL)
         try:
             attest_head(dd, note="must-refuse")

@@ -451,14 +451,20 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: 'old' must be a non-empty string"
     if old == new:
         return "ERROR: 'old' and 'new' are identical; nothing to change"
-    try:
-        size = p.stat().st_size
-    except OSError:
-        size = 0
-    if size > EDIT_MAX_BYTES:
-        return (f"ERROR: {raw_path} is {size} bytes; edit_file handles up to {EDIT_MAX_BYTES} bytes, "
+    from .safeio import NotRegularFile, open_read
+    try:  # round 87: open first, then size the open file (a FIFO swapped in blocked read_bytes)
+        fh = open_read(p, follow=True)
+    except NotRegularFile:
+        return f"ERROR: {raw_path} is not a regular file"
+    with fh:
+        size = os.fstat(fh.fileno()).st_size
+        if size > EDIT_MAX_BYTES:
+            return (f"ERROR: {raw_path} is {size} bytes; edit_file handles up to {EDIT_MAX_BYTES} bytes, "
+                    "use shell (sed, python) for bigger files")
+        data = fh.read(EDIT_MAX_BYTES + 1)
+    if len(data) > EDIT_MAX_BYTES:
+        return (f"ERROR: {raw_path} grew past {EDIT_MAX_BYTES} bytes while being read; "
                 "use shell (sed, python) for bigger files")
-    data = p.read_bytes()
     name = fsunify.display(ctx, p)
     if b"\x00" in data[:8192]:
         return f"ERROR: {name} is a binary file; edit it with shell instead"
@@ -816,9 +822,15 @@ def _read_text_for_diff(ctx: "AgentContext", raw: Any, label: str) -> tuple[str 
         return None, f"ERROR: {rel} not found"
     if not p.is_file():
         return None, f"ERROR: {rel} is not a file"
-    if p.stat().st_size > DIFF_MAX_FILE_BYTES:
+    from .safeio import NotRegularFile, open_read
+    try:
+        fh = open_read(p, follow=True)
+    except NotRegularFile:
+        return None, f"ERROR: {rel} is not a regular file"
+    with fh:
+        data = fh.read(DIFF_MAX_FILE_BYTES + 1)
+    if len(data) > DIFF_MAX_FILE_BYTES:
         return None, f"ERROR: {rel} is larger than {DIFF_MAX_FILE_BYTES} bytes"
-    data = p.read_bytes()
     if b"\0" in data[:8192]:
         return None, f"ERROR: {rel} looks like a binary file"
     return data.decode(errors="replace"), fsunify.display(ctx, p)

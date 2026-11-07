@@ -204,10 +204,15 @@ async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         limit = READ_DEFAULT_CHARS
     limit = max(1, min(limit, READ_MAX_CHARS))
-    with p.open("rb") as f:
+    from .safeio import NotRegularFile, open_read
+    try:  # round 87: never block on a FIFO swapped in after the is_file() check
+        f = open_read(p, follow=True)
+    except NotRegularFile:
+        return f"ERROR: {_rel(root, p)} is not a regular file"
+    with f:
+        size = os.fstat(f.fileno()).st_size
         raw = f.read(limit * 4 + 4)
     text = raw.decode("utf-8", errors="replace")
-    size = p.stat().st_size
     out = text[:limit]
     if len(text) > limit or size > len(raw):
         out += f"\n...[truncated; file is {size} bytes]"

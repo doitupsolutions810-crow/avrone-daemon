@@ -81,6 +81,12 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.80: Round 87: file tools no longer hang on a FIFO swapped in mid-call. 5,610 tests + 19 integration
+
+- **The bug.** `read_file`, `edit_file`, `diff_files` and `fs_read` first checked `is_file()`, then opened the path. An agent's own shell could replace the file with a FIFO between those two steps, and `open()`/`read_bytes()` then parked a worker thread forever. Every `off_loop` tool shares that thread pool, so a handful of these calls could stall the whole node.
+- **The fix.** These tools now open through `safeio.open_read(p, follow=True)`, which uses `O_NONBLOCK` and then requires `fstat` to report a regular file. Paths are already confined by fsunify/agentfs, so symlinks are still read through. Sizes are now taken from the open file, not a separate `stat`. Reads are capped at limit + 1, so `edit_file` and `diff_files` refuse a file that grows past its cap mid-read.
+- **Tests.** `tests/test_round87_tool_read_races.py` has 5 tests. 3 fail (hang) on v0.79. The other 2 (symlink still readable, size refusal) are guards.
+
 ## v0.79: Round 86: pack reads are capped and search no longer follows file symlinks. 5,605 tests + 19 integration
 
 - **`agentpack.read_pack_file(p)`.** Used by `agent_pack_import` and `pack_list`. Reads with `O_NOFOLLOW|O_NONBLOCK` and stops at the bundle cap (quota + 1 MB) before loading anything. Previously `read_bytes()` pulled a multi-GB file into memory whole before `read_pack` could refuse it. A FIFO named like a pack (`<agent>-<ts>.tar.gz`) parked a worker thread forever in `pack_list`. Symlinks, special files and oversized bundles now raise `PackError`.

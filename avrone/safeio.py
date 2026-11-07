@@ -64,9 +64,9 @@ _NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 
-def _open_regular(path: str | os.PathLike, flags: int, mode: int) -> int:
+def _open_regular(path: str | os.PathLike, flags: int, mode: int, follow: bool = False) -> int:
     try:
-        fd = os.open(path, flags | _NOFOLLOW | _NONBLOCK | _CLOEXEC, mode)
+        fd = os.open(path, flags | (0 if follow else _NOFOLLOW) | _NONBLOCK | _CLOEXEC, mode)
     except OSError as e:
         import errno
         if e.errno in (errno.ELOOP, errno.ENXIO, errno.EISDIR, errno.EMLINK):
@@ -139,6 +139,9 @@ def read_capped(path: str | os.PathLike, max_bytes: int) -> bytes | None:
     return data
 
 
-def open_read(path: str | os.PathLike):
-    """A binary file object reading a regular file; NotRegularFile for a symlink or special file."""
-    return os.fdopen(_open_regular(path, os.O_RDONLY, 0), "rb")
+def open_read(path: str | os.PathLike, follow: bool = False):
+    """A binary file object reading a regular file; NotRegularFile for a special file, and for a
+    symlink unless follow=True. With follow=True a link is read through (for tool paths already
+    confined by fsunify/agentfs), but a FIFO swapped in after the caller's is_file() check still
+    never blocks (O_NONBLOCK, then fstat must say regular)."""
+    return os.fdopen(_open_regular(path, os.O_RDONLY, 0, follow), "rb")

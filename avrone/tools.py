@@ -453,9 +453,15 @@ async def t_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: {raw_path} is a directory, not a file. Entries: {_dir_listing(p)}"
     if not p.is_file():
         return f"ERROR: {raw_path} is not a regular file"
-    size = p.stat().st_size
     off = _offset(args.get("offset"))
-    with p.open("rb") as fh:
+    from .safeio import NotRegularFile, open_read
+    try:  # round 87: a FIFO swapped in after is_file() parked a pool thread forever in open()
+        fh = open_read(p, follow=True)
+    except NotRegularFile:
+        return f"ERROR: {raw_path} is not a regular file"
+    import os as _os
+    size = _os.fstat(fh.fileno()).st_size
+    with fh:
         head = fh.read(8192)
         if b"\x00" in head:
             return (f"ERROR: {raw_path} is a binary file ({size} bytes); inspect it with shell "

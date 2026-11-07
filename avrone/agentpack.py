@@ -287,6 +287,20 @@ class _CappedStream(io.RawIOBase):
         return n
 
 
+def read_pack_file(p: Path) -> bytes:
+    """A pack's bytes, read with O_NOFOLLOW|O_NONBLOCK and capped at the bundle limit (round 86:
+    read_bytes() loaded a multi-GB file whole before read_pack could refuse it, and a FIFO named
+    <agent>-<ts>.tar.gz parked a worker thread forever in pack_list)."""
+    from .safeio import FileTooBig, read_capped
+    try:
+        data = read_capped(p, quota_bytes() + 1024 * 1024)
+    except FileTooBig:
+        raise PackError("bundle is over the quota") from None
+    if data is None:
+        raise PackError("not a regular file (symlink, FIFO or device)")
+    return data
+
+
 def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, bytes]]:
     """Parse and fully verify a bundle in memory. Returns (manifest, memory records, {rel: bytes})."""
     quota = quota_bytes()

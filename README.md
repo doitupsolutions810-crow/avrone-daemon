@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.79: Round 86: pack reads are capped and search no longer follows file symlinks. 5,605 tests + 19 integration
+
+- **`agentpack.read_pack_file(p)`.** Used by `agent_pack_import` and `pack_list`. Reads with `O_NOFOLLOW|O_NONBLOCK` and stops at the bundle cap (quota + 1 MB) before loading anything. Previously `read_bytes()` pulled a multi-GB file into memory whole before `read_pack` could refuse it. A FIFO named like a pack (`<agent>-<ts>.tar.gz`) parked a worker thread forever in `pack_list`. Symlinks, special files and oversized bundles now raise `PackError`.
+- **`search_files` child (`searchproc.run`).** Tree entries are checked with `lstat` and read with `safeio.read_capped`. `is_file()` used to follow a symlink in the tree to any file on the host, and `read_bytes()` then printed that file's matching lines. FIFOs are skipped. A root the caller already resolved is still read directly.
+- **Tests.** `tests/test_round86_pack_and_search_reads.py` has 6 tests; 5 fail on v0.78 (the FIFO-skip test is a guard). `test_tool_packpeer::test_pack_list_caps_and_unreadable` now also patches `read_pack_file`.
+- **Not changed.** The `.env` loader still follows symlinks, since symlinked `.env` files are common. `edit_file` and `diff_files` keep their existing `is_file` and size checks.
+
 ## v0.78: Round 85: state JSON reads never block, follow links or read unbounded. 5,599 tests + 19 integration
 
 - **New `safeio.read_capped(path, max_bytes)`.** Returns the bytes of a regular file. Returns `None` when the file is missing, a symlink, or a special file. Raises `FileTooBig` when the file is over the cap, including one that grows past the cap mid-read. Opens with `O_NOFOLLOW|O_NONBLOCK`. Also new: `safeio.open_read`.

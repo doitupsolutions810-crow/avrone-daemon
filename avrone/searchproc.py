@@ -13,8 +13,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import sys
 from pathlib import Path
+
+from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
@@ -33,15 +36,21 @@ def run(req: dict, out) -> None:
     cap, max_files, max_bytes = int(req.get("cap", 200)), int(req.get("max_files", 5000)), int(
         req.get("max_bytes", 1_000_000))
     hits = scanned = 0
-    for f in _iter_files(Path(req["root"]), set(req.get("skip_dirs") or []), set(req.get("skip_paths") or [])):
+    root = Path(req["root"])
+    for f in _iter_files(root, set(req.get("skip_dirs") or []), set(req.get("skip_paths") or [])):
         if scanned > max_files or hits >= cap:
             break
         scanned += 1
         try:
-            if not f.is_file() or f.stat().st_size > max_bytes:
+            # round 86: lstat + O_NOFOLLOW read. is_file()/read_bytes() followed a symlink in the
+            # tree to any file on the host, and a FIFO swapped in after the check blocked the scan.
+            st = f.lstat() if f != root else f.stat()
+            if not stat.S_ISREG(st.st_mode) or st.st_size > max_bytes:
                 continue
-            data = f.read_bytes()
+            data = read_capped(f, max_bytes) if f != root else f.read_bytes()
         except OSError:
+            continue
+        if data is None:
             continue
         if b"\0" in data[:4096]:
             continue

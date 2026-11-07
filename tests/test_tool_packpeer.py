@@ -68,6 +68,8 @@ def test_pack_list_caps_and_unreadable(tmp_path, monkeypatch):
     for i in range(3):
         (d / f"a-{i}.tar.gz").write_bytes(b"junk")
     monkeypatch.setattr(tp.Path, "read_bytes", lambda self: (_ for _ in ()).throw(PermissionError("no")))
+    # round 86: packs are read through agentpack.read_pack_file (O_NOFOLLOW, capped)
+    monkeypatch.setattr(agentpack, "read_pack_file", lambda p: (_ for _ in ()).throw(PermissionError("no")))
     out = run(tp.t_pack_list(_ctx(tmp_path), {}))
     assert "first 2 shown" in out and "UNREADABLE - PermissionError" in out
 

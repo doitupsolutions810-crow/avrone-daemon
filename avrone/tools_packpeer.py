@@ -38,7 +38,7 @@ def _data_dir(ctx: "AgentContext") -> Path:
 def _verify(p: Path) -> tuple[str, str]:
     from . import agentpack
     try:
-        man, mem, blobs = agentpack.read_pack(p.read_bytes())
+        man, mem, blobs = agentpack.read_pack(agentpack.read_pack_file(p))
     except agentpack.PackError as e:
         return "REFUSED", str(e)[:160]
     except OSError as e:

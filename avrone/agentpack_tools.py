@@ -85,7 +85,7 @@ async def t_agent_pack_import(ctx: "AgentContext", args: dict[str, Any]) -> str:
         p = agentpack.pack_dir(data) / name
         if p.is_symlink() or not p.is_file():
             raise PermissionError(f"no such pack: {name}")
-        res = agentpack.import_pack(ws, data, p.read_bytes(), _node(ctx), expect_agent=aid)
+        res = agentpack.import_pack(ws, data, agentpack.read_pack_file(p), _node(ctx), expect_agent=aid)
     except (PermissionError, agentpack.PackError) as e:
         _audit(ctx, "agentpack.refused", tool="agent_pack_import", name=name[:100], reason=str(e)[:300])
         return f"ERROR: {e}"

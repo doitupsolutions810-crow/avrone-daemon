@@ -961,7 +961,23 @@ def test_drive_swapped_mid_run_detected(env):
     assert p.returncode == 1 and "disappeared or was swapped" in o
 
 
-def test_state_goes_readonly_while_advancing(env):
+def test_state_goes_readonly_while_advancing(env, tmp_path):
+    # Some container/overlay filesystems report chmod mode bits but still allow
+    # writes. Do not mistake that host limitation for an autopilot regression.
+    probe_dir = tmp_path / "readonly-mode-probe"
+    probe_dir.mkdir()
+    os.chmod(probe_dir, 0o555)
+    try:
+        try:
+            (probe_dir / "write-probe").write_text("probe")
+        except OSError:
+            mode_bits_enforced = True
+        else:
+            mode_bits_enforced = False
+    finally:
+        os.chmod(probe_dir, 0o755)
+    if not mode_bits_enforced:
+        pytest.skip("host filesystem does not enforce POSIX directory mode bits")
     env.flag("chat_smoke_pass"); env.flag("chat_readonly_state")
     try:
         r = env.run()

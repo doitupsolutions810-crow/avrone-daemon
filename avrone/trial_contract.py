@@ -4,7 +4,7 @@ A trial ID is derived from execution identity, not outcome. Replaying the same
 attempt produces the same ID; a new attempt must supply a new attempt_id.
 """
 from __future__ import annotations
-import hashlib, json, re, unicodedata
+import hashlib, hmac, json, re, unicodedata
 from typing import Any
 
 SCHEMA_VERSION = "avrone.trial/v1"
@@ -48,6 +48,6 @@ def validate_trial_envelope(record: Any) -> bool:
         if record["source"] != record["system"] + ":" + record["node"]: return False
         identity = {"schema": SCHEMA_VERSION, "system": record["system"], "node": record["node"], "run_id": record["run_id"], "check_id": record["check_id"], "check_version": record["check_version"], "check_config_sha256": record["check_config_sha256"], "attempt_id": record["attempt_id"]}
         expected = hashlib.sha256(_canonical(identity)).hexdigest()
-        if not __import__("hmac").compare_digest(expected, record["trial_id"]): return False
+        if not hmac.compare_digest(expected, record["trial_id"]): return False
     except ValueError: return False
     return True

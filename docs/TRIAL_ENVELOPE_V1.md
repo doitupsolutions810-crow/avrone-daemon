@@ -6,7 +6,7 @@ AVRONE evidence_pool.pool_trials rejects duplicate trial IDs and reports source-
 
 ## Identity
 
-trial_id = SHA256(canonical_json(identity)); identity includes schema version, source system and node, source run ID, check ID and version, SHA-256 of canonical check configuration, and attempt ID.
+trial_id = SHA256(canonical_json(identity)); identity includes schema version, explicit source system and node fields, source run ID, check ID and version, SHA-256 of canonical check configuration, and attempt ID.
 
 The outcome is deliberately excluded. If a relay repeats the same attempt with a different outcome, the IDs collide and the pool rejects the contradiction instead of counting both. A genuinely new attempt must have a new attempt ID.
 

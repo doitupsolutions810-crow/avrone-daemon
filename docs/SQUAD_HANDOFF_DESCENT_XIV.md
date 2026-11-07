@@ -46,3 +46,10 @@ Independently review the dormant AVRONE-to-attested-history edge and design a no
 - Do not enable `AVRONE_CAPGATE_ATTEST` against the current external ledger.
 - Do not run a live evolution loop or deployment until Docker host, target repositories, and the side effects are explicitly reviewed.
 - Do not claim squad execution without fresh conversation readback and artifact verification.
+## Current execution constraints
+
+- Grok Bot main `live-tests` run 40801560492 and scheduled `model-bench` run 41439417592 ended with `runner_id=0` and empty step lists; treat them as runner/startup failures, not as executed test suites.
+- The local execution environment has no Docker executable, so do not claim `verify.sh`, Compose builds, live inference, browser tests, or the squad round ran.
+- `verify.sh` copies `.env.full` to `.env` only when `.env` is absent, starts the full Docker profile, writes `data/VERIFY.md` and `data/EVOLVE.md`, and runs the adjacent AVRONE suite only if `AVRONE_DIR` resolves. Its default `AVRONE_DIR=../Avrone` may not match the `avrone-daemon` checkout name.
+- On the intended Docker host, after reviewing `.env` and confirming the checkout paths, use `AVRONE_DIR=../avrone-daemon VERIFY_REQUIRE_AVRONE=true VERIFY_BOOT_TIMEOUT_SECONDS=7200 ./verify.sh`. This is a bounded 2-hour boot wait, not an infinite no-timeout mode.
+- Preserve `data/VERIFY.md`, `data/EVOLVE.md`, container logs, exact image digests, and the final Git status as evidence. Do not auto-merge or enable attestation based only on a successful boot.

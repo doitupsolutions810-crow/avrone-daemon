@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.92: Round 99: skills are listed from file heads and loaded by name. 5,691 tests + 19 integration
+
+- **`skill_load` read every skill:** it read every skill, up to 500 files of 256 KB each, just to find one. It now goes straight to `<name>/SKILL.md`, then `<name>.md`, using `_skill_path`. The same rules still apply: a directory skill wins over a flat one, a symlink pointing outside the skills dir is refused, and the size cap holds. The full list is built only for the "Available:" hint when the name is missing.
+- **`skill_list` read every file whole:** each file is now read only up to `SKILL_HEAD_BYTES` (16 KB) for its description. A file is read whole only when its description or front matter starts past that point.
+- **Unbounded directory sort:** `sorted(glob)` over the whole skills dir is replaced by `_skill_files`, a bounded `os.scandir` capped at `SKILLS_SCAN_MAX` (20,000) that skips dot-files.
+- **Bench** (500 skills of 200 KB plus 50,000 junk files): `skill_load` 3.66 s → 0.10 s, `skill_list` 3.07 s → 0.74 s.
+- **FIFO hang:** `_read_skill` checked `is_file()` and then opened the path. It now opens one fd with `safeio.open_read(follow=True)` (`O_NONBLOCK`, checked with `fstat`), so a FIFO swapped in between can no longer hang the tool.
+- **Tests:** `tests/test_round99_skills.py` has 7 tests. 5 fail on v0.91; the other 2 (dir-over-flat priority, outside symlink) guard behaviour that already worked. Three older edge tests now patch `safeio.open_read`.
+
 ## v0.91: Round 98: image tools open and decode off the event loop. 5,684 tests + 19 integration
 
 - **Loop stall:** `image_inspect` and `image_decode` called `_open_image` on the event loop, including `im.load()`, a full decode of up to `MAX_IMAGE_PIXELS` (40 Mpx). Both tools now call it through `asyncio.to_thread`.

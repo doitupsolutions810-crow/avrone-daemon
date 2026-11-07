@@ -135,6 +135,14 @@ def test_skill_growing_after_stat_is_not_read_whole(tmp_path, monkeypatch):
                 fh.write(b"y" * (agentkit.SKILL_MAX_BYTES + 5000))
         return real_open(self, *a, **k)
     monkeypatch.setattr(Path, "open", grown)
+    from avrone import safeio  # round 99: _read_skill opens one fd via safeio.open_read
+    real_or = safeio.open_read
+
+    def grown_or(path, follow=False):
+        fh = real_or(path, follow)
+        grown(Path(path), "rb").close()
+        return fh
+    monkeypatch.setattr(safeio, "open_read", grown_or)
     assert agentkit._read_skill(f) is None
 
 

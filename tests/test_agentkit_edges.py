@@ -206,9 +206,9 @@ def test_skill_load_file_vanishes(tmp_path, skills, monkeypatch):
     real = agentkit._read_skill
     seen = {"n": 0}
 
-    def flaky(f):
+    def flaky(f, *a):  # round 99: the existence probe (head read) works, the full read fails
         seen["n"] += 1
-        return real(f) if seen["n"] == 1 else None
+        return real(f, *a) if a else None
     monkeypatch.setattr(agentkit, "_read_skill", flaky)
     assert run(agentkit.t_skill_load(c, {"name": "gone"})) == "ERROR: skill 'gone' could not be read."
 
@@ -221,6 +221,8 @@ def test_read_skill_oserror(tmp_path, monkeypatch):
         raise PermissionError("denied")
     monkeypatch.setattr(Path, "read_bytes", boom)
     monkeypatch.setattr(Path, "open", lambda self, *a, **k: boom(self))
+    from avrone import safeio  # round 99: _read_skill opens one fd via safeio.open_read
+    monkeypatch.setattr(safeio, "open_read", lambda path, follow=False: boom(path))
     assert agentkit._read_skill(f) is None
 
 

@@ -250,17 +250,54 @@ def _skill_desc(fm: dict[str, str], body: str) -> str:
     return (desc[:200] if desc else "(no description)")
 
 
-def _read_skill(f: Path) -> str | None:
+SKILL_HEAD_BYTES = 16_384     # skill_list reads this much of each skill for its description
+SKILLS_SCAN_MAX = 20_000      # directory entries looked at per listing (a 50k-file dir was sorted whole)
+
+
+def _read_skill(f: Path, head: int | None = None) -> str | None:
+    """A skill's text, or None when it is missing, special, oversized or unreadable. One fd,
+    O_NONBLOCK and fstat-checked (round 99): is_file() then open() let a FIFO swapped in between
+    block the tool forever. With head, only the first `head` bytes are read (the size cap still
+    applies to the whole file)."""
+    from .safeio import open_read
     try:
-        if not f.is_file() or f.stat().st_size > SKILL_MAX_BYTES:
-            return None
-        with f.open("rb") as fh:  # bounded: a file that grew after stat() used to be read whole
-            data = fh.read(SKILL_MAX_BYTES + 1)
-        if len(data) > SKILL_MAX_BYTES:
+        with open_read(f, follow=True) as fh:
+            if os.fstat(fh.fileno()).st_size > SKILL_MAX_BYTES:
+                return None
+            data = fh.read(SKILL_MAX_BYTES + 1 if head is None else min(head, SKILL_MAX_BYTES + 1))
+        if len(data) > SKILL_MAX_BYTES:  # grew after fstat
             return None
         return data.decode("utf-8", errors="replace")
     except (OSError, ValueError):
         return None
+
+
+def _skill_files(d: Path) -> list[tuple[str, Path]]:
+    """(name, path) candidates: <name>/SKILL.md in name order, then <name>.md in name order, from at
+    most SKILLS_SCAN_MAX directory entries (was sorted(glob) of the whole directory every call)."""
+    dirs: list[str] = []
+    flats: list[str] = []
+    try:
+        with os.scandir(d) as it:
+            for n, e in enumerate(it):
+                if n >= SKILLS_SCAN_MAX:
+                    break
+                if e.name.startswith("."):
+                    continue
+                if e.name.endswith(".md"):
+                    flats.append(e.name)
+                else:
+                    try:
+                        if e.is_dir():  # follows a link: the resolve() check below confines it
+                            dirs.append(e.name)
+                    except OSError:
+                        continue
+    except OSError:
+        return []
+    dirs.sort()
+    flats.sort()
+    out = [(n, d / n / "SKILL.md") for n in dirs]
+    return out + [(n[:-3], d / n) for n in flats]
 
 
 def _skills(ctx: "AgentContext") -> dict[str, tuple[str, Path]]:
@@ -275,8 +312,7 @@ def _skills(ctx: "AgentContext") -> dict[str, tuple[str, Path]]:
     if not d.is_dir():
         return found
     root = d.resolve()
-    candidates = [(f.parent.name, f) for f in sorted(d.glob("*/SKILL.md"))] + \
-                 [(f.stem, f) for f in sorted(d.glob("*.md"))]
+    candidates = _skill_files(d)
     for name, f in candidates:
         if len(found) >= MAX_SKILLS:  # 100k files used to be read (and listed) on every call
             break
@@ -287,12 +323,39 @@ def _skills(ctx: "AgentContext") -> dict[str, tuple[str, Path]]:
                 continue
         except OSError:
             continue
-        text = _read_skill(f)
+        text = _read_skill(f, SKILL_HEAD_BYTES)  # was every skill read whole (500 x 256 KB per call)
         if text is None:
             continue
         fm, body = parse_skill(text)
-        found[name] = (_skill_desc(fm, body), f)
+        desc = _skill_desc(fm, body)
+        if len(text.encode("utf-8", "surrogatepass")) >= SKILL_HEAD_BYTES and (
+                desc == "(no description)" or (not fm and text.lstrip("\ufeff").startswith("---"))):
+            full = _read_skill(f)  # description or front matter past the head: read it all
+            if full is None:
+                continue
+            fm, body = parse_skill(full)
+            desc = _skill_desc(fm, body)
+        found[name] = (desc, f)
     return dict(sorted(found.items()))
+
+
+def _skill_path(ctx: "AgentContext", name: str) -> Path | None:
+    """The file _skills() would pick for `name`: <name>/SKILL.md over <name>.md, confined to the
+    skills dir, readable and within the size cap; None otherwise."""
+    d = _skills_dir(ctx)
+    try:
+        root = d.resolve()
+    except OSError:
+        return None
+    for f in (d / name / "SKILL.md", d / f"{name}.md"):
+        try:
+            if not f.resolve().is_relative_to(root):
+                continue
+        except OSError:
+            continue
+        if _read_skill(f, 1) is not None:
+            return f
+    return None
 
 
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
@@ -313,10 +376,10 @@ async def t_skill_load(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return 'ERROR: give {"name": str}; use skill_list to see available skills.'
     if not _valid_skill_name(name):
         return f"ERROR: invalid skill name {name!r} (letters, digits, '.', '_', '-' only; no paths)."
-    sk = _skills(ctx)
-    if name not in sk:
-        return f"ERROR: no skill {name!r}. Available: {_names(sk)}"
-    text = _read_skill(sk[name][1])
+    path = _skill_path(ctx, name)  # round 99: was every skill read to find one (3.6 s at 500 x 200 KB)
+    if path is None:
+        return f"ERROR: no skill {name!r}. Available: {_names(_skills(ctx))}"
+    text = _read_skill(path)
     if text is None:
         return f"ERROR: skill {name!r} could not be read."
     if not text.strip():

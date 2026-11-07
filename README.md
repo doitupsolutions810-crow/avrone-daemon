@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.93: Round 100: CodeX runs listing reuses its scan. 5,703 tests + 19 integration
+
+- **Profile** (100,000 logs plus 50 runs with 4 MB prompts): one `runs(50)` took 4.1 s. Of that, 3.45 s was one `lstat` per log in `newest_files`, and about 1.1 s was re-parsing the 50 start lines. It was the same cost on every listing.
+- **`Codex._newest_logs` scan cache:** it reuses the last scan, which keeps the newest 10,000 (`RUNS_CACHE_KEEP`), for `AVRONE_RUNS_CACHE_S` seconds (default 5; 0 turns it off; junk values read as 5 or 0).
+  - The cache is dropped when the directory mtime moves, so new and deleted logs show at once.
+  - Logs this process appended to (tracked in `_append`) are re-stat'ed on the next listing, so a run that just logged moves to the top with no rescan.
+  - Only appends by another process to an older log can lag, and by at most the TTL.
+  - A scan is never cached when the directory mtime is under 2 s old, because a coarse-mtime filesystem may not tick for a file created in the same second.
+- **`Codex._run_start` start-line cache:** parsed first lines are kept per file, keyed by inode, size and mtime_ns (at most 20,000). A rewrite such as a `fix_runs` redaction changes the key, so the redacted prompt shows.
+- **`safeio.newest_entries`:** returns `(mtime, name, path)`, so a scan needs no second `lstat`.
+- **Bench:** first listing 4.1 s, repeats 0.044–0.063 s, after an in-process append 0.05 s. A cold first scan still costs one `lstat` per log.
+- **Tests:** `tests/test_round100_runs_cache.py` has 12 tests. 7 fail on v0.92 (scan reuse, append reorder, setting parse, start-line reuse); the other 5 guard freshness and the symlink and dot-file rules.
+
 ## v0.92: Round 99: skills are listed from file heads and loaded by name. 5,691 tests + 19 integration
 
 - **`skill_load` read every skill:** it read every skill, up to 500 files of 256 KB each, just to find one. It now goes straight to `<name>/SKILL.md`, then `<name>.md`, using `_skill_path`. The same rules still apply: a directory skill wins over a flat one, a symlink pointing outside the skills dir is refused, and the size cap holds. The full list is built only for the "Available:" hint when the name is missing.

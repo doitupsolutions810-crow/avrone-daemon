@@ -152,6 +152,18 @@ def replay_limit() -> int:
 
 
 RUNS_PROMPT_CHARS = 2000
+RUNS_CACHE_KEEP = 10_000       # newest logs remembered between runs() listings (round 100)
+RUNS_START_CACHE_MAX = 20_000  # parsed run.start lines remembered, keyed by file identity
+
+
+def runs_cache_s() -> float:
+    """How long a runs() directory scan is reused (AVRONE_RUNS_CACHE_S, default 5, 0 = off). A new
+    or deleted log (directory mtime), and any log this process appends to, refresh it sooner."""
+    try:
+        v = float(os.getenv("AVRONE_RUNS_CACHE_S", "5"))
+    except ValueError:
+        return 5.0
+    return v if math.isfinite(v) and v > 0 else 0.0
 
 # Size-based rotation (round 72). A log never rotated: fleet.jsonl gains an event per heartbeat,
 # join, dispatch and refusal for the life of the node, and one long or looping run grew its own log
@@ -318,6 +330,10 @@ class Codex:
         # events each subscriber missed because its queue was full: reported to that subscriber as
         # one "stream.gap" event as soon as it has room, so a slow HUD knows its view has holes
         self._gaps: dict[asyncio.Queue[Event], int] = {}
+        self._runs_lock = threading.Lock()
+        self._runs_cache: dict[str, Any] | None = None
+        self._runs_touched: set[str] = set()  # log names appended to since the last runs() scan
+        self._runs_start: dict[str, tuple[tuple[int, int, int], dict[str, Any] | None]] = {}
 
     def subscribe(self) -> asyncio.Queue[Event]:
         # every emit fans out to every subscriber, and each queue holds up to 1000 events: unbounded
@@ -441,6 +457,10 @@ class Codex:
                 self._drop(path, "a symlink or special file")
                 return
             raise
+        lk = getattr(self, "_runs_lock", None)
+        if lk is not None:
+            with lk:
+                self._runs_touched.add(path.name)
         try:
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
@@ -479,16 +499,79 @@ class Codex:
             obj = jsonable(obj)
         return obj
 
+    def _newest_logs(self, n: int) -> list[Path]:
+        """newest_logs(), reusing the last scan for up to runs_cache_s() (round 100). At 100k logs a
+        listing spent 3.4 s warm (16.9 s cold) in one lstat per log. The cache is dropped when the
+        directory's mtime moves (a log created or deleted), and logs this process appended to since
+        are re-stat'ed, so only another process's appends to old logs can lag by the TTL."""
+        ttl = runs_cache_s()
+        lk = getattr(self, "_runs_lock", None)
+        if ttl <= 0 or lk is None or n > RUNS_CACHE_KEEP:
+            return newest_logs(self.log_dir, n)
+        try:
+            dst = os.stat(self.log_dir).st_mtime_ns
+        except OSError:
+            return newest_logs(self.log_dir, n)
+        now = time.monotonic()
+        with lk:
+            c = self._runs_cache
+            touched, self._runs_touched = self._runs_touched, set()
+            fresh = c is not None and c["dir"] == dst and now - c["at"] <= ttl
+        if not fresh:
+            # a directory mtime this recent may not have ticked for a log created in the same
+            # clock step (coarse-mtime filesystems): such a scan is used once, never cached
+            trusted = time.time() - dst / 1e9 > 2.0
+            from .safeio import newest_entries
+            best, _ = newest_entries(self.log_dir, ".jsonl", RUNS_CACHE_KEEP)
+            ent: dict[str, float] = {name: m for m, name, _ in best}
+            with lk:
+                self._runs_cache = {"dir": dst, "at": now, "ent": ent} if trusted else None
+            top = sorted(((m, name) for name, m in ent.items()), reverse=True)[:n]
+            return [self.log_dir / name for _, name in top]
+        stats: dict[str, Any] = {}
+        for name in touched:
+            try:
+                stats[name] = os.lstat(self.log_dir / name)
+            except OSError:
+                stats[name] = None
+        with lk:
+            ent = c["ent"]
+            for name, st in stats.items():
+                if st is not None and stat.S_ISREG(st.st_mode) and name.endswith(".jsonl") \
+                        and not name.startswith("."):
+                    ent[name] = st.st_mtime
+                else:
+                    ent.pop(name, None)
+            top = sorted(((m, name) for name, m in ent.items()), reverse=True)[:n]
+        return [self.log_dir / name for _, name in top]
+
+    def _run_start(self, src: Path) -> dict[str, Any] | None:
+        """The parsed first line of a log, remembered by (inode, size, mtime): a finished run's start
+        event was re-read and re-parsed on every listing (up to a 4 MB line each)."""
+        cache = getattr(self, "_runs_start", None)
+        with open_log(src) as f:
+            st = os.fstat(f.fileno())
+            key = (st.st_ino, st.st_size, st.st_mtime_ns)
+            hit = cache.get(str(src)) if cache is not None else None
+            if hit is not None and hit[0] == key:
+                return hit[1]
+            first = next(iter_lines(f), None)
+        start = self._parse_line(first) if first else None
+        if cache is not None:
+            with self._runs_lock:
+                if len(cache) >= RUNS_START_CACHE_MAX:
+                    cache.clear()
+                cache[str(src)] = (key, start)
+        return start
+
     def runs(self, limit: int = 50) -> list[dict[str, Any]]:
         limit = _whole(limit, 50, 10_000)
         out = []
-        for p in newest_logs(self.log_dir, limit):
+        for p in self._newest_logs(limit):
             arch = self.archives(p)
             src = arch[-1] if arch else p  # after a rotation the run's start event is in the oldest archive
             try:
-                with open_log(src) as f:
-                    first = next(iter_lines(f), None)
-                start = self._parse_line(first) if first else None
+                start = self._run_start(src)
             except OSError:
                 continue
             if start is None:

@@ -196,6 +196,11 @@ class TreeWalk:
 
 
 def newest_files(directory: str | os.PathLike, suffix: str, n: int) -> tuple[list[Path], int]:
+    best, total = newest_entries(directory, suffix, n)
+    return [Path(path) for _, _, path in best], total
+
+
+def newest_entries(directory: str | os.PathLike, suffix: str, n: int) -> tuple[list[tuple[float, str, str]], int]:
     """The `n` most recently modified regular files named *<suffix> directly in `directory`, oldest
     first, and how many such files there are in all (round 92). One scandir + one lstat per entry
     and a bounded heap: listings used to open and parse every file in the directory. Symlinks,
@@ -226,4 +231,4 @@ def newest_files(directory: str | os.PathLike, suffix: str, n: int) -> tuple[lis
                 heapq.heappush(best, item)
             elif item > best[0]:
                 heapq.heapreplace(best, item)
-    return [Path(path) for _, _, path in sorted(best)], total
+    return sorted(best), total

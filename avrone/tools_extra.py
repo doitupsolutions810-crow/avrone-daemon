@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import shutil
 import sys
 import time
@@ -222,6 +223,32 @@ async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------------- list_files / search_files
 
+LIST_DIR_SCAN_MAX = 20_000     # entries read from one directory
+LIST_TOTAL_SCAN_MAX = 100_000  # entries read across one list_files call
+
+
+def _is_dir(de: "os.DirEntry[str]", follow: bool = True) -> bool:
+    try:
+        return de.is_dir(follow_symlinks=follow)
+    except OSError:
+        return False
+
+
+def _scan_dir(d: Path, max_entries: int) -> "tuple[list[os.DirEntry[str]], bool]":
+    """At most max_entries entries of d, directories first then by name; (entries, more_left).
+    Uses d_type from scandir, so no stat per entry (only symlinks are stat'ed, for sorting)."""
+    out = []
+    more = False
+    with os.scandir(d) as it:
+        for de in it:
+            if len(out) >= max_entries:
+                more = True
+                break
+            out.append(de)
+    out.sort(key=lambda de: (not _is_dir(de), de.name.lower()))
+    return out, more
+
+
 @off_loop  # sorts every directory level before capping at 400 entries
 async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     r = fsunify.resolve(ctx, str(args.get("path", "") or "."), "list_files")
@@ -237,29 +264,39 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     count = 0
     truncated = False
 
+    scanned = 0
+
     def walk(d: Path, level: int, prefix: str) -> None:
-        nonlocal count, truncated
+        # round 89: os.scandir with a per-directory and a total scan budget. iterdir() + sort with
+        # a stat-per-entry key listed (and stat'ed) a 1M-entry directory whole before keeping 400.
+        nonlocal count, truncated, scanned
         try:
-            entries = sorted(d.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+            ents, more = _scan_dir(d, min(LIST_DIR_SCAN_MAX, max(0, LIST_TOTAL_SCAN_MAX - scanned)))
         except OSError:
             return
-        for e in entries:
-            if e.name in SKIP_DIRS or e in skip:
+        scanned += len(ents)
+        if more:
+            truncated = True
+        for de in ents:
+            e = Path(de.path)
+            if de.name in SKIP_DIRS or e in skip:
                 continue
             if count >= cap:
                 truncated = True
                 return
             count += 1
-            if e.is_dir() and not e.is_symlink():
-                lines.append(f"{prefix}{e.name}/")
+            if _is_dir(de, follow=False):
+                lines.append(f"{prefix}{de.name}/")
                 if level < depth:
                     walk(e, level + 1, prefix + "  ")
             else:
                 try:
-                    size = e.stat().st_size
+                    st = de.stat(follow_symlinks=False)
+                    size = 0 if stat.S_ISLNK(st.st_mode) else st.st_size  # never sizes a link's target
+                    link = stat.S_ISLNK(st.st_mode)
                 except OSError:
-                    size = 0
-                lines.append(f"{prefix}{e.name} ({size}b)")
+                    size, link = 0, False
+                lines.append(f"{prefix}{de.name} " + ("(symlink)" if link else f"({size}b)"))
 
     walk(root, 1, "  ")
     if truncated:

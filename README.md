@@ -81,6 +81,24 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.82: Round 89: list_files and directory hints scan a bounded number of entries. 5,622 tests + 19 integration
+
+**What was wrong.** `list_files` called `iterdir()`, then sorted with an `is_dir()` stat on every entry. It did this at every level and only afterwards kept the first 400 entries. `read_file` on a directory listed every entry the same way just to build its 30-name hint. In a directory of 200,000 files, `list_files` took 27.4 s and `read_file` took 5.0 s.
+
+**What changed.**
+
+- **`list_files` (`_scan_dir`).** It now uses `os.scandir`, which reads the entry type with no stat per entry.
+  - It reads at most `LIST_DIR_SCAN_MAX` (20,000) entries per directory.
+  - It reads at most `LIST_TOTAL_SCAN_MAX` (100,000) entries per call.
+  - Hitting either cap marks the output as truncated.
+  - In the 200,000-file directory it now takes 0.48 s.
+- **`read_file` directory hint (`_dir_listing`).** It also uses bounded `scandir`, at most `DIR_LISTING_SCAN_MAX` (20,000) entries, and says "over N entries" when it stops. In the 200,000-file directory it now takes 0.41 s.
+- **Symlinks in `list_files`.** A symlink is now listed as `name (symlink)`. The old code printed the size of the link's target, which could be any file on the host.
+
+**Tests.** `tests/test_round89_list_bounds.py` has 5 tests. On v0.81, 4 of them fail; the fifth (directories listed first) passes and serves as a guard. `test_cov8_b::test_list_files_iterdir_oserror_dangling_symlink_and_cap` now patches `os.scandir` and expects `dangling (symlink)`.
+
+**Full suite.** `test_round59_lessons_off_loop::test_squad_keeps_the_loop_responsive_with_a_big_memory_store` failed once during the full run. It passed in each of 3 runs on its own, so it is a timing flake under load.
+
 ## v0.81: Round 88: CodeX log readers no longer hang on a swapped-in FIFO. 5,617 tests + 19 integration
 
 **The bug.** Several readers checked a log with `is_file()` (or with no check at all) and only then opened it: `Codex.replay`, `Codex.runs`, `codex_search`, `codex_stats` (`_tail_bytes`) and the osint metrics reader (`_iter_lines`). If a FIFO was swapped in between the check and the open, the open blocked forever. That froze either an API request or one of the worker threads that every `off_loop` tool shares.

@@ -385,11 +385,27 @@ def _offset(raw: Any) -> int:
         return 0
 
 
+DIR_LISTING_SCAN_MAX = 20_000
+
 def _dir_listing(p: Path, limit: int = 30) -> str:
-    try:
-        names = sorted(c.name + ("/" if c.is_dir() else "") for c in p.iterdir())
+    import os as _os
+    names, extra = [], False
+    try:  # round 89: bounded scandir (iterdir + is_dir stat'ed every entry of a 1M-entry dir)
+        with _os.scandir(p) as it:
+            for de in it:
+                if len(names) >= DIR_LISTING_SCAN_MAX:
+                    extra = True
+                    break
+                try:
+                    d = de.is_dir()
+                except OSError:
+                    d = False
+                names.append(de.name + ("/" if d else ""))
     except OSError:
         return ""
+    names.sort()
+    if extra:
+        return ", ".join(names[:limit]) + f", ... (over {DIR_LISTING_SCAN_MAX} entries)"
     more = f", ... (+{len(names) - limit} more)" if len(names) > limit else ""
     return ", ".join(names[:limit]) + more if names else "(empty)"
 

@@ -114,11 +114,20 @@ def test_list_files_iterdir_oserror_dangling_symlink_and_cap(env, monkeypatch):
             raise PermissionError("denied")
         return real_iterdir(self)
     monkeypatch.setattr(Path, "iterdir", iterdir)
+    import os as _os
+    real_scandir = _os.scandir
+
+    def scandir(p="."):  # round 89: list_files reads directories with os.scandir
+        if Path(p).name == "locked":
+            raise PermissionError("denied")
+        return real_scandir(p)
+    monkeypatch.setattr(_os, "scandir", scandir)
     small = env.ws / "small"
     (small / "locked").mkdir(parents=True)
     (small / "dangling").symlink_to(env.ws / "nowhere")
     out = call(env, "list_files", path="small", depth=3)
-    assert "locked/" in out and "dangling (0b)" in out
+    # round 89: a link is listed as "(symlink)"; its target's size is never shown
+    assert "locked/" in out and "dangling (symlink)" in out
 
 
 def test_search_files_required_pattern_and_skips(env):

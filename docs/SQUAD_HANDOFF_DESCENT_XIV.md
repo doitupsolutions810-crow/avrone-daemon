@@ -62,3 +62,6 @@ Independently review the dormant AVRONE-to-attested-history edge and design a no
 - The current smoke test only serves a synthetic static page; it does not prove the real app mounts the gauge or emits the expected metric.
 - The two existing squad tests were executed in isolation: 7 passed. Treat this as helper/synthetic-page verification only.
 - Do not substitute the WebSocket endpoint without defining the metric producer and event schema. Add visible UNKNOWN/STALE states and integration tests for 404, empty feed, disconnect, reconnect, malformed events, and delayed updates.
+## Admin-console supply-chain constraint
+
+The proposed gauge injects an unpinned D3 script from d3js.org into the privileged same-origin console. The console reads `avrone_tok` from localStorage, so third-party script execution could expose the admin token. This is not currently active because the injector is unused. If the gauge is ever integrated, vendor a pinned D3 asset and add CSP/integrity checks; do not inject a floating CDN script.

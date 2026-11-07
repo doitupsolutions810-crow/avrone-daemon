@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.83: Round 90: lazy, budgeted tree walks for fs_list and secret_scan. 5,627 tests + 19 integration
+
+- **`safeio.TreeWalk(root, scan_max, skip=None, recurse=True)`.** Yields entries in the same order as `sorted(root.rglob("*"))`, checked against a random 300-entry tree. It reads at most `scan_max` directory entries, never enters a symlinked directory, prunes names that `skip` rejects, and sets `truncated` when it stops early.
+- **`secret_scan` (`tools_secrets.scan`).**
+  - Before: it listed and sorted the whole workspace, `.git` and `node_modules` included, before scanning 2,000 files.
+  - Now: it prunes `.git` during the walk, reads at most `SCAN_ENTRIES_MAX` (200,000) entries, and opens files with `open_read` (`O_NOFOLLOW|O_NONBLOCK`), so a FIFO swapped in after the type check is not read.
+  - A workspace with 200,000 `.git` objects and 50 source files went from 32.3 s to 0.048 s.
+- **`fs_list`.** `sorted(rglob("*"))` listed an agent's whole directory before showing 500 lines. Empty files use no agent-fs quota, so an agent could pile up millions of them. It now uses `TreeWalk` and reads at most `FS_LIST_SCAN_MAX` (100,000) entries. Non-recursive listings read one level only.
+- **Tests.**
+  - `tests/test_round90_tree_walks.py` has 5 tests. All 5 fail on v0.82, where `TreeWalk` does not exist. The scan cost is shown by the benchmark above, not by those failures.
+  - `test_cov14_a::test_scan_unreadable_file` now patches `safeio.open_read`.
+
 ## v0.82: Round 89: list_files and directory hints scan a bounded number of entries. 5,622 tests + 19 integration
 
 **What was wrong.** `list_files` called `iterdir()`, then sorted with an `is_dir()` stat on every entry. It did this at every level and only afterwards kept the first 400 entries. `read_file` on a directory listed every entry the same way just to build its 30-name hint. In a directory of 200,000 files, `list_files` took 27.4 s and `read_file` took 5.0 s.

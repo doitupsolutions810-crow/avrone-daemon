@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 MAX_FILES = 2000
 MAX_BYTES = 2 * 1024 * 1024
+SCAN_ENTRIES_MAX = 200_000  # directory entries read by one scan
 MAX_SHOWN = 30
 TEXT_SUFFIXES = {".jsonl", ".json", ".log", ".txt", ".md", ".py", ".sh", ".env", ".yml", ".yaml", ".toml", ".cfg",
                  ".ini", ""}
@@ -67,14 +68,22 @@ def _roots(ctx: "AgentContext", scope: str) -> Path | None:
 def scan(root: Path) -> dict[str, Any]:
     hits: list[dict[str, Any]] = []
     files = scanned = 0
-    for p in sorted(root.rglob("*")) if root.is_dir() else []:
+    from .safeio import NotRegularFile, TreeWalk, open_read
+    # round 90: sorted(rglob("*")) listed the whole workspace (node_modules, .git included) before
+    # scanning 2000 files; .git is now pruned while walking and at most SCAN_ENTRIES_MAX are read.
+    walk = TreeWalk(root, SCAN_ENTRIES_MAX, skip=lambda n: n == ".git") if root.is_dir() else ()
+    for rel, de in walk:
         if files >= MAX_FILES:
             break
-        if not p.is_file() or p.is_symlink() or p.suffix.lower() not in TEXT_SUFFIXES or ".git" in p.parts:
+        p = Path(de.path)
+        try:
+            if not de.is_file(follow_symlinks=False) or p.suffix.lower() not in TEXT_SUFFIXES:
+                continue
+        except OSError:
             continue
         files += 1
-        try:
-            with p.open("rb") as f:
+        try:  # O_NOFOLLOW|O_NONBLOCK: a FIFO or link swapped in after the check is not read
+            with open_read(p) as f:
                 data = f.read(MAX_BYTES)
         except OSError:
             continue
@@ -83,7 +92,8 @@ def scan(root: Path) -> dict[str, Any]:
             k = _kinds(line)
             if k:
                 hits.append({"path": str(p.relative_to(root)), "line": i, "kinds": sorted(set(k))})
-    return {"files": scanned, "hits": hits, "truncated": files >= MAX_FILES}
+    return {"files": scanned, "hits": hits,
+            "truncated": files >= MAX_FILES or bool(getattr(walk, "truncated", False))}
 
 
 def fix_runs(root: Path, paths: set[str]) -> int:

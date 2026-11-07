@@ -40,6 +40,7 @@ HARD_FILE_MB = 64
 READ_DEFAULT_CHARS = 12000
 READ_MAX_CHARS = 100_000
 LIST_MAX_ENTRIES = 500
+FS_LIST_SCAN_MAX = 100_000  # directory entries read by one fs_list
 
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -227,17 +228,34 @@ async def t_fs_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if p.is_file():
         return f"{_rel(root, p)}  {p.stat().st_size} bytes"
     recursive = bool(args.get("recursive", False))
-    items = sorted(p.rglob("*") if recursive else p.iterdir())
+    # round 90: sorted(rglob("*")) listed and sorted the whole agent dir (empty files cost no
+    # quota, so an agent could hold millions) before showing 500. TreeWalk yields the same order
+    # lazily and reads at most FS_LIST_SCAN_MAX entries.
+    from .safeio import TreeWalk
+    walk = TreeWalk(p, FS_LIST_SCAN_MAX, recurse=recursive)
     lines = []
-    for q in items[:LIST_MAX_ENTRIES]:
-        if q.is_symlink():
-            lines.append(f"{_rel(root, q)} -> (symlink)")
-        elif q.is_dir():
-            lines.append(f"{_rel(root, q)}/")
-        else:
-            lines.append(f"{_rel(root, q)}  {q.stat().st_size} bytes")
-    if len(items) > LIST_MAX_ENTRIES:
-        lines.append(f"...[{len(items) - LIST_MAX_ENTRIES} more]")
+    shown = more = 0
+    for rel, de in walk:
+        if shown >= LIST_MAX_ENTRIES:
+            more += 1
+            if not recursive:
+                continue
+            break
+        shown += 1
+        q = Path(de.path)
+        try:
+            if de.is_symlink():
+                lines.append(f"{_rel(root, q)} -> (symlink)")
+            elif de.is_dir():
+                lines.append(f"{_rel(root, q)}/")
+            else:
+                lines.append(f"{_rel(root, q)}  {de.stat().st_size} bytes")
+        except OSError:
+            continue
+    if more and not recursive:
+        lines.append(f"...[{more} more]")
+    elif more or walk.truncated:
+        lines.append(f"...[more entries not shown; listing stops after {LIST_MAX_ENTRIES}]")
     head = f"[agent dir {getattr(ctx, 'agent_id', '') or root.name}: {dir_usage(root)}/{quota_bytes()} bytes used]"
     return head + "\n" + ("\n".join(lines) if lines else "(empty)")
 

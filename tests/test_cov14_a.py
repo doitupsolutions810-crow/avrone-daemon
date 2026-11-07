@@ -23,6 +23,10 @@ def test_scan_unreadable_file(tmp_path, monkeypatch):
             raise PermissionError("no")
         return real_open(self, *a, **k)
     monkeypatch.setattr(Path, "open", bad_open)
+    import avrone.safeio as _sio  # round 90: scan opens through safeio.open_read
+    real_read = _sio.open_read
+    monkeypatch.setattr(_sio, "open_read", lambda p, *a, **k: (_ for _ in ()).throw(PermissionError("no"))
+                        if Path(p).name == "a.log" else real_read(p, *a, **k))
     assert ts.scan(tmp_path) == {"files": 0, "hits": [], "truncated": False}
 
 

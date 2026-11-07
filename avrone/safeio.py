@@ -145,3 +145,51 @@ def open_read(path: str | os.PathLike, follow: bool = False):
     confined by fsunify/agentfs), but a FIFO swapped in after the caller's is_file() check still
     never blocks (O_NONBLOCK, then fstat must say regular)."""
     return os.fdopen(_open_regular(path, os.O_RDONLY, 0, follow), "rb")
+
+
+class TreeWalk:
+    """Entries of a tree in sorted(root.rglob("*")) order (each directory's names sorted, depth
+    first), without listing the whole tree first (round 90). At most `scan_max` directory entries
+    are read in all, counting entries of directories too big to sort whole; `truncated` says the
+    walk stopped early. Symlinked directories are never entered; `skip(name)` prunes a name.
+    Iterating yields (relative path with "/" separators, os.DirEntry)."""
+
+    def __init__(self, root: str | os.PathLike, scan_max: int, skip=None, recurse: bool = True):
+        self.root, self.scan_max, self.skip = os.fspath(root), max(0, int(scan_max)), skip
+        self.recurse = recurse
+        self.scanned = 0
+        self.truncated = False
+
+    def _listing(self, path: str) -> list:
+        out = []
+        try:
+            with os.scandir(path) as it:
+                for de in it:
+                    if self.scanned >= self.scan_max:
+                        self.truncated = True
+                        break
+                    self.scanned += 1
+                    if self.skip is not None and self.skip(de.name):
+                        continue
+                    out.append(de)
+        except OSError:
+            return []
+        out.sort(key=lambda de: de.name, reverse=True)
+        return out
+
+    def __iter__(self):
+        stack = [("", self._listing(self.root))]
+        while stack:
+            prefix, entries = stack[-1]
+            if not entries:
+                stack.pop()
+                continue
+            de = entries.pop()
+            rel = prefix + de.name
+            yield rel, de
+            try:
+                is_dir = de.is_dir(follow_symlinks=False)
+            except OSError:
+                is_dir = False
+            if is_dir and self.recurse and not self.truncated:
+                stack.append((rel + "/", self._listing(de.path)))

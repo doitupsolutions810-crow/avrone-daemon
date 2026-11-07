@@ -1026,16 +1026,8 @@ async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
             return f"ERROR: run {run_id} not found"
         files = [f]
     else:
-        stamped = []
-        for p in log_dir.glob("*.jsonl"):
-            try:  # a log can rotate or vanish between glob and stat (was an uncaught FileNotFoundError)
-                if p.is_symlink() or not p.is_file():  # a planted link read a file outside runs/
-                    continue
-                stamped.append((p.stat().st_mtime, p))
-            except OSError:
-                continue
-        stamped.sort(key=lambda t: t[0], reverse=True)
-        files = [p for _, p in stamped[:max_runs]]
+        from .codex import newest_logs  # round 91: one lstat per log, bounded heap, no full sort
+        files = newest_logs(log_dir, max_runs)
         if not files:
             return "No CodeX runs logged yet."
     hits: list[tuple[float, str]] = []

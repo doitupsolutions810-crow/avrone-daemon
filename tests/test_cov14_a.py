@@ -49,8 +49,17 @@ def test_fix_runs_unreadable_and_replace_failure(tmp_path, monkeypatch):
             raise OSError("io")
         return real_read(self, *a, **k)
     monkeypatch.setattr(Path, "read_text", bad_read)
+    import avrone.safeio as _sio  # round 91: fix_runs reads through safeio.read_capped
+    real_capped = _sio.read_capped
+
+    def bad_capped(path, *a, **k):
+        if Path(path).name == "r.jsonl":
+            raise OSError("io")
+        return real_capped(path, *a, **k)
+    monkeypatch.setattr(_sio, "read_capped", bad_capped)
     assert ts.fix_runs(tmp_path, {"r.jsonl"}) == 0
     monkeypatch.setattr(Path, "read_text", real_read)
+    monkeypatch.setattr(_sio, "read_capped", real_capped)
 
     def boom(src, dst):
         raise KeyboardInterrupt

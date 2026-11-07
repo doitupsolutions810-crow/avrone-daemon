@@ -77,7 +77,8 @@ def scan(root: Path) -> dict[str, Any]:
             break
         p = Path(de.path)
         try:
-            if not de.is_file(follow_symlinks=False) or p.suffix.lower() not in TEXT_SUFFIXES:
+            if not de.is_file(follow_symlinks=False) or (
+                    p.suffix.lower() not in TEXT_SUFFIXES and not is_run_log(p.name)):
                 continue
         except OSError:
             continue
@@ -96,30 +97,82 @@ def scan(root: Path) -> dict[str, Any]:
             "truncated": files >= MAX_FILES or bool(getattr(walk, "truncated", False))}
 
 
-def fix_runs(root: Path, paths: set[str]) -> int:
+_ARCHIVE_RE = None
+
+
+def is_run_log(name: str) -> bool:
+    """<run>.jsonl or a rotated archive <run>.jsonl.N (round 90: archives were never scanned, so
+    a secret that rotated out of the active log was reported CLEAN and never fixed)."""
+    global _ARCHIVE_RE
+    if _ARCHIVE_RE is None:
+        import re
+        _ARCHIVE_RE = re.compile(r".+\.jsonl(\.[1-9][0-9]{0,3})?")
+    return bool(_ARCHIVE_RE.fullmatch(name))
+
+
+FIX_MAX_BYTES = 256 * 1024 * 1024  # a run log bigger than this is not rewritten in memory
+
+
+def _redact_text(text: str) -> str:
     from .ctxspawn import redact
+    return "\n".join(redact(ln) if _kinds(ln) else ln for ln in text.split("\n"))
+
+
+def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
+    """Rewrite flagged run logs with secrets redacted. Round 90: the log is read and redacted
+    outside `lock` (the Codex write lock), then, holding it, any events appended meanwhile are
+    redacted and carried over before the swap. Rewriting without it dropped every event emitted
+    while the file was being redacted, and replacing a log that had just rotated resurrected the
+    archived content as the active log. Reads go through read_capped (regular files only)."""
+    import contextlib
+    from .safeio import FileTooBig, read_capped
     fixed = 0
     for rel in sorted(paths):
         p = root / rel
-        if p.is_symlink() or not p.is_file() or p.suffix != ".jsonl":
+        if not is_run_log(p.name) or p.is_symlink() or not p.is_file():
             continue
         try:
-            text = p.read_text(errors="replace")
-            new = "\n".join(redact(ln) if _kinds(ln) else ln for ln in text.split("\n"))
+            st0 = os.lstat(p)
+            data = read_capped(p, FIX_MAX_BYTES)
+            if data is None:
+                continue
+            text = data.decode("utf-8", errors="replace")
+            new = _redact_text(text)
             if new == text:
                 continue
             fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".", suffix=".tmp")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(new)
-                os.replace(tmp, p)
+                    with (lock if lock is not None else contextlib.nullcontext()):
+                        try:
+                            st1 = os.lstat(p)
+                        except FileNotFoundError:
+                            st1 = None
+                        if st1 is None or st1.st_ino != st0.st_ino or st1.st_size < len(data):
+                            raise _Moved()  # rotated, replaced or truncated meanwhile: leave it
+                        if st1.st_size > len(data):
+                            with open(p, "rb") as src:
+                                src.seek(len(data))
+                                tail = src.read(st1.st_size - len(data))
+                            f.write(_redact_text(tail.decode("utf-8", errors="replace")))
+                        f.flush()
+                        os.chmod(tmp, st1.st_mode & 0o777)
+                        os.replace(tmp, p)
+            except _Moved:
+                Path(tmp).unlink(missing_ok=True)
+                continue
             except BaseException:
                 Path(tmp).unlink(missing_ok=True)
                 raise
             fixed += 1
-        except OSError:
+        except (OSError, FileTooBig):
             continue
     return fixed
+
+
+class _Moved(Exception):
+    pass
 
 
 async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
@@ -140,7 +193,8 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if len(hits) > MAX_SHOWN:
         lines.append(f"... {len(hits) - MAX_SHOWN} more")
     if hits and args.get("fix") is True:
-        n = await asyncio.to_thread(fix_runs, root, {h["path"] for h in hits})
+        lock = getattr(getattr(getattr(ctx, "core", None), "codex", None), "_write_lock", None)
+        n = await asyncio.to_thread(fix_runs, root, {h["path"] for h in hits}, lock)
         after = await asyncio.to_thread(scan, root)
         lines.append(f"fixed {n} run log(s); {len(after['hits'])} line(s) still flagged")
     return "\n".join(lines)

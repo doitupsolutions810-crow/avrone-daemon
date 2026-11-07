@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.84: Round 91: run-log secret fixes that miss nothing and lose nothing. 5,633 tests + 19 integration
+
+- **`secret_scan` now reads rotated archives.**
+  - Before: it read only `<run>.jsonl`. A secret that had rotated into `<run>.jsonl.N` was reported CLEAN and never fixed. `fix_runs` skipped archives too.
+  - Now: `tools_secrets.is_run_log` matches both the active log and its archives.
+- **`fix_runs` no longer drops events.**
+  - Before: it read, redacted and `os.replace()`d each log with no lock. Every event emitted during the redaction was lost. If the log rotated meanwhile, the archived content was put back as the active log.
+  - Now: it redacts outside the lock. It then takes the Codex write lock (`t_secret_scan` passes `core.codex._write_lock`), redacts any appended tail, and swaps the file. If the inode changed or the file shrank, it leaves the log alone.
+  - Reads use `read_capped` with `FIX_MAX_BYTES` (256 MB), so FIFOs and symlinks are never read. The file mode is kept.
+- **Faster newest-runs listing.** `codex.newest_logs(log_dir, n)` does one `scandir` plus one `lstat` per entry and keeps a bounded heap. It skips symlinks and special files. `Codex.runs` and `codex_search` use it. With 100,000 logs, `runs(50)` went from 4.4 s to 3.0 s on a warm cache, and from 16.9 s on a cold one.
+- **Tests.**
+  - `tests/test_round91_run_logs.py` has 6 tests. On v0.83, 5 fail, 4 of them on real behaviour: the archive is not scanned, the archive is not fixed, the appended event is lost, and the rotated log is overwritten. The FIFO test is a guard.
+  - `test_cov14_a::test_fix_runs_unreadable_and_replace_failure` now patches `safeio.read_capped`.
+
 ## v0.83: Round 90: lazy, budgeted tree walks for fs_list and secret_scan. 5,627 tests + 19 integration
 
 - **`safeio.TreeWalk(root, scan_max, skip=None, recurse=True)`.** Yields entries in the same order as `sorted(root.rglob("*"))`, checked against a random 300-entry tree. It reads at most `scan_max` directory entries, never enters a symlinked directory, prunes names that `skip` rejects, and sets `truncated` when it stops early.

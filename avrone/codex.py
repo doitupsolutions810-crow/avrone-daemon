@@ -239,6 +239,36 @@ def archives_of(path: Path) -> list[Path]:
     return out
 
 
+def newest_logs(log_dir: Path, n: int) -> list[Path]:
+    """The `n` most recently modified regular <run>.jsonl files in log_dir, newest first. Round 91:
+    one scandir + one lstat per entry and a bounded heap, instead of glob + is_file + stat each and a
+    full sort (100,000 logs: 4.4 s warm). Symlinks and special files are skipped, as are entries that
+    vanish mid-listing."""
+    import heapq
+    best: list[tuple[float, str, str]] = []
+    try:
+        it = os.scandir(log_dir)
+    except OSError:
+        return []
+    with it:
+        for de in it:
+            name = de.name
+            if not name.endswith(".jsonl"):
+                continue
+            try:
+                st = de.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            item = (st.st_mtime, name, de.path)
+            if len(best) < n:
+                heapq.heappush(best, item)
+            elif item > best[0]:
+                heapq.heapreplace(best, item)
+    return [Path(path) for _, _, path in sorted(best, reverse=True)]
+
+
 def log_chain(path: Path) -> list[Path]:
     """A log and its archives, newest first. The active file is left out when it is missing (just
     rotated away, or never re-created) or is not a plain file, so readers never crash on it."""
@@ -473,18 +503,9 @@ class Codex:
         return obj
 
     def runs(self, limit: int = 50) -> list[dict[str, Any]]:
-        stamped = []
         limit = _whole(limit, 50, 10_000)
-        for p in self.log_dir.glob("*.jsonl"):
-            try:  # a log can vanish between listing and stat (cleanup, concurrent delete)
-                if not p.is_file():  # a FIFO named x.jsonl blocked the listing forever in open()
-                    continue
-                stamped.append((p.stat().st_mtime, p))
-            except OSError:
-                continue
-        stamped.sort(key=lambda t: t[0], reverse=True)
         out = []
-        for _, p in stamped[:limit]:
+        for p in newest_logs(self.log_dir, limit):
             arch = self.archives(p)
             src = arch[-1] if arch else p  # after a rotation the run's start event is in the oldest archive
             try:

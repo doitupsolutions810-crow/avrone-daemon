@@ -43,5 +43,11 @@ def test_envelope_rejects_extra_or_tampered_fields():
     bad = copy.deepcopy(record); bad["trial_id"] = "not-a-digest"
     assert not validate_trial_envelope(bad)
 
+def test_composite_source_accepts_maximum_component_lengths():
+    record = sample(system="s" * 256, node="n" * 256)
+    assert len(record["source"]) == 513
+    assert validate_trial_envelope(record)
+
+
 def test_unicode_identity_is_canonicalized():
     assert sample(node="caf\u00e9")["trial_id"] == sample(node="cafe\u0301")["trial_id"]

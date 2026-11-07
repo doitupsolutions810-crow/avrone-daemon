@@ -546,10 +546,14 @@ def _num(v: Any) -> float | None:
     return f if math.isfinite(f) else None
 
 
+LIST_MANAGED_MAX = 1000
+
+
 def list_managed(data_dir: str | Path) -> list[dict[str, Any]]:
     d = managed_dir(data_dir)
     rows = []
-    for p in sorted(d.glob("*.json")) if d.is_dir() else []:
+    from .safeio import newest_files  # round 92: the newest LIST_MANAGED_MAX files, not all of them
+    for p in sorted(newest_files(d, ".json", LIST_MANAGED_MAX)[0]) if d.is_dir() else []:
         # symlinks are skipped: a link to any JSON file elsewhere must not be read through the API
         if _KEY_RE.match(p.stem) and not p.is_symlink() and (row := describe(p)) is not None:
             rows.append(row)

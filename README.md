@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.85: Round 92: bounded proposal and checkpoint listings. 5,638 tests + 19 integration
+
+- **`safeio.newest_files(dir, suffix, n)`.** Returns the n newest regular files (oldest first) and the total count. It does one `scandir` and one `lstat` per entry and keeps a bounded heap. It skips symlinks, special files and dot-files. `codex.newest_logs` now uses it.
+- **`evolve_list`.**
+  - Before: it opened, parsed and printed every proposal, oldest first. With 5,000 proposals that took 6.5 s and produced 440 KB, and the output clip cut the newest proposals.
+  - Now: it reads the newest `EVOLVE_LIST_MAX` (200) and leads with a count of the older ones. 5,000 proposals take 0.4 s and produce 17 KB.
+- **`list_accepted` and `checkpoint.list_managed`.** `/api/evolve` and the CLI read at most `ACCEPTED_SCAN_MAX` (5,000) of the newest proposal files. `/api/checkpoints` reads at most `LIST_MANAGED_MAX` (1,000).
+- **Tests.** `tests/test_round92_bounded_listings.py` has 5 tests. On v0.84, 4 fail; the symlink/FIFO test is a guard.
+
 ## v0.84: Round 91: run-log secret fixes that miss nothing and lose nothing. 5,633 tests + 19 integration
 
 - **`secret_scan` now reads rotated archives.**

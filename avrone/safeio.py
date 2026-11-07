@@ -193,3 +193,37 @@ class TreeWalk:
                 is_dir = False
             if is_dir and self.recurse and not self.truncated:
                 stack.append((rel + "/", self._listing(de.path)))
+
+
+def newest_files(directory: str | os.PathLike, suffix: str, n: int) -> tuple[list[Path], int]:
+    """The `n` most recently modified regular files named *<suffix> directly in `directory`, oldest
+    first, and how many such files there are in all (round 92). One scandir + one lstat per entry
+    and a bounded heap: listings used to open and parse every file in the directory. Symlinks,
+    special files, dot-files and entries that vanish mid-listing are skipped."""
+    import heapq
+    best: list[tuple[float, str, str]] = []
+    total = 0
+    try:
+        it = os.scandir(directory)
+    except OSError:
+        return [], 0
+    with it:
+        for de in it:
+            name = de.name
+            if not name.endswith(suffix) or name.startswith("."):
+                continue
+            try:
+                st = de.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            total += 1
+            if n <= 0:
+                continue
+            item = (st.st_mtime, name, de.path)
+            if len(best) < n:
+                heapq.heappush(best, item)
+            elif item > best[0]:
+                heapq.heapreplace(best, item)
+    return [Path(path) for _, _, path in sorted(best)], total

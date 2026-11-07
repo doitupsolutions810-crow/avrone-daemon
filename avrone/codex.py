@@ -240,33 +240,10 @@ def archives_of(path: Path) -> list[Path]:
 
 
 def newest_logs(log_dir: Path, n: int) -> list[Path]:
-    """The `n` most recently modified regular <run>.jsonl files in log_dir, newest first. Round 91:
-    one scandir + one lstat per entry and a bounded heap, instead of glob + is_file + stat each and a
-    full sort (100,000 logs: 4.4 s warm). Symlinks and special files are skipped, as are entries that
-    vanish mid-listing."""
-    import heapq
-    best: list[tuple[float, str, str]] = []
-    try:
-        it = os.scandir(log_dir)
-    except OSError:
-        return []
-    with it:
-        for de in it:
-            name = de.name
-            if not name.endswith(".jsonl"):
-                continue
-            try:
-                st = de.stat(follow_symlinks=False)
-            except OSError:
-                continue
-            if not stat.S_ISREG(st.st_mode):
-                continue
-            item = (st.st_mtime, name, de.path)
-            if len(best) < n:
-                heapq.heappush(best, item)
-            elif item > best[0]:
-                heapq.heapreplace(best, item)
-    return [Path(path) for _, _, path in sorted(best, reverse=True)]
+    """The `n` most recently modified regular <run>.jsonl files, newest first (round 91; shared
+    with safeio.newest_files since round 92)."""
+    from .safeio import newest_files
+    return list(reversed(newest_files(log_dir, ".jsonl", n)[0]))
 
 
 def log_chain(path: Path) -> list[Path]:

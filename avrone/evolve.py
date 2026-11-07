@@ -1204,10 +1204,21 @@ async def t_evolve_diff(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return r.text(8000) or "(no diff)"
 
 
-@off_loop  # reads every proposal file (3000: ~0.15 s)
+EVOLVE_LIST_MAX = 200        # proposals shown by evolve_list (the newest)
+ACCEPTED_SCAN_MAX = 5000     # newest proposal files list_accepted reads
+
+
+@off_loop
 async def t_evolve_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    # round 92: every proposal file was opened, parsed and printed (5,000: 6.5 s, 440 KB), oldest
+    # first, so the output clip cut the NEWEST proposals. Now only the newest EVOLVE_LIST_MAX by
+    # mtime are read, shown in name order (pids start with a unix time) after a count of the rest.
+    from .safeio import newest_files
+    chosen, total = newest_files(_data(ctx), ".json", EVOLVE_LIST_MAX)
     rows = []
-    for f in sorted(_data(ctx).glob("*.json")):
+    if total > len(chosen):
+        rows.append(f"({total - len(chosen)} older proposal file(s) not shown; newest {len(chosen)})")
+    for f in sorted(chosen):
         try:
             m = _load_json(f)
         except (OSError, ValueError, RecursionError):
@@ -1346,7 +1357,8 @@ def list_accepted(settings) -> list[dict[str, Any]]:
     d = Path(settings.data_dir) / "evolve"
     out = []
     if d.exists():
-        for f in sorted(d.glob("*.json")):
+        from .safeio import newest_files  # round 92: bounded, was every file in evolve/
+        for f in sorted(newest_files(d, ".json", ACCEPTED_SCAN_MAX)[0]):
             try:
                 m = _load_json(f)
             except (OSError, ValueError, RecursionError):

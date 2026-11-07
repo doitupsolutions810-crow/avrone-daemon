@@ -7,6 +7,8 @@
   "required": [
     "schema",
     "trial_id",
+    "system",
+    "node",
     "source",
     "run_id",
     "check_id",
@@ -54,6 +56,16 @@
     },
     "failed": {
       "type": "boolean"
+    },
+    "system": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
     }
   }
 }

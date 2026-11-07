@@ -338,26 +338,11 @@ def _edits_shape_error(edits: Any) -> str | None:
     return None
 
 
-async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: str | None = None,
-                        timeout: int = 900, extra_meta: dict[str, Any] | None = None,
-                        confine_to: str | None = None) -> dict[str, Any]:
-    """One proposal -> test cycle in its own throwaway clone. Returns a result dict.
-
-    Every guardrail lives here so single proposals and loop iterations share it: fresh clone
-    under data_dir, edits confined to the clone, accept only on a clean full-suite pass.
-    `confine_to` (a repo-relative dir) narrows the edits further, e.g. "skills" for skill proposals.
-    """
-    pid = _new_pid(ctx)
-    t0 = _now()
-    too_big = _edits_too_big(edits) or _edits_shape_error(edits)
-    if too_big:  # checked before the clone: 100k edits or 1 GB of content used to be written to disk
-        return {"pid": pid, "error": too_big, "passed": False, "branch": None, "files": [], "duration_s": 0.0}
-    wt, branch = await _ensure_worktree(ctx, pid)
-    changed = []
-    base_r = await _sh(ctx, "git rev-parse HEAD 2>/dev/null", wt, timeout=60)
-    base_sha = (base_r.stdout or "").strip() if getattr(base_r, "exit_code", 1) == 0 else ""
-    if not re.fullmatch(r"[0-9a-f]{7,64}", base_sha):
-        base_sha = ""
+def _apply_edits(wt: Path, edits: list, confine_to: str | None) -> tuple[list[str], str | None]:
+    """Write a proposal's edits into its clone (round 95: in a worker thread; up to 200 files and
+    16 MB were written, and a failed proposal's clone rmtree'd, on the event loop). Returns the
+    paths written and an error message (the clone is already removed when there is one)."""
+    changed: list[str] = []
     for e in edits:
         try:
             if not isinstance(e, dict):
@@ -380,10 +365,34 @@ async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: s
             p.write_bytes(content.encode("utf-8", errors="replace"))
         except (KeyError, ValueError, TypeError, OSError) as ex:
             shutil.rmtree(wt, ignore_errors=True)
-            msg = str(ex) if not isinstance(ex, KeyError) else f"edit is missing {ex}"
-            return {"pid": pid, "error": msg, "passed": False, "branch": None, "files": changed,
-                    "duration_s": round(_now() - t0, 3)}
+            return changed, (str(ex) if not isinstance(ex, KeyError) else f"edit is missing {ex}")
         changed.append(str(e["path"]))
+    return changed, None
+
+
+async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: str | None = None,
+                        timeout: int = 900, extra_meta: dict[str, Any] | None = None,
+                        confine_to: str | None = None) -> dict[str, Any]:
+    """One proposal -> test cycle in its own throwaway clone. Returns a result dict.
+
+    Every guardrail lives here so single proposals and loop iterations share it: fresh clone
+    under data_dir, edits confined to the clone, accept only on a clean full-suite pass.
+    `confine_to` (a repo-relative dir) narrows the edits further, e.g. "skills" for skill proposals.
+    """
+    pid = _new_pid(ctx)
+    t0 = _now()
+    too_big = _edits_too_big(edits) or _edits_shape_error(edits)
+    if too_big:  # checked before the clone: 100k edits or 1 GB of content used to be written to disk
+        return {"pid": pid, "error": too_big, "passed": False, "branch": None, "files": [], "duration_s": 0.0}
+    wt, branch = await _ensure_worktree(ctx, pid)
+    base_r = await _sh(ctx, "git rev-parse HEAD 2>/dev/null", wt, timeout=60)
+    base_sha = (base_r.stdout or "").strip() if getattr(base_r, "exit_code", 1) == 0 else ""
+    if not re.fullmatch(r"[0-9a-f]{7,64}", base_sha):
+        base_sha = ""
+    changed, edit_err = await asyncio.to_thread(_apply_edits, wt, edits, confine_to)
+    if edit_err is not None:
+        return {"pid": pid, "error": edit_err, "passed": False, "branch": None, "files": changed,
+                "duration_s": round(_now() - t0, 3)}
     # The gate runs the deterministic suite by default: the real-uvicorn integration tests flake
     # under the parallel-clone load of a squad and would reject good unit-level proposals.
     test_cmd = str(test_cmd or os.getenv("AVRONE_EVOLVE_TEST_CMD")
@@ -1338,7 +1347,8 @@ async def t_evolve_reset(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if mp is None:
         return err
     if wt is not None:  # only ever our own data_dir/evolve/wt-* dir
-        shutil.rmtree(wt, ignore_errors=True)
+        # round 95: a whole repo clone was rmtree'd on the event loop
+        await asyncio.to_thread(shutil.rmtree, wt, True)
     mp.unlink(missing_ok=True)
     _emit(ctx, "evolve.reset", pid=pid)
     return f"discarded proposal {pid}"

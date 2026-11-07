@@ -213,13 +213,11 @@ async def t_log_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     n = max(1, min(200, n))
     from .codex import replay_limit
     cap = replay_limit()
-    stamped = []
-    for p in d.glob("*.jsonl"):
-        try:
-            stamped.append((p.stat().st_mtime, p))
-        except OSError:
-            continue
-    stamped.sort(key=lambda t: t[0], reverse=True)
+    # round 95: glob + stat of every log ran on the event loop (100k logs: seconds) and followed
+    # symlinks; newest_files is one scandir + lstat, bounded heap, regular files only.
+    from .safeio import newest_files
+    newest, total = await asyncio.to_thread(newest_files, d, ".jsonl", n)
+    stamped = [(0.0, p) for p in reversed(newest)]  # newest first
     budget, checked, problems, partial = LOG_HEALTH_MAX_BYTES, 0, [], False
 
     def scan() -> None:
@@ -248,7 +246,7 @@ async def t_log_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
             if notes:
                 problems.append(f"- {p.stem}: " + "; ".join(notes))
     await asyncio.to_thread(scan)
-    head = f"log_health: {checked} of {len(stamped)} run log(s) checked, {len(problems)} with findings"
+    head = f"log_health: {checked} of {total} run log(s) checked, {len(problems)} with findings"
     if partial:
         head += " (stopped at the 256 MB read budget)"
     return "\n".join([head] + problems + ([] if problems else ["all checked logs intact"]))

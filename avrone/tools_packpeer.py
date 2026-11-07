@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from .trinity import AgentContext
 
 MAX_LIST = 50
+PACK_SCAN_MAX = 100_000  # agentpacks/ entries pack_list reads (round 95)
 
 
 def _data_dir(ctx: "AgentContext") -> Path:
@@ -49,23 +50,36 @@ def _verify(p: Path) -> tuple[str, str]:
 async def t_pack_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     from . import agentpack
     d = agentpack.pack_dir(_data_dir(ctx))
-    if not d.is_dir():
+    if not await asyncio.to_thread(d.is_dir):
         return "pack_list: no agent packs yet (agent_pack_export creates them)"
-    files = sorted((p for p in d.iterdir() if p.name.endswith(".tar.gz") and not p.name.startswith(".")),
-                   key=lambda p: p.name)
+
+    def listing() -> list[tuple[Path, bool, int]]:
+        # round 95: iterdir + sort + a stat per pack ran on the event loop; one bounded scandir now
+        from .safeio import TreeWalk
+        out = []
+        for _rel, de in TreeWalk(d, PACK_SCAN_MAX, recurse=False):
+            if not de.name.endswith(".tar.gz") or de.name.startswith("."):
+                continue
+            try:
+                link = de.is_symlink()
+                size = -1 if link else de.stat(follow_symlinks=False).st_size
+            except OSError:
+                link, size = False, -1
+            out.append((Path(de.path), link, size))
+        return out
+    entries = await asyncio.to_thread(listing)
+    files = [p for p, _, _ in entries]
+    meta = {p: (link, size) for p, link, size in entries}
     if not files:
         return "pack_list: no agent packs yet (agent_pack_export creates them)"
     lines = [f"pack_list: {len(files)} pack(s) in agentpacks/" + (f", first {MAX_LIST} shown" if len(files) > MAX_LIST else "")]
     bad = 0
     for p in files[:MAX_LIST]:
-        if p.is_symlink():
+        link, size = meta[p]
+        if link:
             lines.append(f"- {p.name}: REFUSED - symlink (import refuses links)")
             bad += 1
             continue
-        try:
-            size = p.stat().st_size
-        except OSError:
-            size = -1
         verdict, detail = await asyncio.to_thread(_verify, p)
         bad += verdict != "OK"
         lines.append(f"- {p.name} ({size} bytes): {verdict} - {detail}")

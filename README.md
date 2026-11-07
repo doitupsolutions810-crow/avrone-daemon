@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.88: Round 95: blocking file I/O off the event loop (AST sweep). 5,655 tests + 19 integration
+
+An AST sweep looked for `async def` tools that call file I/O without `@off_loop`. It found four.
+
+- **`log_health`**: it ran `glob` and then `stat` on every run log, on the loop, following symlinks. It now makes one `safeio.newest_files` call in a worker thread, which reads only regular files. With 100,000 logs, the event-loop stall went from 3.5 s to 0.03 s. A symlinked `*.jsonl` is no longer counted or scanned.
+- **`pack_list`**: `iterdir`, `sort` and one `stat` per pack ran on the loop. These are now a single bounded `TreeWalk(recurse=False)` (`PACK_SCAN_MAX` 100,000) in a thread, in the same name order. Symlinks are reported from the same entry.
+- **`evolve_reset`**: `shutil.rmtree` of a whole repo clone now runs in `asyncio.to_thread`.
+- **`_propose_once`**: a proposal's edits (up to 200 files, 16 MB) and the rmtree of a failed clone now run in a thread (`_apply_edits`). The error results are unchanged.
+- **Tests**: `tests/test_round95_loop_io.py` adds 5 tests. All 5 fail on v0.87. `test_cov17_a::test_pack_list_stat_error` now injects the stat error through `os.scandir`.
+
 ## v0.87: Round 94: state_health reads safely, bounded, off the loop. 5,650 tests + 19 integration
 
 - **`_check_jsonl` reads through `read_capped`** (`O_NOFOLLOW|O_NONBLOCK`, regular files only).

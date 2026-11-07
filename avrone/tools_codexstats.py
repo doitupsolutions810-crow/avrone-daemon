@@ -75,10 +75,11 @@ def _log_path(ctx: "AgentContext") -> Path | None:
 def _tail_bytes(p: Path, budget: int) -> tuple[bytes, bool]:
     """The last `budget` bytes of one file (no symlinks); (bytes, more_before)."""
     try:
-        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        from .codex import open_log
+        f = open_log(p, text=False)  # round 88: O_NONBLOCK too; a FIFO here blocked codex_stats
     except OSError:
         return b"", False
-    with os.fdopen(fd, "rb") as f:
+    with f:
         size = os.fstat(f.fileno()).st_size
         more = size > budget
         if more:

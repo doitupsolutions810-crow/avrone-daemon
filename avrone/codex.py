@@ -260,6 +260,18 @@ def _whole(v: Any, default: int, cap: int) -> int:
     return max(1, min(cap, n))
 
 
+def open_log(path: Path, text: bool = True):
+    """Open a run log (or archive) for reading: O_NOFOLLOW|O_NONBLOCK and regular files only
+    (round 88). Readers checked is_file() and then called open(), so a FIFO swapped in between
+    parked the reader (an API request or a pool thread) forever. Raises OSError otherwise."""
+    from .safeio import open_read
+    f = open_read(path)
+    if not text:
+        return f
+    import io as _io
+    return _io.TextIOWrapper(f, encoding="utf-8", errors="replace")
+
+
 def iter_lines(f, max_line: int = MAX_LINE_BYTES):
     """Lines of a text file, each read at most max_line chars at a time; an overlong line yields
     None (and is skipped through in chunks), so a 1 GB line never sits in memory."""
@@ -476,7 +488,7 @@ class Codex:
             arch = self.archives(p)
             src = arch[-1] if arch else p  # after a rotation the run's start event is in the oldest archive
             try:
-                with src.open(encoding="utf-8", errors="replace") as f:
+                with open_log(src) as f:
                     first = next(iter_lines(f), None)
                 start = self._parse_line(first) if first else None
             except OSError:
@@ -505,7 +517,7 @@ class Codex:
             # newest file first; an older archive is read only while the newer ones fell short
             keep: deque[dict[str, Any]] = deque(maxlen=n - len(out))
             try:
-                with src.open(encoding="utf-8", errors="replace") as f:
+                with open_log(src) as f:
                     for line in iter_lines(f):
                         ev = self._parse_line(line) if line is not None else None
                         if ev is not None:

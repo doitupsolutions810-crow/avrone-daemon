@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.81: Round 88: CodeX log readers no longer hang on a swapped-in FIFO. 5,617 tests + 19 integration
+
+**The bug.** Several readers checked a log with `is_file()` (or with no check at all) and only then opened it: `Codex.replay`, `Codex.runs`, `codex_search`, `codex_stats` (`_tail_bytes`) and the osint metrics reader (`_iter_lines`). If a FIFO was swapped in between the check and the open, the open blocked forever. That froze either an API request or one of the worker threads that every `off_loop` tool shares.
+
+**The fix.** A new helper, `codex.open_log(path, text=True)`, opens the log with `O_NOFOLLOW|O_NONBLOCK` and accepts only regular files. Text mode reads it as UTF-8 with `errors="replace"`. All five readers above now go through it.
+
+**Tests.** `tests/test_round88_log_reader_races.py` adds 7 tests. On v0.80, 6 of them hang and fail; the remaining one is a regular-log guard. `test_robust_v034_replay::test_replay_unreadable_and_missing` now also patches `open_log`.
+
 ## v0.80: Round 87: file tools no longer hang on a FIFO swapped in mid-call. 5,610 tests + 19 integration
 
 - **The bug.** `read_file`, `edit_file`, `diff_files` and `fs_read` first checked `is_file()`, then opened the path. An agent's own shell could replace the file with a FIFO between those two steps, and `open()`/`read_bytes()` then parked a worker thread forever. Every `off_loop` tool shares that thread pool, so a handful of these calls could stall the whole node.

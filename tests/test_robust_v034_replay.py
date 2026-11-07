@@ -49,6 +49,7 @@ def test_replay_unreadable_and_missing(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise OSError("gone")
     monkeypatch.setattr(type(cx.log_dir / "r.jsonl"), "open", boom)
+    monkeypatch.setattr(codex_mod, "open_log", boom, raising=False)  # round 88: readers use open_log
     assert cx.replay("r") == []
 
 

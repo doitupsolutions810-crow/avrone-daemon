@@ -90,7 +90,8 @@ def _iter_lines(p: Path):
     try:
         if p.is_symlink() or not p.is_file():  # never read a planted link from outside runs/
             return None
-        f = p.open("rb")
+        from .codex import open_log
+        f = open_log(p, text=False)  # round 88: a FIFO swapped in after the check blocked here
     except OSError:
         return None
 

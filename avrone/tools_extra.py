@@ -1005,7 +1005,8 @@ async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scanned, capped = 0, False
     for f in [c for run in files for c in log_chain(run)]:  # each run's archives too (round 73)
         try:
-            fh = f.open(errors="replace")
+            from .codex import open_log
+            fh = open_log(f)  # round 88: never blocks on a FIFO swapped in after log_chain()
         except OSError:
             continue
         from .codex import iter_lines

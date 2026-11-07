@@ -285,6 +285,36 @@ def _is_action(obj: Any) -> bool:
     return isinstance(obj, dict) and ("tool" in obj or "final" in obj or "tools" in obj)
 
 
+def _skip_balanced_object(text: str, start: int) -> int:
+    """Skip a brace-balanced candidate without decoding it after a recursion failure.
+
+    This avoids retrying every nested opening brace in one hostile object and still permits
+    a later independent action to be considered.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for pos in range(start, len(text)):
+        ch = text[pos]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return pos + 1
+    return len(text)
+
+
 def _first_action(text: str) -> dict[str, Any] | None:
     """The first JSON object in text that is an action, decoding at every '{' (no greedy regex)."""
     i = text.find("{")
@@ -299,6 +329,11 @@ def _first_action(text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             i = text.find("{", i + 1)
             continue
+        except RecursionError:
+            i = _skip_balanced_object(text, i)
+            continue
+        except MemoryError:
+            return None
         if _is_action(obj):
             return obj
         i = text.find("{", end)  # skip past the whole non-action object: keeps the scan linear

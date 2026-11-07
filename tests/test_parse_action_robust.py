@@ -68,3 +68,16 @@ def test_pathological_replies_stay_fast(text):
 
 def test_action_after_a_huge_string_value():
     assert parse_action('{"k":"' + "a" * 1_000_000 + '"} {"tool":"shell"}') == {"tool": "shell"}
+
+
+def test_deep_non_action_object_does_not_hide_later_action():
+    deep = '{"outer":' + '{"a":' * 3000 + "0" + "}" * 3000 + '}'
+    assert parse_action(deep + ' {"tool":"shell"}') == {"tool": "shell"}
+
+
+def test_deep_object_scanner_ignores_braces_inside_escaped_strings():
+    from avrone.trinity import _skip_balanced_object
+
+    text = '{"x":"escaped \\\" { } \\\\"} {"tool":"shell"}'
+    end = _skip_balanced_object(text, 0)
+    assert text[end:].strip() == '{"tool":"shell"}'

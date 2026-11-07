@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -80,6 +80,7 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
     return out
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_proc_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not PROC.is_dir():
         return "proc_status: /proc is not available on this host (Linux only)"

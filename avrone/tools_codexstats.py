@@ -23,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -176,6 +176,7 @@ def _cap(text: str) -> str:
     return text if len(text) <= CODEX_STATS_MAX_CHARS else text[:CODEX_STATS_MAX_CHARS] + "\n...[truncated]"
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_codex_stats(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = str(args.get("scope") or "self").strip().lower()
     if scope not in ("self", "run"):

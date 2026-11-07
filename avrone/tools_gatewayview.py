@@ -17,7 +17,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -45,6 +45,7 @@ def replay_guard(fleet: Any) -> dict[str, Any]:
             "boot_guard_s": guard_left, "window_s": WINDOW_S}
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_replay_guard(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = getattr(getattr(ctx, "core", None), "fleet", None)
     if f is None or not getattr(f, "enabled", False):

@@ -37,7 +37,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Iterable
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 KINDS = ("finding", "question", "answer", "correction", "conclusion")
 MAX_TEXT = 4000
@@ -491,6 +491,7 @@ def _who(ctx: Any) -> tuple[str, str]:
     return name, role
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_bridge_post(ctx: Any, args: dict[str, Any]) -> str:
     b = for_core(ctx.core, ctx.run_id)
     name, role = _who(ctx)
@@ -501,6 +502,7 @@ async def t_bridge_post(ctx: Any, args: dict[str, Any]) -> str:
     return f"posted {p['kind']} [{p['id']}] to the run bridge ({len(b)} posts)"
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_bridge_read(ctx: Any, args: dict[str, Any]) -> str:
     b = for_core(ctx.core, ctx.run_id)
     try:
@@ -512,6 +514,7 @@ async def t_bridge_read(ctx: Any, args: dict[str, Any]) -> str:
     return compact(posts)
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_bridge_reply(ctx: Any, args: dict[str, Any]) -> str:
     b = for_core(ctx.core, ctx.run_id)
     name, role = _who(ctx)

@@ -25,7 +25,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool, _safe_path
+from .tools import Tool, _safe_path, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -278,6 +278,7 @@ def _skills(ctx: "AgentContext") -> dict[str, tuple[str, Path]]:
     return dict(sorted(found.items()))
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_skill_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     sk = _skills(ctx)
     return "\n".join(f"- {n}: {d}" for n, (d, _) in sk.items()) or "no skills installed"
@@ -288,6 +289,7 @@ def _names(sk: dict[str, Any], n: int = 50) -> str:
     return ", ".join(names[:n]) + (f", ... (+{len(names) - n} more; skill_list)" if len(names) > n else "") or "none"
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_skill_load(ctx: "AgentContext", args: dict[str, Any]) -> str:
     name = str((args or {}).get("name", "")).strip()
     if not name:
@@ -390,6 +392,7 @@ async def _do_install(ctx: "AgentContext", mgr: str, pkg: str) -> str:
     return f"{'installed' if ok else 'FAILED'} {pkg} via {mgr} (logged to resource ledger)\n{res.text(1500)}"
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_resources(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = _ledger(ctx)
     if not p.exists():

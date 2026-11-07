@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.89: Round 96: 16 await-free file tools moved off the event loop. 5,673 tests + 19 integration
+
+- **Call-graph sweep** (`/workspace/work/callscan.py`): it finds sync helpers that do file I/O, directly or up to 3 calls deep, and are called straight from an `async def` tool with no `@off_loop`. The round 95 sweep only saw I/O calls written inside the tool itself.
+- **Now `@off_loop`** (each one is await-free, and its shared state is copied or locked):
+  - `skill_list`, `skill_load`, `resources`
+  - `bridge_post`, `bridge_read`, `bridge_reply` (the bridge uses an RLock plus a file lock)
+  - `evolve_history`, `evolve_cancel`, `agent_home`, `codex_stats`
+  - `self_scan`, `capabilities_report` (disk probes)
+  - `fleet_status`, `replay_guard` (dict snapshots)
+  - `proc_status` (`/proc`), `router_status`
+- **Thread safety:** `codex.emit` from a worker thread already delivers to subscribers through `call_soon_threadsafe`.
+- **Left on the loop on purpose:** `task_board`. Its board read-modify-write has no lock and relies on running on the loop, one call at a time.
+- **Tests:** `tests/test_round96_off_loop_tools.py` has 18 tests: a structural check for each tool, plus two loop-stall tests (`codex_stats`, `bridge_read`). All 18 fail on v0.88.
+
 ## v0.88: Round 95: blocking file I/O off the event loop (AST sweep). 5,655 tests + 19 integration
 
 An AST sweep looked for `async def` tools that call file I/O without `@off_loop`. It found four.

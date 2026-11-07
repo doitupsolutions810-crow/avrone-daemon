@@ -758,6 +758,7 @@ def evolve_history(ctx: "AgentContext", limit: int | None = None) -> list[dict[s
 DEFAULT_HISTORY_TOOL_ROWS = 10
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_evolve_history(ctx: "AgentContext", args: dict[str, Any]) -> str:
     """The evolve_history tool: newest finished-loop summaries, read-only, bounded 1..HISTORY_CAP."""
     if _denied():
@@ -1112,6 +1113,7 @@ async def t_evolve_start(ctx: "AgentContext", args: dict[str, Any]) -> str:
             f"evolve_status {{\"loop_id\": \"{r['loop_id']}\"}} for progress; evolve_cancel to stop it.")
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_evolve_cancel(ctx: "AgentContext", args: dict[str, Any]) -> str:
     r = evolve_cancel(ctx, str(args.get("loop_id") or ""))
     if r.get("error"):

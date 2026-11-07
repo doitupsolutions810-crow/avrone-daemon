@@ -26,7 +26,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -175,6 +175,7 @@ def render_text(rep: dict[str, Any]) -> str:
     return _cap("\n".join(lines))
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_router_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     fmt = str(args.get("format", "text") or "text").lower()
     if fmt not in {"text", "json"}:

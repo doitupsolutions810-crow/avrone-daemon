@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import agentcontainer, agentfs, agentpack
 from .agentfs_tools import max_file_bytes, quota_bytes
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -172,6 +172,7 @@ def _fmt_bytes(n: int) -> str:
     return f"{n / (1024 * 1024):.2f} MB" if n >= 1024 * 1024 else f"{n} B"
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_agent_home(ctx: "AgentContext", args: dict[str, Any]) -> str:
     try:
         rep = agent_home(ctx)

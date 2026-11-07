@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.88.0)
+# AVRONE MASTER PROMPT (v0.89.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,655 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,673 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 262 test files, offline by default
+├── tests/                  # 263 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,20 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.89: Round 96: 16 await-free file tools moved off the event loop. 5,673 tests + 19 integration
+
+- **Call-graph sweep** (`/workspace/work/callscan.py`): it finds sync helpers that do file I/O, directly or up to 3 calls deep, and are called straight from an `async def` tool with no `@off_loop`. The round 95 sweep only saw I/O calls written inside the tool itself.
+- **Now `@off_loop`** (each one is await-free, and its shared state is copied or locked):
+  - `skill_list`, `skill_load`, `resources`
+  - `bridge_post`, `bridge_read`, `bridge_reply` (the bridge uses an RLock plus a file lock)
+  - `evolve_history`, `evolve_cancel`, `agent_home`, `codex_stats`
+  - `self_scan`, `capabilities_report` (disk probes)
+  - `fleet_status`, `replay_guard` (dict snapshots)
+  - `proc_status` (`/proc`), `router_status`
+- **Thread safety:** `codex.emit` from a worker thread already delivers to subscribers through `call_soon_threadsafe`.
+- **Left on the loop on purpose:** `task_board`. Its board read-modify-write has no lock and relies on running on the loop, one call at a time.
+- **Tests:** `tests/test_round96_off_loop_tools.py` has 18 tests: a structural check for each tool, plus two loop-stall tests (`codex_stats`, `bridge_read`). All 18 fail on v0.88.
+
 ## v0.88: Round 95: blocking file I/O off the event loop (AST sweep). 5,655 tests + 19 integration
 
 An AST sweep looked for `async def` tools that call file I/O without `@off_loop`. It found four.
@@ -335,13 +349,6 @@ An AST sweep looked for `async def` tools that call file I/O without `@off_loop`
 - **`t_state_health` is now `@off_loop`.** With 150,000 run logs plus 3,000 checkpoints: 17.6 s on the event loop before, 3.35 s off the loop now.
 - **Tests:** `tests/test_round94_state_health.py` has 7 tests. On v0.86, 5 fail. The FIFO-in-area test and the skip-runs test are guards.
 
-## v0.86: Round 93: bounded evolve loop listings, evolve_status off the loop. 5,643 tests + 19 integration
-
-- **`list_loops(settings, loop_id=None)`.** Before, each call opened every loop file twice: once to reconcile and once to list. It now reads only the newest `LOOPS_LIST_MAX` (500) files, or just the one named loop's file. `reconcile_interrupted(settings, paths)` checks only that set. The first call per data dir still sweeps everything, so an old orphaned "running" loop is still marked interrupted. `evolve_history` uses the same bounded set.
-- **`t_evolve_status` is now `@off_loop`.** Before, it did all of that file I/O on the event loop. Timings at 3,000 loops: 6.56 s down to 0.97 s, and `evolve_status loop_id=…` from 3.9 s down to 0.013 s.
-- **`evolve_list`** prints the newest `LOOPS_SHOWN_MAX` (50) loop lines with "(newest 50 of N shown)".
-- **Tests.** `tests/test_round93_loop_listings.py` has 5 tests. On v0.85, 4 fail; the old-orphan sweep test is a guard. `test_tools_extra::test_search_files` failed once under full-suite load (`rg` exit 255) and passes alone.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -353,4 +360,4 @@ An AST sweep looked for `async def` tools that call file I/O without `@off_loop`
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.88.0 checked out: 5,655 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.89.0 checked out: 5,673 passed, 99% coverage. Next: round <N+1> on <angle>."

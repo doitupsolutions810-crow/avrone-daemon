@@ -1183,6 +1183,7 @@ def _cap(text: str, limit: int = SELF_SCAN_MAX_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_self_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     inv = self_inventory(ctx)
     if str(args.get("format", "text")).lower() == "json":
@@ -1250,6 +1251,7 @@ def capability_ledger(inv: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_capabilities_report(ctx: "AgentContext", args: dict[str, Any]) -> str:
     inv = self_inventory(ctx)
     ledger = capability_ledger(inv)

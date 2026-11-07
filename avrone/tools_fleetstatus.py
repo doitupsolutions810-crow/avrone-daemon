@@ -25,7 +25,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from .tools import Tool
+from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -176,6 +176,7 @@ def _json(rep: dict[str, Any]) -> str:
     return _cap(text)
 
 
+@off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_fleet_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     limit = _int(args.get("limit"), 20, 1, FLEET_STATUS_MAX_LIMIT)
     if limit is None:

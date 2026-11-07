@@ -100,3 +100,8 @@ Mitigation: do not connect the gauge by merely changing the URL to `/ws/events`.
 ## Latest parser/CI verification result
 
 AVRONE PR #10's corrected branch completed the full GitHub Actions matrix on both supported Python versions: Python 3.11 = 5,677 passed / 318 skipped in 195.04s; Python 3.12 = 5,677 passed / 318 skipped in 206.52s. This followed an earlier full run with 5,669 passed / 318 skipped / 6 failed. The five parser recursion failures and one generated-prompt count mismatch were corrected and the full matrix then passed. This validates the parser/CI/capgate-selftest patch; it does not validate Docker, the external ledger, or the dormant runtime integrations.
+## Runtime-hook placement
+
+Clarification: capgate's own receipt recording is already integrated into the gated tool path (`avrone/tools.py::_receipt` calls `capgate.record` in a worker thread after the tool result). The missing connection is specifically the *external head-attestation* call: `attest_if_enabled()` has no production caller.
+
+Do not naively call `attest_if_enabled()` after every receipt. `attest_head()` performs a full `capgate.verify_chain()` walk before appending an external history entry. Repeating a full O(n) walk after each of n tool calls creates O(n²) cumulative verification work. A safer design is one idempotent checkpoint at `run.done` (or a measured, bounded checkpoint cadence), with the run ID and receipt-head hash as the idempotency key. The checkpoint must report failure separately from the already-completed tool action so an agent does not repeat a side effect.

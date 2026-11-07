@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.90.0)
+# AVRONE MASTER PROMPT (v0.91.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,679 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,684 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 264 test files, offline by default
+├── tests/                  # 265 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,16 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.91: Round 98: image tools open and decode off the event loop. 5,684 tests + 19 integration
+
+- **Loop stall:** `image_inspect` and `image_decode` called `_open_image` on the event loop, including `im.load()`, a full decode of up to `MAX_IMAGE_PIXELS` (40 Mpx). Both tools now call it through `asyncio.to_thread`.
+- **FIFO hang:** `_open_image` checked `is_file()` and then called `Image.open(path)`. A FIFO swapped in between those calls hung forever. It now opens one fd with `safeio.open_read(follow=True)`, which is `O_NONBLOCK` and checked regular by `fstat`. It reads at most `MAX_IMAGE_BYTES + 1` and decodes from `BytesIO`.
+- **Growing file:** a file that grows past the cap while it is being read is refused.
+- **Reported size:** the size comes from the bytes actually read (`im.info["avrone_bytes"]`), not a second `stat`.
+- **Unchanged:** symlinked images in the workspace still read, and directories, empty files and oversized files are still refused.
+- **Checked, no change needed:** `memory_sync`. Its store reads were already in a thread, and memstore cleans `ts` (strings, None, NaN and inf become numbers), so sorting can't crash.
+- **Tests:** `tests/test_round98_image_open.py` has 5 tests. 2 fail on v0.90 (loop stall, FIFO swap); the other 3 are regression guards.
+
 ## v0.90: Round 97: task_board locked and off the event loop. 5,679 tests + 19 integration
 
 - **Lost updates:** `task_board` reads the board, edits it, then writes it back, and it was only safe because it ran on the event loop. Two threads, or two nodes on one data dir, lost each other's tasks: with a slow write, 8 concurrent adds kept only some of them. The board now uses `_board_locked`, a per-path thread lock plus `flock` on `<board>.json.lock`, and the tool is `@off_loop`.
@@ -336,16 +346,6 @@ landed and the suite is green. End with what is still open.
 - **Left on the loop on purpose:** `task_board`. Its board read-modify-write has no lock and relies on running on the loop, one call at a time.
 - **Tests:** `tests/test_round96_off_loop_tools.py` has 18 tests: a structural check for each tool, plus two loop-stall tests (`codex_stats`, `bridge_read`). All 18 fail on v0.88.
 
-## v0.88: Round 95: blocking file I/O off the event loop (AST sweep). 5,655 tests + 19 integration
-
-An AST sweep looked for `async def` tools that call file I/O without `@off_loop`. It found four.
-
-- **`log_health`**: it ran `glob` and then `stat` on every run log, on the loop, following symlinks. It now makes one `safeio.newest_files` call in a worker thread, which reads only regular files. With 100,000 logs, the event-loop stall went from 3.5 s to 0.03 s. A symlinked `*.jsonl` is no longer counted or scanned.
-- **`pack_list`**: `iterdir`, `sort` and one `stat` per pack ran on the loop. These are now a single bounded `TreeWalk(recurse=False)` (`PACK_SCAN_MAX` 100,000) in a thread, in the same name order. Symlinks are reported from the same entry.
-- **`evolve_reset`**: `shutil.rmtree` of a whole repo clone now runs in `asyncio.to_thread`.
-- **`_propose_once`**: a proposal's edits (up to 200 files, 16 MB) and the rmtree of a failed clone now run in a thread (`_apply_edits`). The error results are unchanged.
-- **Tests**: `tests/test_round95_loop_io.py` adds 5 tests. All 5 fail on v0.87. `test_cov17_a::test_pack_list_stat_error` now injects the stat error through `os.scandir`.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -357,4 +357,4 @@ An AST sweep looked for `async def` tools that call file I/O without `@off_loop`
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.90.0 checked out: 5,679 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.91.0 checked out: 5,684 passed, 99% coverage. Next: round <N+1> on <angle>."

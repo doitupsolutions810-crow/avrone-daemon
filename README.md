@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.91: Round 98: image tools open and decode off the event loop. 5,684 tests + 19 integration
+
+- **Loop stall:** `image_inspect` and `image_decode` called `_open_image` on the event loop, including `im.load()`, a full decode of up to `MAX_IMAGE_PIXELS` (40 Mpx). Both tools now call it through `asyncio.to_thread`.
+- **FIFO hang:** `_open_image` checked `is_file()` and then called `Image.open(path)`. A FIFO swapped in between those calls hung forever. It now opens one fd with `safeio.open_read(follow=True)`, which is `O_NONBLOCK` and checked regular by `fstat`. It reads at most `MAX_IMAGE_BYTES + 1` and decodes from `BytesIO`.
+- **Growing file:** a file that grows past the cap while it is being read is refused.
+- **Reported size:** the size comes from the bytes actually read (`im.info["avrone_bytes"]`), not a second `stat`.
+- **Unchanged:** symlinked images in the workspace still read, and directories, empty files and oversized files are still refused.
+- **Checked, no change needed:** `memory_sync`. Its store reads were already in a thread, and memstore cleans `ts` (strings, None, NaN and inf become numbers), so sorting can't crash.
+- **Tests:** `tests/test_round98_image_open.py` has 5 tests. 2 fail on v0.90 (loop stall, FIFO swap); the other 3 are regression guards.
+
 ## v0.90: Round 97: task_board locked and off the event loop. 5,679 tests + 19 integration
 
 - **Lost updates:** `task_board` reads the board, edits it, then writes it back, and it was only safe because it ran on the event loop. Two threads, or two nodes on one data dir, lost each other's tasks: with a slow write, 8 concurrent adds kept only some of them. The board now uses `_board_locked`, a per-path thread lock plus `flock` on `<board>.json.lock`, and the tool is `@off_loop`.

@@ -78,18 +78,30 @@ def _open_image(ctx: "AgentContext", raw: Any):
         p = _img_path(ctx, raw)
     except ValueError as e:
         return f"ERROR: {e}"
+    from .safeio import NotRegularFile, open_read
     try:
-        if not p.is_file():
-            return f"ERROR: {raw!r} is not a regular file"
-        size = p.stat().st_size
+        # round 98: one fd, opened O_NONBLOCK and checked regular by fstat. is_file() then
+        # Image.open(path) let a FIFO swapped in between hang the worker, and a file grown past
+        # the cap after stat() was decoded anyway.
+        with open_read(p, follow=True) as fh:
+            size = os.fstat(fh.fileno()).st_size
+            if size > MAX_IMAGE_BYTES:
+                return f"ERROR: {p.name} is {size} bytes; cap is {MAX_IMAGE_BYTES}"
+            data = fh.read(MAX_IMAGE_BYTES + 1)
+    except (NotRegularFile, IsADirectoryError):
+        return f"ERROR: {raw!r} is not a regular file"
+    except FileNotFoundError:
+        return f"ERROR: {raw!r} is not a regular file"
     except OSError as e:
         return f"ERROR: cannot read {raw!r}: {e.strerror or e}"
-    if size == 0:
+    if not data:
         return f"ERROR: {p.name} is empty"
-    if size > MAX_IMAGE_BYTES:
-        return f"ERROR: {p.name} is {size} bytes; cap is {MAX_IMAGE_BYTES}"
+    if len(data) > MAX_IMAGE_BYTES:
+        return f"ERROR: {p.name} grew past {MAX_IMAGE_BYTES} bytes while being read"
     try:
-        im = Image.open(p)
+        import io
+        im = Image.open(io.BytesIO(data))
+        im.info["avrone_bytes"] = len(data)
         w, h = im.size
         if w <= 0 or h <= 0 or w * h > MAX_IMAGE_PIXELS:
             im.close()
@@ -125,13 +137,14 @@ def _inspect(p: Path, im) -> str:
                 n = 1
     unit = min((r for r, c in runs.most_common(8) if r >= 2), default=None)
     grid = f"~{round(w / unit)}x{round(h / unit)} modules (unit {unit}px)" if unit else "n/a"
-    return (f"{p.name}: {w}x{h} {im.mode} format={im.format} size={p.stat().st_size}B\n"
+    return (f"{p.name}: {w}x{h} {im.mode} format={im.format} size={im.info.get('avrone_bytes', 0)}B\n"
             f"entropy={ent:.3f} bits/px  dark_ratio={sum(hist[:128]) / total:.3f}\n"
             f"top colors: {[(c, rgb) for c, rgb in top]}\nestimated grid: {grid}")
 
 
 async def t_image_inspect(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    got = _open_image(ctx, (args or {}).get("path"))
+    # round 98: the full decode (im.load, up to MAX_IMAGE_PIXELS) ran on the event loop
+    got = await asyncio.to_thread(_open_image, ctx, (args or {}).get("path"))
     if isinstance(got, str):
         return got
     p, im = got
@@ -169,7 +182,8 @@ async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except ImportError:
         return ("ERROR: zxing-cpp not installed. It is a pip package (not apt): "
                 "env_install {\"package\": \"zxing-cpp\", \"manager\": \"pip\"} then retry.")
-    got = _open_image(ctx, (args or {}).get("path"))
+    # round 98: the full decode (im.load, up to MAX_IMAGE_PIXELS) ran on the event loop
+    got = await asyncio.to_thread(_open_image, ctx, (args or {}).get("path"))
     if isinstance(got, str):
         return got
     p, im = got

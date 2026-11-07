@@ -36,11 +36,17 @@ ACTING = {"run_logs", "fleet_forget", "secret_scan", "shell", "python", "git", "
 
 
 def _check_json(p: Path) -> str | None:
+    from .safeio import FileTooBig, read_capped
     try:
-        json.loads(p.read_text())
+        raw = read_capped(p, MAX_JSONL_BYTES)
+        if raw is None:
+            return "not a regular file"
+        json.loads(raw.decode("utf-8"))
+    except FileTooBig:
+        return None  # too big to check here; not a problem in itself
     except UnicodeDecodeError:
         return "not utf-8"
-    except ValueError:
+    except (ValueError, RecursionError):
         return "invalid json"
     except OSError as e:
         return f"unreadable ({type(e).__name__})"

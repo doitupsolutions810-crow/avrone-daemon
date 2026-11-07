@@ -83,6 +83,8 @@ def test_unreadable(tmp_path, monkeypatch):
     p.write_text("{}")
     monkeypatch.setattr(type(p), "read_text", lambda *a, **k: (_ for _ in ()).throw(PermissionError()))
     monkeypatch.setattr(type(p), "read_bytes", lambda *a, **k: (_ for _ in ()).throw(PermissionError()))
+    import avrone.safeio as _sio  # round 85: _check_json reads through safeio.read_capped
+    monkeypatch.setattr(_sio, "read_capped", lambda *a, **k: (_ for _ in ()).throw(PermissionError()))
     assert sh._check_json(p) == "unreadable (PermissionError)"
     assert sh._check_jsonl(p) == "unreadable (PermissionError)"
 

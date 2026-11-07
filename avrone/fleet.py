@@ -521,6 +521,21 @@ def kind_capabilities(kind: str) -> set[str]:
     return set(CAPABILITIES.get(kind) or SYNC_CAPABILITIES.get(kind) or set()) | NET_CAPABILITIES.get(kind, set())
 
 
+
+FLEET_JSON_MAX_BYTES = 64 * 1024 * 1024
+NONCE_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _load_nonce_snapshot(p: Path) -> Any:
+    """fleet_nonces.json parsed, read with O_NOFOLLOW|O_NONBLOCK (round 85: a FIFO there blocked
+    every verify() that reloaded it). A symlink/special file or one over 64 MB raises OSError, which
+    the callers treat as unreadable (journal only; our next save rewrites it)."""
+    from .safeio import read_capped
+    raw = read_capped(p, NONCE_SNAPSHOT_MAX_BYTES)
+    if raw is None:
+        raise OSError("fleet_nonces.json is not a regular file")
+    return json.loads(raw.decode("utf-8"))
+
 class GatewayRefused(PermissionError):
     """A fleet request refused by the dispatch gateway. `code` is a stable machine-readable reason;
     `auth` is True for authentication failures (HTTP 401) and False for policy refusals (HTTP 403)."""
@@ -771,9 +786,14 @@ class FleetManager:
         node from booting: it is moved aside as fleet.json.corrupt-<ts> and the node starts fresh."""
         if not self.path.exists():
             return {}
-        try:
-            saved = json.loads(self.path.read_text())
-        except (OSError, ValueError, UnicodeDecodeError):
+        from .safeio import read_capped
+        try:  # round 85: a FIFO here blocked FleetManager() (node boot) forever in read_text()
+            raw = read_capped(self.path, FLEET_JSON_MAX_BYTES)
+            if raw is None:  # a symlink or special file: never read, never renamed
+                log.warning("fleet.json is not a regular file; starting with an empty registry")
+                return {}
+            saved = json.loads(raw.decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
             saved = None
         if isinstance(saved, dict):
             return saved
@@ -915,7 +935,7 @@ class FleetManager:
             self._read_journal(out, now, from_start=True)
             return out
         try:
-            raw = json.loads(p.read_text())
+            raw = _load_nonce_snapshot(p)
             if not isinstance(raw, dict):
                 raise ValueError("not an object")
             out = {}
@@ -965,7 +985,7 @@ class FleetManager:
             self._read_journal(self._nonces, now)
             return
         try:
-            raw = json.loads(p.read_text())
+            raw = _load_nonce_snapshot(p)
         except (OSError, ValueError, RecursionError):
             self._read_journal(self._nonces, now)
             return  # unreadable now: keep ours; our save rewrites it whole
@@ -1003,7 +1023,8 @@ class FleetManager:
                 log.warning("fleet nonce journal is %d bytes; skipped, refusing requests signed before now",
                             size - off)
                 return
-            with open(jp, "rb") as fh:
+            from .safeio import open_read
+            with open_read(jp) as fh:  # O_NOFOLLOW: a symlinked journal is not read
                 fh.seek(off)
                 chunk = fh.read(size - off)
         except OSError:

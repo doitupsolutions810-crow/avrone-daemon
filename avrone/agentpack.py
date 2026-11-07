@@ -89,15 +89,19 @@ def pack_dir(data_dir: Path) -> Path:
     return Path(data_dir) / INDEX_DIR
 
 
+INDEX_MAX_BYTES = 16 * 1024 * 1024
+
 def _index_path(data_dir: Path) -> Path:
     return pack_dir(data_dir) / "index.json"
 
 
 def load_index(data_dir: Path) -> dict[str, dict[str, Any]]:
     try:
-        d = json.loads(_index_path(data_dir).read_text())
+        from .safeio import read_capped  # a FIFO index.json hung every pack tool
+        raw = read_capped(_index_path(data_dir), INDEX_MAX_BYTES)
+        d = json.loads(raw.decode("utf-8")) if raw is not None else {}
         return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
 
 

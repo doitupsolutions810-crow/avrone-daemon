@@ -33,7 +33,9 @@ def replay_guard(fleet: Any) -> dict[str, Any]:
     if path is not None and path.exists():
         persisted = True
         try:
-            readable = isinstance(json.loads(path.read_text()), dict)
+            from .safeio import read_capped
+            raw = read_capped(path, 64 * 1024 * 1024)
+            readable = raw is not None and isinstance(json.loads(raw.decode("utf-8")), dict)
         except (OSError, ValueError, RecursionError):
             readable = False
     guard = getattr(fleet, "_boot_guard", None)

@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.78: Round 85: state JSON reads never block, follow links or read unbounded. 5,599 tests + 19 integration
+
+- **New `safeio.read_capped(path, max_bytes)`.** Returns the bytes of a regular file. Returns `None` when the file is missing, a symlink, or a special file. Raises `FileTooBig` when the file is over the cap, including one that grows past the cap mid-read. Opens with `O_NOFOLLOW|O_NONBLOCK`. Also new: `safeio.open_read`.
+- **`fleet.json`.** A FIFO here blocked `FleetManager()`, and with it node boot, forever. The file was also read whole at any size. Now: capped at 64 MB (`FLEET_JSON_MAX_BYTES`). An oversized file is set aside like a corrupt one. A symlink or special file is neither read nor renamed, and the node starts with an empty registry.
+- **`fleet_nonces.json`.** A FIFO blocked the loader and the reload in `verify()`. Now: the snapshot loads through `_load_nonce_snapshot`, capped at 64 MB. An unreadable snapshot keeps the existing journal-only path. The journal itself opens with `O_NOFOLLOW`.
+- **Other readers.** These now use `read_capped`:
+  - `agentpacks/index.json`, capped at 16 MB. A FIFO here hung every pack tool.
+  - `gateway_view`'s nonce check.
+  - `state_health._check_json`. A special file reports "not a regular file". An oversized file is skipped. Deep nesting reports "invalid json" instead of `RecursionError`.
+- **Tests.** `tests/test_round85_state_reads.py` has 7 tests. On v0.77, 6 fail; the symlink guard passes. `test_tool_state_health::test_unreadable` now patches `safeio.read_capped`.
+
 ## v0.77: Round 84: appends, locks and journal reads refuse symlinks and FIFOs. 5,592 tests + 19 integration
 
 - **New `safeio` helpers.** `open_append`, `open_lock` and `read_regular` all open with `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`. They accept regular files only; a symlink, FIFO, socket or directory raises `safeio.NotRegularFile`, and `read_regular` returns `None` for them. `read_regular(path, max_bytes)` reads only the newest whole lines when the file is too big.

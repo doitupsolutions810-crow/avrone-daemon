@@ -116,3 +116,29 @@ def read_regular(path: str | os.PathLike, max_bytes: int | None = None) -> bytes
         data = f.read(max_bytes)
         cut = data.find(b"\n")
         return data[cut + 1:] if cut >= 0 else b""
+
+
+class FileTooBig(OSError):
+    """A regular file larger than the caller's cap: never read whole."""
+
+
+def read_capped(path: str | os.PathLike, max_bytes: int) -> bytes | None:
+    """Bytes of a regular file of at most max_bytes. None when it is missing, a symlink or a special
+    file (FIFO, socket, device, directory); FileTooBig when it is bigger than max_bytes (also when
+    it grows past the cap while being read)."""
+    try:
+        fd = _open_regular(path, os.O_RDONLY, 0)
+    except (FileNotFoundError, NotRegularFile):
+        return None
+    with os.fdopen(fd, "rb") as f:
+        if os.fstat(f.fileno()).st_size > max_bytes:
+            raise FileTooBig(f"{Path(path).name} is over {max_bytes} bytes")
+        data = f.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise FileTooBig(f"{Path(path).name} is over {max_bytes} bytes")
+    return data
+
+
+def open_read(path: str | os.PathLike):
+    """A binary file object reading a regular file; NotRegularFile for a symlink or special file."""
+    return os.fdopen(_open_regular(path, os.O_RDONLY, 0), "rb")

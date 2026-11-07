@@ -72,3 +72,8 @@ The p/S/Psi values describe outcomes, not cryptographic integrity. Digest validi
 ## Next falsifiable question
 
 Can the runtime emit a single, uniquely identified capability receipt that is (a) attested once, (b) committed to the external history without granting the agent Git authority, and (c) independently verified after a restart? The next descent should test that complete path under duplicate callbacks, process crash between append and commit, stale mounts, partial writes, and concurrent workers.
+## Additional execution-layer falsification
+
+The live `.github/workflows/ci.yml` had a second false-negative path: both checkout-hygiene scans ran `grep | while` under `set -o pipefail`. On a clean checkout with no wrapper lines, `grep` returns 1 and the job exits before dependency installation. GitHub Actions run 42322491312 on main confirms that the install step failed before pytest. The fix is included in AVRONE PR #10; its new run has passed dependency installation and is executing the test matrix.
+
+The same principle appears at two layers: an empty evidence search must not abort a healthy build, and an empty evidence ledger must not certify a healthy system. In both cases, absence must be represented explicitly rather than treated as success or an unhandled failure.

@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.90: Round 97: task_board locked and off the event loop. 5,684 tests + 19 integration
+
+- **Lost updates:** `task_board` reads the board, edits it, then writes it back, and it was only safe because it ran on the event loop. Two threads, or two nodes on one data dir, lost each other's tasks: with a slow write, 8 concurrent adds kept only some of them. The board now uses `_board_locked`, a per-path thread lock plus `flock` on `<board>.json.lock`, and the tool is `@off_loop`.
+- **Silent wipe:** a board over `BOARD_READ_MAX` (8 MB) came back from `read_regular` as only its tail, which never parses as JSON, so the next write replaced every task. The board is now read with `read_capped`. On a write, an oversized, corrupt or non-list board is kept as `<board>.json.corrupt-<ts>` before the fresh one is written. A `list` on a corrupt board changes nothing.
+- **Shared boards:** run ids that differ only in punctuation (`a.b` and `ab`, or `...` and `!!!`) used to share one board. When cleaning changes the id, the file name now gets a 12-character sha256 suffix. Two `test_agentkit_edges` assertions were updated for the new names.
+- **Tests:** `tests/test_round97_task_board.py` has 6 tests. 5 fail on v0.89; the `list` on a corrupt board case already behaved.
+
 ## v0.89: Round 96: 16 await-free file tools moved off the event loop. 5,673 tests + 19 integration
 
 - **Call-graph sweep** (`/workspace/work/callscan.py`): it finds sync helpers that do file I/O, directly or up to 3 calls deep, and are called straight from an `async def` tool with no `@off_loop`. The round 95 sweep only saw I/O calls written inside the tool itself.

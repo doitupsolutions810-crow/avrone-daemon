@@ -329,7 +329,7 @@ def test_resources_empty_and_limit(tmp_path):
 
 def test_task_board_edges(tmp_path):
     c, events = make_ctx(tmp_path, run_id="../../weird id!")
-    assert agentkit._board(c).name == "weirdid.json"
+    assert agentkit._board(c).name.startswith("weirdid-") and agentkit._board(c).name.endswith(".json")  # round 97: hash suffix
     assert run(agentkit.t_task_board(c, {})) == "board empty"
     assert run(agentkit.t_task_board(c, {"op": "delete"})) == "ERROR: op must be add, update or list"
     assert run(agentkit.t_task_board(c, {"op": "update", "id": 7})) == "ERROR: no such task"
@@ -346,7 +346,7 @@ def test_task_board_edges(tmp_path):
 
 def test_task_board_empty_run_id(tmp_path):
     c, _ = make_ctx(tmp_path, run_id="///")
-    assert agentkit._board(c).name == "run.json"
+    assert agentkit._board(c).name.startswith("run-")  # round 97: hash suffix, no shared "run" board
 
 
 def test_register_kit_tools():

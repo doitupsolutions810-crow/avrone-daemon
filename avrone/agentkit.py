@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import contextlib
+import threading
+import hashlib
 import math
 import os
 import re
@@ -431,19 +434,64 @@ MAX_BOARD_TASKS = 500
 def _board(ctx: "AgentContext") -> Path:
     d = _data(ctx) / "boards"
     d.mkdir(exist_ok=True)
-    return d / f"{re.sub(r'[^A-Za-z0-9_-]', '', ctx.run_id) or 'run'}.json"
+    rid = str(ctx.run_id)
+    clean = re.sub(r'[^A-Za-z0-9_-]', '', rid)[:96] or 'run'
+    if clean != rid:  # "a.b" and "ab" (or two all-punctuation ids) used to share one board
+        clean += "-" + hashlib.sha256(rid.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    return d / f"{clean}.json"
 
 
+_BOARD_LOCKS: dict[str, threading.Lock] = {}
+_BOARD_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _board_locked(p: Path):
+    """One writer per board: a thread lock for this process, flock for other nodes on the data dir.
+    The read-modify-write used to rely on running on the event loop; two nodes (or threads) lost
+    each other's tasks."""
+    with _BOARD_LOCKS_GUARD:
+        lk = _BOARD_LOCKS.setdefault(str(p), threading.Lock())
+    with lk:
+        from .safeio import open_lock
+        try:
+            fh = open_lock(p.with_name(p.name + ".lock"))
+        except OSError:
+            fh = None  # a planted non-regular lock file: still serialized in-process
+        try:
+            if fh is not None:
+                try:
+                    import fcntl
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                except (ImportError, OSError):
+                    pass
+            yield
+        finally:
+            if fh is not None:
+                fh.close()
+
+
+@off_loop  # round 97: file read-modify-write now under _board_locked
 async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = _board(ctx)
+    with _board_locked(p):
+        return _task_board_locked(ctx, args, p)
+
+
+def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> str:
+    bad = False
     try:
-        from .safeio import read_regular
-        raw = read_regular(p, BOARD_READ_MAX)
-        board: list[dict[str, Any]] = json.loads(raw) if raw else []
-    except (OSError, ValueError):
-        board = []  # a torn/corrupt board starts fresh instead of breaking the tool for the run
-    if not isinstance(board, list):
+        from .safeio import read_capped
+        raw = read_capped(p, BOARD_READ_MAX)
+        board: Any = json.loads(raw) if raw else []
+    except FileNotFoundError:
         board = []
+    except (OSError, ValueError, RecursionError):
+        # read_regular used to hand back the tail of a >8 MB board, which never parses; the next
+        # write then silently replaced every task. The old file is now kept as *.corrupt-<ts>.
+        board, bad = [], True
+    if not isinstance(board, list):
+        board, bad = [], True
     board = [t for t in board if isinstance(t, dict) and isinstance(t.get("id"), int)]
     op = str(args.get("op", "list"))
     if op == "add":
@@ -469,6 +517,11 @@ async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
     elif op != "list":
         return "ERROR: op must be add, update or list"
     if op != "list":
+        if bad:
+            try:
+                os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+            except OSError:
+                pass
         from .safeio import atomic_write  # random temp name: a planted .board.<pid>.tmp link is never followed
         atomic_write(p, json.dumps(board, indent=1))  # atomic: a crash never leaves a half-written board
     if op != "list":

@@ -81,7 +81,7 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
-## v0.90: Round 97: task_board locked and off the event loop. 5,684 tests + 19 integration
+## v0.90: Round 97: task_board locked and off the event loop. 5,679 tests + 19 integration
 
 - **Lost updates:** `task_board` reads the board, edits it, then writes it back, and it was only safe because it ran on the event loop. Two threads, or two nodes on one data dir, lost each other's tasks: with a slow write, 8 concurrent adds kept only some of them. The board now uses `_board_locked`, a per-path thread lock plus `flock` on `<board>.json.lock`, and the tool is `@off_loop`.
 - **Silent wipe:** a board over `BOARD_READ_MAX` (8 MB) came back from `read_regular` as only its tail, which never parses as JSON, so the next write replaced every task. The board is now read with `read_capped`. On a write, an oversized, corrupt or non-list board is kept as `<board>.json.corrupt-<ts>` before the fresh one is written. A `list` on a corrupt board changes nothing.

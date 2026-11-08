@@ -177,7 +177,8 @@ async def t_agent_home(ctx: "AgentContext", args: dict[str, Any]) -> str:
     try:
         rep = agent_home(ctx)
     except PermissionError as e:
-        return f"ERROR: {e}"
+        from .tools import error_text  # round 115: no host path in the message
+        return error_text(e, ctx) if e.filename else f"ERROR: {e}"
     if str((args or {}).get("format", "text")).lower() == "json":
         return _cap(json.dumps(rep, indent=1, sort_keys=True))
     lines = [f"agent_home {rep['agent_id']} (your own; read-only): {rep['path']}"

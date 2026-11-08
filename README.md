@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.108: Round 115: parallel edit_file calls on one file all land. 5,819 tests + 19 integration
+
+- **Bug:** squad agents that edited different lines of one file in parallel each got `edited ... (1 replacement)`. But each rewrote the whole file from its own stale read. In the probe (`/workspace/work/editrace.py`), 40 parallel edits left only 9 to 13 applied, across 3 runs. A `write_file` or shell write that landed between edit_file's read and its write was also silently overwritten.
+- **Fix:**
+  - edit_file now serializes on a per-path lock, keyed by realpath. Idle locks are pruned past 4,096.
+  - Before writing, it compares the file's `(dev, ino, size, mtime_ns)` with the stat taken at read. If any other writer changed the file in between, it redoes the edit on the new content, up to `EDIT_RETRIES` (3) times.
+  - If the file keeps changing, it gives `ERROR: ... kept changing while edit_file ran`, and nothing is written. The probe now shows 40/40 applied.
+- **Host paths:** the error sites that skipped the round 114 wrapper now use `tools.error_text`. These are `agent_home` (PermissionError), `priv_admin`, `priv_shell`, the `memory_sync` OSError and the `fleet_forget` PermissionError.
+- **Tests:** `tests/test_round115_edit_races.py` has 4 tests; 3 fail on v0.107.
+
 ## v0.107: Round 114: paths past PATH_MAX and tool errors that leaked the host path. 5,815 tests + 19 integration
 
 - **Probe:** I fuzzed every tool (`/workspace/work/deepfuzz.py`, SEED 11401, N 25; 2,075 calls) over a workspace holding a 1,900-level directory tree, near PATH_MAX. Arguments included that tree, the leaf, a 5,000-char `e/e/...` path, `d/` repeated 3,000 times, depth 10**6 and `**/*` globs. There were no hangs and no `RecursionError`: the walkers held.

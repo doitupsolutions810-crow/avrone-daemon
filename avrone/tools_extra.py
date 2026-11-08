@@ -21,6 +21,7 @@ import html as _html
 import json
 import os
 import re
+import threading
 import shlex
 import stat
 import shutil
@@ -475,18 +476,60 @@ def _nearest_hint(text: str, old: str) -> str:
     return f"; closest line is {idx + 1}: {lines[idx].strip()[:120]!r} (read_file the file and copy the exact text)"
 
 
+_EDIT_LOCKS: dict[str, threading.Lock] = {}
+_EDIT_LOCKS_GUARD = threading.Lock()
+EDIT_RETRIES = 3
+
+
+class _EditRaced(Exception):
+    """The file changed between edit_file's read and its write (another writer)."""
+
+
+def _edit_lock(p: Path) -> threading.Lock:
+    try:
+        key = os.path.realpath(p)
+    except (OSError, ValueError):
+        key = str(p)
+    with _EDIT_LOCKS_GUARD:
+        if len(_EDIT_LOCKS) > 4096:  # drop idle locks; a held one stays (it is still referenced)
+            for k in [k for k, lk in _EDIT_LOCKS.items() if not lk.locked()][:2048]:
+                _EDIT_LOCKS.pop(k, None)
+        return _EDIT_LOCKS.setdefault(key, threading.Lock())
+
+
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
 @off_loop  # reads, matches and rewrites the whole file
 async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    """Round 115: one edit at a time per file, and a read-modify-write that loses a race is redone.
+    Squad agents editing different lines of one file in parallel each got "edited", but each
+    rewrote the file from its own stale read: 40 parallel edits left 9-13 applied. Edits now
+    serialize on a per-path lock, and a change by any other writer (write_file, shell) between
+    the read and the write is detected by (dev, ino, size, mtime_ns) and the edit is re-run on
+    the new content, up to EDIT_RETRIES times."""
+    raw_path = str(args.get("path") or "").strip()
+    if not raw_path:
+        return "ERROR: edit_file needs a file path"
+    r = fsunify.resolve(ctx, raw_path, "edit_file")
+    with _edit_lock(r.path):
+        for _ in range(EDIT_RETRIES):
+            try:
+                return _edit_file_once(ctx, args, raw_path, r)
+            except _EditRaced:
+                continue
+    return (f"ERROR: {raw_path} kept changing while edit_file ran ({EDIT_RETRIES} tries); "
+            "nothing was written, read_file it and retry")
+
+
+def _edit_file_once(ctx: "AgentContext", args: dict[str, Any], raw_path: str, r: Any) -> str:
     """Exact, unique replace, hardened (round 25): bytes outside the edit survive untouched
     (a latin-1 or mixed file was silently rewritten with U+FFFD everywhere before), CRLF files
     match an LF `old`, trailing-whitespace drift matches line-aligned, a miss names the closest
     line, binary files and directories are refused, replace_all is opt-in, writes are atomic
     and keep the file's mode."""
     from .tools import atomic_write_bytes
-    raw_path = str(args.get("path") or "").strip()
-    if not raw_path:
-        return "ERROR: edit_file needs a file path"
-    r = fsunify.resolve(ctx, raw_path, "edit_file")
     p = r.path
     if p.is_dir():
         return f"ERROR: {raw_path} is a directory, not a file"
@@ -506,7 +549,8 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except NotRegularFile:
         return f"ERROR: {raw_path} is not a regular file"
     with fh:
-        size = os.fstat(fh.fileno()).st_size
+        st0 = os.fstat(fh.fileno())
+        size = st0.st_size
         if size > EDIT_MAX_BYTES:
             return (f"ERROR: {raw_path} is {size} bytes; edit_file handles up to {EDIT_MAX_BYTES} bytes, "
                     "use shell (sed, python) for bigger files")
@@ -552,6 +596,12 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
         count = len(spans) if replace_all else 1
         how = ", matched ignoring trailing whitespace"
     blob = out.encode("utf-8", "surrogateescape")
+    try:
+        changed = _stamp(os.stat(p)) != _stamp(st0)
+    except OSError:
+        changed = True
+    if changed:
+        raise _EditRaced()
     if r.in_agent:
         from .agentfs_tools import quota_write
         quota_write(ctx, r.root, p, blob, tool="edit_file")  # (this tool already runs off the loop)
@@ -774,7 +824,8 @@ async def t_memory_sync(ctx: "AgentContext", args: dict[str, Any]) -> str:
     try:
         res = await f.push_memory(recs, f"{f.node_id}/{ctx.name}")
     except Exception as e:  # noqa: BLE001
-        return f"ERROR: memory sync refused or failed: {e}"
+        from .tools import error_text
+        return f"ERROR: memory sync refused or failed: {error_text(e, ctx)[7:] if isinstance(e, OSError) else e}"
     _emit(ctx, "memory.sync", scope=scope, entries=len(recs), parent=f.parent)
     return (f"synced {len(recs)} entries to parent {res.get('node', f.parent)}: merged={res.get('merged', 0)} "
             f"skipped={res.get('skipped', 0)} rejected={res.get('rejected', 0)}"
@@ -1389,7 +1440,8 @@ async def t_priv_shell(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except Exception as e:  # noqa: BLE001 -- audited, then reported to the agent
         _emit(ctx, "priv.shell", tool="priv_shell", cmd=safe, argv0=argv[0], timeout=timeout,
               error=f"{type(e).__name__}: {e}"[:300])
-        return f"ERROR: {type(e).__name__}: {e}"
+        from .tools import error_text
+        return error_text(e, ctx)
     _emit(ctx, "priv.shell", tool="priv_shell", cmd=safe, argv0=argv[0], timeout=timeout,
           exit_code=res.exit_code, timed_out=res.timed_out)
     return res.text()
@@ -1484,7 +1536,8 @@ async def t_priv_admin(ctx: "AgentContext", args: dict[str, Any]) -> str:
         result = await entry[1](ctx, args)
     except Exception as e:  # noqa: BLE001 -- audited, then reported to the agent
         _emit(ctx, "admin.action", tool="priv_admin", action=action, ok=False, error=f"{type(e).__name__}: {e}"[:300])
-        return f"ERROR: {e}"
+        from .tools import error_text  # round 115: an OSError named the host path
+        return error_text(e, ctx) if isinstance(e, OSError) else f"ERROR: {e}"
     _emit(ctx, "admin.action", tool="priv_admin", action=action, ok=True)
     text = json.dumps(result, default=str, indent=1)
     return text[:PRIV_ADMIN_MAX_CHARS] + ("\n...[truncated]" if len(text) > PRIV_ADMIN_MAX_CHARS else "")

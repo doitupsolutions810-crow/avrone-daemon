@@ -130,7 +130,8 @@ async def t_fleet_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except KeyError:
         return f"ERROR: no peer {nid!r} registered here"
     except (ValueError, PermissionError) as e:
-        return f"ERROR: {e}"
+        from .tools import error_text  # round 115: a PermissionError named the host path
+        return error_text(e, ctx) if isinstance(e, OSError) and e.filename else f"ERROR: {e}"
     note = " (revoked in AVRONE_FLEET_ALLOW, so it cannot rejoin)" if revoked else ""
     return f"forgot peer {r['node']} (was {r['status']}){note}"
 

@@ -26,7 +26,6 @@ def _event():
 
 
 def _headers(raw: bytes):
-    import hashlib
     import time
     from avrone.evidence_receiver import request_signature
 

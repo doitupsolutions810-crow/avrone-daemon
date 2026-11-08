@@ -81,6 +81,23 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.113: Round 120: an agent's memory follows its agent id. 5,856 tests + 19 integration
+
+- **Bug:** memory was stored under `memstore.agent_namespace(name)`. The name is the role with every non-alphanumeric dropped and cut to 16 characters. The agent's home dir and agent packs used `agentfs.sanitize_agent_id(role)` instead. This caused three failures:
+  - For "Code Reviewer", memory went to `codereviewer` while the home was `code-reviewer`, so `export_pack` shipped an empty memory.
+  - `import_pack` merged memory into a namespace the agent never reads.
+  - "Research Analyst Lead" and "Research Analyst Lackey" both mapped to `researchanalystl` and shared memory across runs.
+- **Fix:** `_claim_identity` derives the namespace from the claimed agent id and pins it on `ctx.memory_namespace`.
+  - Simple roles ("Builder") keep the same namespace as before.
+  - Concurrent same-id agents still get `-2`, `-3` and so on, on both the id and the namespace.
+- **Carry-over:** on an agent's first run, `_carry_legacy_memory` copies memory saved under the old name-derived namespace into the id namespace.
+  - It runs off the event loop, once per namespace per core.
+  - Newest wins, and the old namespace is never deleted. It is never fatal.
+- **Probed clean:**
+  - `fullfs.py`: with `RLIMIT_FSIZE=1` (every growing write fails, like a full disk) across all mutating tools and runs, no existing state file was truncated and no temp files were left behind.
+  - `qfuzz.py`: hostile query and path values on all 31 GET routes produced no 500s.
+- **Tests:** `tests/test_round120_agent_memory_identity.py` has 7 tests; 6 fail on v0.112.
+
 ## v0.112: Round 119: a full disk under the CodeX logs no longer kills runs. 5,849 tests + 19 integration
 
 - **Bug:** `Codex._append` let `OSError(ENOSPC)` escape `emit()`. Once the log disk filled, every chat, squad and deep run on the node died with a raw `[Errno 28] No space left on device`.

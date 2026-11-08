@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.112.0)
+# AVRONE MASTER PROMPT (v0.113.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,849 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,856 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 286 test files, offline by default
+├── tests/                  # 287 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,23 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.113: Round 120: an agent's memory follows its agent id. 5,856 tests + 19 integration
+
+- **Bug:** memory was stored under `memstore.agent_namespace(name)`. The name is the role with every non-alphanumeric dropped and cut to 16 characters. The agent's home dir and agent packs used `agentfs.sanitize_agent_id(role)` instead. This caused three failures:
+  - For "Code Reviewer", memory went to `codereviewer` while the home was `code-reviewer`, so `export_pack` shipped an empty memory.
+  - `import_pack` merged memory into a namespace the agent never reads.
+  - "Research Analyst Lead" and "Research Analyst Lackey" both mapped to `researchanalystl` and shared memory across runs.
+- **Fix:** `_claim_identity` derives the namespace from the claimed agent id and pins it on `ctx.memory_namespace`.
+  - Simple roles ("Builder") keep the same namespace as before.
+  - Concurrent same-id agents still get `-2`, `-3` and so on, on both the id and the namespace.
+- **Carry-over:** on an agent's first run, `_carry_legacy_memory` copies memory saved under the old name-derived namespace into the id namespace.
+  - It runs off the event loop, once per namespace per core.
+  - Newest wins, and the old namespace is never deleted. It is never fatal.
+- **Probed clean:**
+  - `fullfs.py`: with `RLIMIT_FSIZE=1` (every growing write fails, like a full disk) across all mutating tools and runs, no existing state file was truncated and no temp files were left behind.
+  - `qfuzz.py`: hostile query and path values on all 31 GET routes produced no 500s.
+- **Tests:** `tests/test_round120_agent_memory_identity.py` has 7 tests; 6 fail on v0.112.
+
 ## v0.112: Round 119: a full disk under the CodeX logs no longer kills runs. 5,849 tests + 19 integration
 
 - **Bug:** `Codex._append` let `OSError(ENOSPC)` escape `emit()`. Once the log disk filled, every chat, squad and deep run on the node died with a raw `[Errno 28] No space left on device`.
@@ -344,18 +361,6 @@ landed and the suite is green. End with what is still open.
 - **Also probed:** a numeric-argument sweep (`/workspace/work/numfuzz.py`, 1,455 calls) tried every tool key with 0, -1, ±inf, NaN, 1e308, 2**63, "1e999", bool and strings. No raw errors, no oversized outputs and no escapes. The only hangs were `tcp_ping` to an unroutable host, which is 4 probes × 5 s by design.
 - **Tests:** `tests/test_round118_network_off.py` has 13 tests; 12 fail on v0.110.
 
-## v0.110: Round 117: memory last-writer-wins survives clock steps and same-tick saves. 5,828 tests + 19 integration
-
-- **Bug 1, clock steps back:** after the clock stepped back (NTP fix, VM resume), `MemoryStore.save` gave the new record a ts older than the value it replaced.
-  - Locally it still won, because of file order.
-  - On every fleet peer, `merge()` saw an older ts and skipped it. The update never replicated until the wall clock caught up, which could take hours.
-  - Probe: `/workspace/work/memstep.py`. After a 10 min step back, the peer kept `v1`.
-- **Fix 1:** `memstore._next_ts` makes a save's ts at least the replaced record's ts + `LWW_STEP_S` (1 ms). The base is capped at `now + MAX_FUTURE_SKEW_S`, so a hand-edited far-future record cannot drag saves forward.
-- **Bug 2, same-tick saves:** two nodes saving one key with equal ts (coarse clocks) each skipped the other's value on merge (`>=`), so they diverged for good.
-- **Fix 2:** ties now break on the value. Every node converges on the same winner whatever the merge order. An identical value is still skipped.
-- **Checked clean:** bridge relay is cursored by post id, not ts, so the clock step does not affect it.
-- **Tests:** `tests/test_round117_memory_lww.py` has 5 tests; 3 fail on v0.109.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -367,4 +372,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.112.0 checked out: 5,849 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.113.0 checked out: 5,856 passed, 99% coverage. Next: round <N+1> on <angle>."

@@ -618,7 +618,11 @@ class TrinityCore:
         keeps its persistence across runs); later concurrent ones get a -2, -3... suffix on both.
         An agent that has finished frees its id: a sequential re-spawn is the same agent."""
         base = agentfs.sanitize_agent_id(agent_id)
-        ns_base = memstore.agent_namespace(name)
+        # Round 120: memory follows the agent id, the same identity as its home dir and agent packs.
+        # The name-derived namespace dropped punctuation and cut at 16 letters ("Code Reviewer" ->
+        # "codereviewer" vs dir "code-reviewer"), so packs shipped no memory and long roles that
+        # share a prefix shared memory. Simple roles ("Builder") map to the same namespace as before.
+        ns_base = base if memstore.is_local(base) else memstore.agent_namespace(name)
         live = [a for a in self.active.values()
                 if a.get("run_id") == run_id and a.get("status") == "working"]
         ids = {a.get("agent_id") for a in live}
@@ -630,7 +634,34 @@ class TrinityCore:
             sfx = f"-{k}"
             aid = base[:agentfs.MAX_ID_LEN - len(sfx)].rstrip("-_") + sfx
             ns = ns_base[:63 - len(sfx)].rstrip("-_") + sfx
-        return aid, (ns if k > 1 else None)
+        legacy = memstore.agent_namespace(name)
+        return aid, (ns if k > 1 or ns != legacy else None)
+
+    async def _carry_legacy_memory(self, ctx: AgentContext) -> None:
+        """Copy memory saved under the pre-round-120 name-derived namespace into the agent's id
+        namespace, once per namespace per core. Newest-wins merge: never overwrites a newer value,
+        never deletes the old namespace. Never fatal."""
+        ns, legacy = ctx.memory_namespace, memstore.agent_namespace(ctx.name)
+        data_dir = getattr(self.settings, "data_dir", None)
+        if not ns or ns == legacy or legacy == "agent" or data_dir is None:
+            return
+        done = self.__dict__.setdefault("_legacy_mem_done", set())
+        if ns in done or len(done) > 10000:
+            return
+        done.add(ns)
+
+        def carry() -> None:
+            path = Path(data_dir) / "memory.jsonl"
+            if not path.is_file():
+                return
+            store = memstore.MemoryStore(path)
+            old = list(store.load(legacy).values())
+            if old:
+                store.merge(ns, old, source="legacy-namespace")
+        try:
+            await asyncio.to_thread(carry)
+        except Exception as e:  # noqa: BLE001
+            self.codex.emit(ctx.run_id, "error", ctx.name, message=f"legacy memory carry-over failed: {type(e).__name__}")
 
     def _attach_agent_dir(self, ctx: AgentContext, agent_id: Any) -> None:
         """Give the agent its own persistent dir. Never fatal: on failure the agent runs as before."""
@@ -695,6 +726,7 @@ class TrinityCore:
         result = ""
         timeout = float(getattr(self.settings, "agent_timeout", 0) or 0)
         try:
+            await self._carry_legacy_memory(ctx)
             loop = self._agent_loop(run_id, name, ctx, messages)
             result = await (asyncio.wait_for(loop, timeout) if timeout > 0 else loop)
         except LLMError as e:

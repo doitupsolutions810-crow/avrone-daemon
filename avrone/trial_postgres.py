@@ -14,7 +14,7 @@ from .evidence_pool import pool_trials
 from .trial_contract import validate_trial_record, trial_record_outcome, trial_record_poolable
 from .trial_receiver import (
     MAX_BATCH_EVENTS, MAX_EVENT_BYTES, TrialStoreConfigError, TrialStoreUnavailable,
-    _validate_bridge, _validate_provenance, canonical_json,
+    _validate_bridge, _validate_provenance, canonical_json, verify_trial_receipt,
 )
 
 
@@ -173,7 +173,16 @@ class PostgresTrialStore:
                 if row is None:
                     raise TrialStoreUnavailable("trial identity winner disappeared after conflict")
                 accepted_digest = str(row[0])
-                receipt = json.loads(bytes(row[1]).decode("utf-8"))
+                try:
+                    receipt = json.loads(bytes(row[1]).decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                    raise TrialStoreUnavailable("stored trial receipt failed integrity verification") from None
+                if (
+                    not verify_trial_receipt(self.receipt_secret, receipt)
+                    or receipt.get("trial_id") != trial_id
+                    or receipt.get("record_digest") != accepted_digest
+                ):
+                    raise TrialStoreUnavailable("stored trial receipt failed integrity verification")
                 if hmac.compare_digest(accepted_digest, digest):
                     status = "duplicate" if poolable else "operational_outcome_duplicate"
                     duplicate = True
@@ -264,13 +273,26 @@ class PostgresTrialStore:
     def get_record(self, trial_id: str) -> dict[str, Any] | None:
         with self._session() as (_, cur):
             cur.execute(
-                "SELECT record_json, receipt_json FROM trial_records WHERE trial_id=%s",
+                "SELECT record_digest, record_json, receipt_json FROM trial_records WHERE trial_id=%s",
                 (trial_id,),
             )
             row = cur.fetchone()
         if row is None:
             return None
-        return {
-            "record": json.loads(bytes(row[0]).decode("utf-8")),
-            "receipt": json.loads(bytes(row[1]).decode("utf-8")),
-        }
+        try:
+            record = json.loads(bytes(row[1]).decode("utf-8"))
+            receipt = json.loads(bytes(row[2]).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            raise TrialStoreUnavailable("stored trial record failed integrity verification") from None
+        digest = hashlib.sha256(canonical_json(record)).hexdigest() if isinstance(record, dict) else ""
+        if (
+            not isinstance(record, dict)
+            or not hmac.compare_digest(str(row[0]), digest)
+            or record.get("trial_id") != trial_id
+            or not verify_trial_receipt(self.receipt_secret, receipt)
+            or receipt.get("trial_id") != trial_id
+            or receipt.get("record_digest") != digest
+            or receipt.get("outcome") != trial_record_outcome(record)
+        ):
+            raise TrialStoreUnavailable("stored trial record failed integrity verification")
+        return {"record": record, "receipt": receipt}

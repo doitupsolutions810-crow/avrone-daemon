@@ -152,6 +152,17 @@ def test_fleet_api_requires_valid_signature_and_explicit_sender_allowlist(tmp_pa
     asyncio.run(go())
 
 
+def test_fleet_api_rejects_record_node_not_bound_to_signed_sender(tmp_path, monkeypatch):
+    async def go():
+        async with _client(tmp_path, monkeypatch) as client:
+            payload = _payload(record(node="node-b"), sender="node-a")
+            body, headers = _signed_headers(payload, nonce="api_nonce_00000010")
+            response = await client.post(PATH, content=body, headers=headers)
+            assert response.status_code == 422
+            assert "does not match trial node" in response.json()["detail"]
+    asyncio.run(go())
+
+
 def test_empty_allowlist_is_not_allow_all_for_trial_ingest(tmp_path, monkeypatch):
     async def go():
         async with _client(tmp_path, monkeypatch, allow="") as client:

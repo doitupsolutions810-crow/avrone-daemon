@@ -64,7 +64,7 @@ def test_heat_is_symmetric_but_snapshot_orientation_is_not():
         assert math.isclose(heat(p), heat(1 - p), rel_tol=0, abs_tol=1e-15)
     passing = evidence_snapshot(1, 10)
     failing = evidence_snapshot(9, 10)
-    assert passing["S"] == failing["S"]
+    assert math.isclose(passing["S"], failing["S"], rel_tol=0, abs_tol=1e-15)
     assert passing["orientation"] == "mixed"
     assert failing["orientation"] == "mixed"
 

@@ -73,10 +73,21 @@ class PostgresTrialStore:
             raise TrialStoreUnavailable("shared trial storage unavailable") from exc
 
     def _initialize(self) -> None:
+        # Inspect the schema version before creating or changing any data tables.
+        # A newer/unknown schema must be a read-only rejection, not a partial migration.
+        with self._session() as (_, cur):
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS avrone_trial_schema (
+                    version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL
+                )"""
+            )
+            cur.execute("SELECT MAX(version) FROM avrone_trial_schema")
+            existing = cur.fetchone()
+            existing_version = existing[0] if existing else None
+            if existing_version is not None and existing_version != self.SCHEMA_VERSION:
+                raise TrialStoreConfigError("unsupported PostgreSQL trial-store schema version")
+
         statements = (
-            """CREATE TABLE IF NOT EXISTS avrone_trial_schema (
-                version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL
-            )""",
             """CREATE TABLE IF NOT EXISTS trial_records (
                 trial_id TEXT PRIMARY KEY, record_digest TEXT NOT NULL, record_json BYTEA NOT NULL,
                 outcome TEXT NOT NULL, poolable SMALLINT NOT NULL CHECK (poolable IN (0, 1)),
@@ -109,10 +120,6 @@ class PostgresTrialStore:
                    VALUES (%s, %s) ON CONFLICT (version) DO NOTHING""",
                 (self.SCHEMA_VERSION, int(time.time())),
             )
-            cur.execute("SELECT MAX(version) FROM avrone_trial_schema")
-            row = cur.fetchone()
-            if not row or row[0] != self.SCHEMA_VERSION:
-                raise TrialStoreConfigError("unsupported PostgreSQL trial-store schema version")
 
     def _receipt(self, trial_id: str, digest: str, outcome: str, accepted_at: int) -> dict[str, Any]:
         unsigned = {

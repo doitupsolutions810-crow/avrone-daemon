@@ -458,7 +458,10 @@ def test_postgres_partial_batch_failure_recovers_cleanly_on_full_replay():
     assert _store().get_record(second_record["trial_id"])["record"] == second_record
 
 
-@pytest.mark.parametrize("corruption", ["receipt_signature", "record_payload"])
+@pytest.mark.parametrize(
+    "corruption",
+    ["receipt_signature", "receipt_json", "record_payload", "record_digest"],
+)
 def test_postgres_persisted_corruption_fails_closed(corruption):
     import psycopg
     from avrone.trial_receiver import TrialStoreUnavailable
@@ -474,6 +477,16 @@ def test_postgres_persisted_corruption_fails_closed(corruption):
                 cur.execute(
                     "UPDATE trial_records SET receipt_json=%s WHERE trial_id=%s",
                     (canonical_json({**accepted["receipt"], "signature": "0" * 64}), record["trial_id"]),
+                )
+            elif corruption == "receipt_json":
+                cur.execute(
+                    "UPDATE trial_records SET receipt_json=%s WHERE trial_id=%s",
+                    (b"{malformed-json", record["trial_id"]),
+                )
+            elif corruption == "record_digest":
+                cur.execute(
+                    "UPDATE trial_records SET record_digest=%s WHERE trial_id=%s",
+                    ("0" * 64, record["trial_id"]),
                 )
             else:
                 cur.execute(
@@ -534,3 +547,20 @@ def test_postgres_future_schema_version_is_rejected_without_mutating_it():
         with psycopg.connect(DSN) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))
+
+
+def test_postgres_pool_snapshot_refuses_corrupted_persisted_evidence():
+    import psycopg
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    record = _record()
+    store = _store()
+    store.accept(record, _provenance("pool_integrity_original"))
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE trial_records SET record_json=%s WHERE trial_id=%s",
+                (canonical_json({**record, "failed": not record["failed"]}), record["trial_id"]),
+            )
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        store.pool_snapshot()

@@ -166,7 +166,7 @@ class PostgresTrialStore:
                 accepted = True
             else:
                 cur.execute(
-                    "SELECT record_digest, receipt_json FROM trial_records WHERE trial_id=%s FOR UPDATE",
+                    "SELECT record_digest, record_json, receipt_json FROM trial_records WHERE trial_id=%s FOR UPDATE",
                     (trial_id,),
                 )
                 row = cur.fetchone()
@@ -174,15 +174,24 @@ class PostgresTrialStore:
                     raise TrialStoreUnavailable("trial identity winner disappeared after conflict")
                 accepted_digest = str(row[0])
                 try:
-                    receipt = json.loads(bytes(row[1]).decode("utf-8"))
+                    stored_record = json.loads(bytes(row[1]).decode("utf-8"))
+                    receipt = json.loads(bytes(row[2]).decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-                    raise TrialStoreUnavailable("stored trial receipt failed integrity verification") from None
+                    raise TrialStoreUnavailable("stored trial record failed integrity verification") from None
+                stored_digest = (
+                    hashlib.sha256(canonical_json(stored_record)).hexdigest()
+                    if isinstance(stored_record, dict) else ""
+                )
                 if (
-                    not verify_trial_receipt(self.receipt_secret, receipt)
+                    not isinstance(stored_record, dict)
+                    or not hmac.compare_digest(accepted_digest, stored_digest)
+                    or stored_record.get("trial_id") != trial_id
+                    or not verify_trial_receipt(self.receipt_secret, receipt)
                     or receipt.get("trial_id") != trial_id
                     or receipt.get("record_digest") != accepted_digest
+                    or receipt.get("outcome") != trial_record_outcome(stored_record)
                 ):
-                    raise TrialStoreUnavailable("stored trial receipt failed integrity verification")
+                    raise TrialStoreUnavailable("stored trial record failed integrity verification")
                 if hmac.compare_digest(accepted_digest, digest):
                     status = "duplicate" if poolable else "operational_outcome_duplicate"
                     duplicate = True

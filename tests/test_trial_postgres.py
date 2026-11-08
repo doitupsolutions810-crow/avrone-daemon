@@ -456,3 +456,46 @@ def test_postgres_partial_batch_failure_recovers_cleanly_on_full_replay():
     assert all(verify_trial_receipt(SECRET, item["receipt"]) for item in replay)
     assert _store().get_record(first_record["trial_id"])["record"] == first_record
     assert _store().get_record(second_record["trial_id"])["record"] == second_record
+
+
+@pytest.mark.parametrize("corruption", ["receipt_signature", "record_payload"])
+def test_postgres_persisted_corruption_fails_closed(corruption):
+    import psycopg
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    record = _record()
+    store = _store()
+    accepted = store.accept(record, _provenance("persisted_corruption_nonce"))
+    assert accepted["status"] == "accepted"
+
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            if corruption == "receipt_signature":
+                cur.execute(
+                    "UPDATE trial_records SET receipt_json=%s WHERE trial_id=%s",
+                    (canonical_json({**accepted["receipt"], "signature": "0" * 64}), record["trial_id"]),
+                )
+            else:
+                cur.execute(
+                    "UPDATE trial_records SET record_json=%s WHERE trial_id=%s",
+                    (canonical_json({**record, "failed": not record["failed"]}), record["trial_id"]),
+                )
+
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        store.get_record(record["trial_id"])
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        store.accept(record, _provenance("persisted_corruption_retry"))
+
+
+def test_postgres_wrong_receipt_signing_key_cannot_replay_or_read_existing_record():
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    record = _record()
+    accepted = _store().accept(record, _provenance("wrong_key_original_nonce"))
+    assert accepted["status"] == "accepted"
+    wrong_key_store = PostgresTrialStore(DSN, "different-test-signing-secret-" + "x" * 32)
+
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        wrong_key_store.accept(record, _provenance("wrong_key_retry_nonce"))
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        wrong_key_store.get_record(record["trial_id"])

@@ -73,6 +73,14 @@ def _worker_crash_uncommitted(args: tuple[str, dict]) -> None:
         os._exit(73)  # simulate process loss before transaction commit
 
 
+def _worker_commit_then_lose_reply(args: tuple[str, dict, str]) -> None:
+    dsn, record, nonce = args
+    result = PostgresTrialStore(dsn, SECRET).accept(record, _provenance(nonce))
+    if result["status"] not in {"accepted", "duplicate"}:
+        os._exit(75)
+    os._exit(74)  # transaction committed; simulate loss before the HTTP response is sent
+
+
 def _store() -> PostgresTrialStore:
     return PostgresTrialStore(DSN, SECRET)
 
@@ -134,6 +142,33 @@ def test_postgres_crash_before_commit_leaves_no_partial_identity():
         pytest.fail("crash simulation worker did not exit within 20 seconds")
     assert process.exitcode == 73
     assert _store().get_record(record["trial_id"]) is None
+
+
+def test_postgres_commit_then_lost_response_retries_as_same_duplicate():
+    record = _record()
+    process = Process(
+        target=_worker_commit_then_lose_reply,
+        args=((DSN, record, "commit_lost_reply_nonce"),),
+        daemon=True,
+    )
+    process.start()
+    process.join(timeout=20)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+        pytest.fail("commit-loss simulation worker did not exit within 20 seconds")
+    assert process.exitcode == 74
+
+    # The process committed but never sent its receipt. A sender retry must be
+    # able to recover the durable winner rather than creating a second accept.
+    retry = _store().accept(record, _provenance("commit_retry_nonce_0001"))
+    assert retry["status"] == "duplicate"
+    assert retry["accepted"] is True
+    assert retry["duplicate"] is True
+    assert verify_trial_receipt(SECRET, retry["receipt"])
+    saved = _store().get_record(record["trial_id"])
+    assert saved is not None
+    assert saved["receipt"]["receipt_id"] == retry["receipt"]["receipt_id"]
 
 
 def test_postgres_batch_retry_and_nonpass_exclusion():

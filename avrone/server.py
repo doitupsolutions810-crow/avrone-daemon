@@ -46,7 +46,26 @@ async def lifespan(app: FastAPI):
         await run_cleanups(cleanups)
 
 
-app = FastAPI(title="AVRONE", version=__version__, lifespan=lifespan)
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+
+class SafeJSONResponse(_JSONResponse):
+    """JSONResponse that can always be encoded. Round 123: a lone surrogate in a request
+    (``{"message": "\\ud800"}`` is valid JSON) reached the run's task text, and rendering it as
+    UTF-8 raised UnicodeEncodeError: POST /api/chat answered 500, and so did every GET
+    /api/status and /api/runs afterwards (the text stays in the live agent table and run list)
+    until restart. Such text is now sent as a JSON \\u escape (ensure_ascii), still valid JSON."""
+
+    def render(self, content: Any) -> bytes:
+        try:
+            return super().render(content)
+        except UnicodeEncodeError:
+            import json as _json
+            return _json.dumps(content, ensure_ascii=True, allow_nan=False, indent=None,
+                               separators=(",", ":")).encode("ascii")
+
+
+app = FastAPI(title="AVRONE", version=__version__, lifespan=lifespan, default_response_class=SafeJSONResponse)
 
 
 from fastapi.exceptions import RequestValidationError as _RequestValidationError  # noqa: E402
@@ -632,7 +651,9 @@ async def api_map(request: Request, hours: float = 24, format: str = "json", x_a
     from .telemetry import system_map, to_mermaid
     # parses every run log like /api/telemetry (360k lines: 1.3 s with /api/status frozen): in a thread
     g = await asyncio.to_thread(system_map, core(), hours * 3600)
-    return PlainTextResponse(to_mermaid(g)) if format == "mermaid" else g
+    if format == "mermaid":  # round 123: run text with a lone surrogate must not 500 the map
+        return PlainTextResponse(to_mermaid(g).encode("utf-8", "replace"))
+    return g
 
 
 @app.get("/api/runs")
@@ -656,12 +677,11 @@ async def run_log(run_id: str, request: Request, x_admin_token: str | None = Hea
     events, got = await _asyncio.to_thread(read)
     if not events:
         raise HTTPException(404, f"no run {run_id!r}")
-    from fastapi.responses import JSONResponse
     headers = {}
     if got > limit:
         events = events[-limit:]
         headers["X-Avrone-Truncated"] = f"newest {limit} events (AVRONE_REPLAY_MAX_EVENTS)"
-    return JSONResponse(events, headers=headers)
+    return SafeJSONResponse(events, headers=headers)
 
 
 @app.get("/api/runs/{run_id}/bridge")

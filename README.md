@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.116: Round 123: a lone surrogate no longer breaks the HTTP API. 5,890 tests + 19 integration
+
+- **Bug** (probe `surfuzz.py`, lone surrogates/NUL/bidi in every tool arg and POST body): POST `/api/chat` with `{"message": "\ud800"}` (valid JSON) answered 500, because the run's task text could not be rendered as UTF-8. The text stayed in the live agent table and run list, so **every later GET `/api/status` and `/api/runs` answered 500 until restart**.
+- **Fix:** `server.SafeJSONResponse` is the app's default response class. It renders real UTF-8 as before, and only when encoding fails does it fall back to `ensure_ascii` (a valid JSON `\u` escape). The run-events route uses it too, and the Mermaid `/api/map` encodes with `replace`.
+- **Checked clean:** tools return `ERROR:` text for surrogate args, model requests already scrub content (`clean_text`), WS events and the MCP server already escape.
+- **Tests:** `tests/test_round123_surrogates.py` (7), 6 fail on v0.115.
+
 ## v0.115: Round 122: roles in non-Latin scripts get their own identity. 5,883 tests + 19 integration
 
 - **Bug:** `agentfs.sanitize_agent_id` dropped every non-ASCII character, which caused three problems:

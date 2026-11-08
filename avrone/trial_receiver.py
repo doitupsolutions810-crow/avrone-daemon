@@ -99,6 +99,14 @@ def _validate_provenance(provenance: Any, record: dict[str, Any]) -> dict[str, A
         raise ValueError("signed sender claim does not match authenticated sender")
     if provenance.get("auth_method") != AUTH_METHOD or provenance.get("auth_assurance") != AUTH_ASSURANCE:
         raise ValueError("unsupported transport authentication provenance")
+    # The receiver accepts direct-origin submissions only. A shared Fleet token
+    # authenticates group membership, not a unique node; binding the record node
+    # to the signed sender claim prevents cross-node source attribution. Relays need
+    # a separate signed-origin attestation contract.
+    if record.get("node") != sender:
+        raise ValueError(
+            "authenticated sender does not match trial node; relayed origins require signed origin attestation"
+        )
     nonce = provenance.get("request_nonce")
     timestamp = provenance.get("request_timestamp")
     body_sha = provenance.get("request_body_sha256")

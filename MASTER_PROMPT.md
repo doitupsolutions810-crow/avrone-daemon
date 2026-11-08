@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trial_adapters.py        Thin adapters over AVRONE Bridge and the existing authenticated Fleet transport.
 │   ├── trial_contract.py        Versioned, deterministic trial identity and operational-outcome contracts.
-│   ├── trial_postgres.py         Shared PostgreSQL-backed store for multi-host trial acceptance.
+│   ├── trial_postgres.py        Shared PostgreSQL-backed store for multi-host trial acceptance.
 │   ├── trial_receiver.py        Durable idempotent receiver for avrone.trial/v1 and operational outcomes.
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each

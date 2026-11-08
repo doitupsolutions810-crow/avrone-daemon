@@ -303,3 +303,29 @@ def test_postgres_unreachable_backend_fails_closed_without_sqlite_fallback():
     from avrone.trial_receiver import TrialStoreUnavailable
     with pytest.raises(TrialStoreUnavailable):
         PostgresTrialStore("postgresql://postgres:postgres@127.0.0.1:1/unavailable", SECRET)
+
+
+def test_postgres_canonical_key_order_is_idempotent_and_receipt_is_field_bound():
+    import copy
+
+    record = _record()
+    first = _store().accept(record, _provenance("canonical_order_nonce_01"), now=1794000001)
+    reordered = dict(reversed(list(record.items())))
+    second = _store().accept(reordered, _provenance("canonical_order_nonce_02"), now=1794000999)
+
+    assert first["status"] == "accepted"
+    assert second["status"] == "duplicate"
+    assert first["receipt"] == second["receipt"]
+    assert verify_trial_receipt(SECRET, second["receipt"])
+
+    tampered = copy.deepcopy(second["receipt"])
+    tampered["accepted_at"] += 1
+    assert not verify_trial_receipt(SECRET, tampered)
+
+    tampered = copy.deepcopy(second["receipt"])
+    tampered["record_digest"] = "0" * 64
+    assert not verify_trial_receipt(SECRET, tampered)
+
+    tampered = copy.deepcopy(second["receipt"])
+    tampered["signature"] = "0" * 64
+    assert not verify_trial_receipt(SECRET, tampered)

@@ -499,3 +499,38 @@ def test_postgres_wrong_receipt_signing_key_cannot_replay_or_read_existing_recor
         wrong_key_store.accept(record, _provenance("wrong_key_retry_nonce"))
     with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
         wrong_key_store.get_record(record["trial_id"])
+
+
+def test_postgres_future_schema_version_is_rejected_without_mutating_it():
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+    from avrone.trial_receiver import TrialStoreConfigError
+
+    schema = "avrone_schema_guard_" + uuid.uuid4().hex
+    isolated_dsn = make_conninfo(DSN, options=f"-csearch_path={schema}")
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+
+    try:
+        with psycopg.connect(isolated_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE TABLE avrone_trial_schema (version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL)"
+                )
+                cur.execute(
+                    "INSERT INTO avrone_trial_schema(version, applied_at) VALUES (999, 1)"
+                )
+
+        with pytest.raises(TrialStoreConfigError, match="unsupported.*schema version"):
+            PostgresTrialStore(isolated_dsn, SECRET)
+
+        with psycopg.connect(isolated_dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT version FROM avrone_trial_schema ORDER BY version")
+                assert cur.fetchall() == [(999,)]
+    finally:
+        with psycopg.connect(DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema)))

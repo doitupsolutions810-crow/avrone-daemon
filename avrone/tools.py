@@ -436,7 +436,14 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
     import stat as _stat
     import tempfile as _tempfile
     try:
-        mode = _stat.S_IMODE(p.stat().st_mode)
+        # round 109: lstat, and drop setuid/setgid. p.stat() followed a symlink swapped in after
+        # the path was resolved and copied a host file's mode (e.g. a setuid binary's 04755) onto
+        # agent-written content; and a rewrite kept S_ISUID/S_ISGID, which the kernel itself drops
+        # when a file's content is changed by write()
+        st = p.lstat()
+        if _stat.S_ISLNK(st.st_mode):
+            raise OSError("symlink: use the default mode")
+        mode = _stat.S_IMODE(st.st_mode) & ~(_stat.S_ISUID | _stat.S_ISGID)
     except OSError:
         um = _os.umask(0)
         _os.umask(um)

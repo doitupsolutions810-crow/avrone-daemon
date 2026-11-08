@@ -189,6 +189,13 @@ async def t_web_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 # --------------------------------------------------------------------------- python
 
+def _write_snippet(f: Path, code: str) -> None:
+    """Create the snippet file fresh: O_EXCL|O_NOFOLLOW, so a planted name is never followed."""
+    fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o666)  # umask applies, as write_text did
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(code)
+
+
 async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not _setting(ctx, "agents_can_shell", True):
         return "ERROR: code execution is disabled for agents (AVRONE_AGENTS_CAN_SHELL=false)."
@@ -204,16 +211,21 @@ async def t_python(ctx: "AgentContext", args: dict[str, Any]) -> str:
         # run with cwd = own agent dir; the snippet lives there too so it is reachable from
         # the local runner, `docker exec -w /workspace/agents/<id>` and the isolated /agent mount
         f = root / f".snippet_{uuid.uuid4().hex[:10]}.py"
-        f.write_text(code, encoding="utf-8")
+        _write_snippet(f, code)
         try:
             res = await runner.run(f"python3 {shlex.quote(f.name)}", cwd=root)
         finally:
             f.unlink(missing_ok=True)
         return res.text()
-    tmp = _ws(ctx) / ".avrone" / "tmp"
+    ws = _ws(ctx)
+    tmp = ws / ".avrone" / "tmp"
     tmp.mkdir(parents=True, exist_ok=True)
+    # round 109: a symlinked .avrone or .avrone/tmp (an agent can plant one with its shell) put the
+    # snippet outside the workspace and ran it from there
+    if any(d.is_symlink() for d in (ws / ".avrone", tmp)) or tmp.resolve() != tmp:
+        return "ERROR: refusing to run: .avrone/tmp in the workspace is a symlink; remove it"
     f = tmp / f"snippet_{uuid.uuid4().hex[:10]}.py"
-    f.write_text(code, encoding="utf-8")
+    _write_snippet(f, code)
     try:
         res = await ctx.core.runner.run(f"python3 {shlex.quote(_rel(ctx, f))}")
     finally:

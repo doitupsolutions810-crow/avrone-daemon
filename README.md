@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.102: Round 109: rewrites drop setuid/setgid and never copy a symlink target's mode; the python tool refuses a symlinked .avrone/tmp. 5,775 tests + 19 integration
+
+- **Bug: `atomic_write_bytes`** (used by `write_file`, `artifact_save` and the agent-dir writes) has two problems:
+  - It took the new file's mode from `p.stat()`, which follows symlinks. A link swapped in after the path was resolved copied a host file's mode onto agent-written content, for example a setuid binary's `04755`.
+  - A plain rewrite of a setuid or setgid file kept `S_ISUID`/`S_ISGID` on new content. The kernel drops both when `write()` changes a file's content.
+- **Fix:** it now uses `lstat`, a symlink gets the default mode, and `S_ISUID`/`S_ISGID` are masked off. Exec bits and other permission bits are still kept, and the link itself is still replaced rather than written through.
+- **Bug: `run_python`** (`t_python`) wrote its snippet into `<workspace>/.avrone/tmp` after `mkdir(exist_ok=True)`. If an agent planted a symlink at `.avrone` or `.avrone/tmp` with its shell, the snippet was written and run outside the workspace.
+- **Fix:** it now refuses with `ERROR: refusing to run: .avrone/tmp in the workspace is a symlink`. Both snippet paths (agent dir and workspace tmp) are created with `O_CREAT|O_EXCL|O_NOFOLLOW`, mode `0666 & ~umask` as before.
+- **Tests:** `tests/test_round109_write_modes.py` has 6 tests; 4 fail on v0.101. The plain-mode and normal-run guards pass on both.
+
 ## v0.101: Round 108: governor cgroup, meminfo and thermal reads never block on a FIFO. 5,769 tests + 19 integration
 
 - **Bug (defense in depth):** `governor._read_text` used plain `open()`, and `read_temp_c` used `open(p).read()`, which is unbounded. A FIFO at a cgroup root (passed with `root=`), a meminfo path or a thermal glob match blocked the governor sample forever. The defaults are sysfs and procfs paths, so this only bites with unusual mounts or injected paths.

@@ -202,7 +202,17 @@ def export_pack(workspace: Path, data_dir: Path, agent_id: str, origin: str, hom
     entries = []
     for rel, p, st in files:
         try:
-            data = p.read_bytes()
+            # round 107: read_bytes() followed a symlink swapped in after _walk's lstat (packing a
+            # host file into the export) and blocked forever on a swapped-in FIFO
+            from .safeio import FileTooBig, read_capped
+            try:
+                data = read_capped(p, st.st_size)
+            except FileTooBig:
+                raise PackError(f"{rel} changed while packing; retry when the agent is idle") from None
+            if data is None:
+                if not os.path.lexists(p):
+                    raise FileNotFoundError(str(p))
+                raise PackError(f"{rel} changed while packing; retry when the agent is idle")
         except FileNotFoundError:
             raise PackError(f"{rel} vanished while packing; retry when the agent is idle") from None
         except OSError as e:  # unreadable file: name it instead of failing the whole migrate with a 500

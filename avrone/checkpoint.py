@@ -148,8 +148,20 @@ class _Store:
             if st.st_size > max_bytes():
                 self.set_aside = _set_aside(self.path, "toobig")
                 return
+            from .safeio import FileTooBig, read_capped
             try:
-                raw = json.loads(self.path.read_bytes().decode("utf-8"))
+                # round 106/107: stat() then read_bytes() followed a symlink and blocked forever
+                # on a FIFO swapped in between; read_capped is O_NOFOLLOW|O_NONBLOCK, regular only
+                data = read_capped(self.path, max_bytes())
+            except FileTooBig:  # grew past the cap after the stat
+                self.set_aside = _set_aside(self.path, "toobig")
+                return
+            except OSError:
+                return
+            if data is None:
+                return
+            try:
+                raw = json.loads(data.decode("utf-8"))
             except OSError:
                 return
             except (ValueError, RecursionError):
@@ -199,7 +211,11 @@ class _Store:
             import stat as _stat
             if not _stat.S_ISREG(st.st_mode) or st.st_size > max_bytes() or st.st_size == 0:
                 return
-            raw = json.loads(self.path.read_bytes().decode("utf-8"))
+            from .safeio import read_capped  # round 107: runs under the save lock; never a FIFO
+            data = read_capped(self.path, max_bytes())
+            if data is None:
+                return
+            raw = json.loads(data.decode("utf-8"))
         except (OSError, ValueError, RecursionError):
             return
         if not (isinstance(raw, dict) and isinstance(raw.get("steps"), dict) and raw.get("version") == VERSION):
@@ -420,9 +436,11 @@ def managed_path(data_dir: str | Path, key: str) -> Path:
 def _read(path: Path) -> dict[str, Any] | None:
     try:
         p = Path(path)
-        if p.is_symlink() or not p.is_file() or p.stat().st_size > max_bytes():
+        from .safeio import read_capped  # round 107: no is_file()/read_bytes() swap window
+        data = read_capped(p, max_bytes())
+        if data is None:
             return None
-        raw = json.loads(p.read_bytes().decode("utf-8"))
+        raw = json.loads(data.decode("utf-8"))
     except (OSError, ValueError, RecursionError):
         return None
     return raw if isinstance(raw, dict) and isinstance(raw.get("steps"), dict) else None

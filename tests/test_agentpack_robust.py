@@ -219,13 +219,15 @@ def test_file_vanishing_during_walk_is_skipped(tmp_path, monkeypatch):
 def test_file_vanishing_before_read_names_it(tmp_path, monkeypatch):
     d = home(tmp_path / "ws")
     (d / "log.txt").write_text("x")
-    real = Path.read_bytes
+    from avrone import safeio
+    real = safeio.read_capped  # round 107: agentpack reads through read_capped
 
-    def rb(self):
+    def rb(self, *a, **k):
+        self = Path(self)
         if self.name == "log.txt":
             raise FileNotFoundError(str(self))
-        return real(self)
-    monkeypatch.setattr(Path, "read_bytes", rb)
+        return real(self, *a, **k)
+    monkeypatch.setattr(safeio, "read_capped", rb)
     with pytest.raises(PackError, match="log.txt vanished while packing"):
         agentpack.export_pack(tmp_path / "ws", tmp_path / "data", "builder", "edge")
 
@@ -233,13 +235,15 @@ def test_file_vanishing_before_read_names_it(tmp_path, monkeypatch):
 def test_unreadable_file_names_it(tmp_path, monkeypatch):
     d = home(tmp_path / "ws")
     (d / "secret").write_text("x")
-    real = Path.read_bytes
+    from avrone import safeio
+    real = safeio.read_capped  # round 107: agentpack reads through read_capped
 
-    def rb(self):
+    def rb(self, *a, **k):
+        self = Path(self)
         if self.name == "secret":
             raise PermissionError(13, "Permission denied")
-        return real(self)
-    monkeypatch.setattr(Path, "read_bytes", rb)
+        return real(self, *a, **k)
+    monkeypatch.setattr(safeio, "read_capped", rb)
     with pytest.raises(PackError, match="cannot read secret: PermissionError"):
         agentpack.export_pack(tmp_path / "ws", tmp_path / "data", "builder", "edge")
 

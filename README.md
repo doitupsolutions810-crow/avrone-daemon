@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.100: Round 107: stat-then-read swaps can no longer pack a host file or hang a thread. 5,763 tests + 19 integration
+
+- **Bug (leak): agent export.** `export_pack` lstat'ed each file in `_walk`, then called `read_bytes()`, which follows symlinks. A same-size symlink swapped in between those two calls put a host file into the bundle that migrates to another node. The length check only caught a swap to a file of a different size. A FIFO swap hung the migrate forever.
+- **Bug (hang): checkpoints.** `_Store` load, the disk merge (which runs under the save lock) and `_read` all called `stat()`/`is_file()` before `read_bytes()`. A FIFO swapped in hung the checkpoint forever, and a symlink was followed to any JSON file.
+- **Bug (hang and memory): `.env` load.** It called `is_file()`, then `read_text()`. A FIFO hung startup, and a multi-GB file was read whole.
+- **Bug (hang): single-file root in searchproc.** A `stat()` before `read_bytes()` left the same window.
+- **Fix:**
+  - `agentpack` and `checkpoint` now read through `safeio.read_capped` (`O_NOFOLLOW|O_NONBLOCK`, regular files only, size capped). A swapped file gives the error "changed while packing". A vanished file still gives "vanished".
+  - `.env` loading and the searchproc root use `open_read(follow=True)`. Symlinked `.env` files still work. `DOTENV_MAX_BYTES` is 4 MB, and a larger file is ignored.
+- **Tests:** `tests/test_round107_read_swaps.py` has 11 tests. 7 fail or hang on v0.99. The other 4 guard symlinked `.env` files, normal search, `_read` on a FIFO and a different-size swap. Two existing agentpack tests now patch `safeio.read_capped`.
+
 ## v0.99: Round 106: check-then-open races no longer park a thread on a swapped-in FIFO. 5,752 tests + 19 integration
 
 - **Bug:** five sites checked a path and then called plain `open()`. A FIFO swapped in during that gap blocked the thread forever.

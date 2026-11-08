@@ -40,11 +40,21 @@ def parse_dotenv_line(line: str) -> tuple[str, str] | None:
     return key, _unquote(value)
 
 
+DOTENV_MAX_BYTES = 4 * 1024 * 1024
+
+
 def _load_dotenv(path: Path) -> None:
+    from .safeio import open_read
     try:
         if not path.is_file():
             return
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # round 107: is_file() then read_text() blocked startup on a FIFO swapped in between and
+        # read a multi-GB file whole; a symlinked .env is still followed
+        with open_read(path, follow=True) as f:
+            raw = f.read(DOTENV_MAX_BYTES + 1)
+        if len(raw) > DOTENV_MAX_BYTES:
+            return
+        text = raw.decode("utf-8", errors="replace")
     except OSError:
         return
     for line in text.splitlines():

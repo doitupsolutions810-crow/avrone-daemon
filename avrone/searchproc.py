@@ -47,7 +47,14 @@ def run(req: dict, out) -> None:
             st = f.lstat() if f != root else f.stat()
             if not stat.S_ISREG(st.st_mode) or st.st_size > max_bytes:
                 continue
-            data = read_capped(f, max_bytes) if f != root else f.read_bytes()
+            if f != root:
+                data = read_capped(f, max_bytes)
+            else:  # round 107: a FIFO swapped in for the root file after stat() no longer blocks
+                from .safeio import open_read
+                with open_read(f, follow=True) as fh:
+                    data = fh.read(max_bytes + 1)
+                if len(data) > max_bytes:
+                    continue
         except OSError:
             continue
         if data is None:

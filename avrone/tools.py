@@ -227,6 +227,25 @@ def clip_tool_name(name: Any) -> str:
     return s if len(s) <= UNKNOWN_NAME_MAX else f"{s[:UNKNOWN_NAME_MAX]}...(+{len(s) - UNKNOWN_NAME_MAX} chars)"
 
 
+# Round 118: tools that reach the network on their own (sockets, DNS, httpx) without checking
+# allow_network. With AVRONE_ALLOW_NETWORK=0 they still resolved names, opened TCP connections
+# (tcp_ping, port_scan) and made HTTPS calls (rdap_whois, crt.sh, DoH); the registry now refuses
+# them before they run. Tools that already gate themselves (fetch, http_request, web_search, ...)
+# keep their own message.
+NETWORK_TOOLS = frozenset({
+    "dns_lookup", "tcp_ping", "traceroute", "rdap_whois", "ip_geo",          # netdiag
+    "tls_inspect", "http_fingerprint", "port_scan", "cert_transparency", "dns_enum",  # recon
+    "osint_domain",                                                          # osint
+})
+
+
+def _network_off(ctx: Any) -> bool:
+    try:
+        return not bool(getattr(ctx.core.settings, "allow_network", True))
+    except AttributeError:
+        return False
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
@@ -298,6 +317,8 @@ class ToolRegistry:
         if not isinstance(args, dict):
             return (f"ARG ERROR ({name}): args must be a JSON object, got {type(args).__name__}; "
                     f"expected {tool.args_doc}. The tool did not run.")
+        if name in NETWORK_TOOLS and tool.source == "builtin" and _network_off(ctx):
+            return f"ERROR: network access is disabled (AVRONE_ALLOW_NETWORK=0); {name} did not run."
         from . import capgate  # opt-in capability gate (AVRONE_CAPGATE); a no-op when off
         if capgate.mode() == "off":
             try:

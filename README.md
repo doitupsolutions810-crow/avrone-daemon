@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.111: Round 118: AVRONE_ALLOW_NETWORK=0 now stops every builtin network tool. 5,841 tests + 19 integration
+
+- **Bug:** with network turned off, 11 builtin tools still reached the network:
+  - netdiag: `dns_lookup`, `tcp_ping`, `traceroute`, `rdap_whois`, `ip_geo`
+  - recon: `tls_inspect`, `http_fingerprint`, `port_scan`, `cert_transparency`, `dns_enum`
+  - `osint_domain`
+
+  None of them checked `allow_network`. Only `fetch`, `http_request`, `web_search` and a few others did. The probe (`/workspace/work/netoff.py`) patches `socket.connect`, `getaddrinfo` and `create_subprocess_exec`. It saw DNS resolution, TCP connects (tcp_ping, port_scan) and HTTPS calls (RDAP, crt.sh, DoH) from a node set to `AVRONE_ALLOW_NETWORK=0`.
+- **Fix:** `tools.NETWORK_TOOLS` lists these tools. `ToolRegistry.call` refuses a builtin in that set before it runs, with the message `ERROR: network access is disabled (AVRONE_ALLOW_NETWORK=0)`.
+  - Every entry point goes through `call`: agents, MCP, fleet and admin.
+  - Tools that gate themselves keep their own message.
+- **Also probed:** a numeric-argument sweep (`/workspace/work/numfuzz.py`, 1,455 calls) tried every tool key with 0, -1, ±inf, NaN, 1e308, 2**63, "1e999", bool and strings. No raw errors, no oversized outputs and no escapes. The only hangs were `tcp_ping` to an unroutable host, which is 4 probes × 5 s by design.
+- **Tests:** `tests/test_round118_network_off.py` has 13 tests; 12 fail on v0.110.
+
 ## v0.110: Round 117: memory last-writer-wins survives clock steps and same-tick saves. 5,828 tests + 19 integration
 
 - **Bug 1, clock steps back:** after the clock stepped back (NTP fix, VM resume), `MemoryStore.save` gave the new record a ts older than the value it replaced.

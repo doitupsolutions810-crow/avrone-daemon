@@ -152,7 +152,10 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
                         if st1 is None or st1.st_ino != st0.st_ino or st1.st_size < len(data):
                             raise _Moved()  # rotated, replaced or truncated meanwhile: leave it
                         if st1.st_size > len(data):
-                            with open(p, "rb") as src:
+                            from .safeio import open_read  # round 106: never a swapped-in FIFO
+                            with open_read(p) as src:
+                                if os.fstat(src.fileno()).st_ino != st1.st_ino:
+                                    raise _Moved()
                                 src.seek(len(data))
                                 tail = src.read(st1.st_size - len(data))
                             f.write(_redact_text(tail.decode("utf-8", errors="replace")))

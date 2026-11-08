@@ -66,7 +66,12 @@ def _read_answer_file(path: str) -> str:
     p = Path(path)
     if not p.is_file():
         raise ValueError(f"--first-answer-file {path!r} is not a regular file")
-    with p.open("rb") as f:
+    from .safeio import NotRegularFile, open_read
+    try:  # round 106: is_file() then open() let a FIFO swapped in between block the CLI
+        f = open_read(p, follow=True)
+    except NotRegularFile as e:
+        raise ValueError(f"--first-answer-file {path!r} is not a regular file") from e
+    with f:
         data = f.read(MAX_ANSWER_FILE_BYTES + 1)
     if len(data) > MAX_ANSWER_FILE_BYTES:
         raise ValueError(f"--first-answer-file is larger than {MAX_ANSWER_FILE_BYTES} bytes")

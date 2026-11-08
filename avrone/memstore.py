@@ -324,7 +324,10 @@ class MemoryStore:
         # A crash mid-append can leave a torn last line with no newline; appending straight
         # onto it would glue the new record to the torn one and lose both. Start a fresh line.
         try:
-            with self.path.open("rb") as f:
+            # round 106: lstat above, then open() here: a FIFO swapped in between blocked this
+            # thread forever WITH the memory lock held, so every memory op on the node stopped.
+            from .safeio import open_read
+            with open_read(self.path) as f:
                 f.seek(0, os.SEEK_END)
                 if f.tell() > 0:
                     f.seek(-1, os.SEEK_END)
@@ -332,6 +335,8 @@ class MemoryStore:
                         data = "\n" + data
         except FileNotFoundError:
             pass
+        except NotRegularFile as e:
+            raise MemoryRefused("memory file is not a regular file") from e
         try:
             f = open_append(self.path, "a")
         except NotRegularFile as e:  # a symlink here appended to its target (os.stat followed it)

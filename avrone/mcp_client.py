@@ -761,7 +761,12 @@ def load_config(path: str | os.PathLike | None = None) -> dict[str, dict[str, An
         return {}
     if not p.is_file():  # a FIFO here blocked server startup forever in read_text()
         raise ValueError(f"MCP config {str(p)!r} is not a regular file")
-    with p.open("rb") as f:
+    from .safeio import NotRegularFile, open_read
+    try:  # round 106: a FIFO swapped in after is_file() blocked startup (O_NONBLOCK + fstat now)
+        f = open_read(p, follow=True)
+    except NotRegularFile as e:
+        raise ValueError(f"MCP config {str(p)!r} is not a regular file") from e
+    with f:
         raw = f.read(MAX_CONFIG_BYTES + 1)
     if len(raw) > MAX_CONFIG_BYTES:
         raise ValueError(f"MCP config is larger than {MAX_CONFIG_BYTES} bytes")

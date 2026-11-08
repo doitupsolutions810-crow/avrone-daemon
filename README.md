@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.99: Round 106: check-then-open races no longer park a thread on a swapped-in FIFO. 5,752 tests + 19 integration
+
+- **Bug:** five sites checked a path and then called plain `open()`. A FIFO swapped in during that gap blocked the thread forever.
+  - **log_health `_scan_log`:** opened with `p.open()` after the listing, so the `log_health` call that awaited the scan never returned.
+  - **`MemoryStore._append` torn-tail probe:** did `lstat`, then `path.open("rb")`, with the memory lock held, so every memory op on the node stopped.
+  - **`fix_runs` tail carry-over:** did `lstat`, then `open()`, under the Codex write lock.
+  - **MCP `load_config`** and **CLI `--first-answer-file`:** did `is_file()`, then `open()`.
+- **Fix:** all five now open through `safeio.open_read` or `codex.open_log` (`O_NONBLOCK`, then `fstat` must say regular).
+  - `fix_runs` also checks that the opened inode is the one it lstat'ed.
+  - The MCP config and the answer file still follow symlinks (`follow=True`).
+  - A FIFO now gives the same refusal as before: "unreadable", `MemoryRefused`, a skipped fix, or `ValueError`.
+- **Tests:** `tests/test_round106_swap_races.py` has 8 tests. Each swaps the file for a FIFO at the exact gap and runs the op in a bounded thread. 5 hang on v0.98; the other 3 guard symlinked configs, normal reads and torn-tail repair.
+
 ## v0.98: Round 105: the fleet nonce lock never stalls the event loop, and fails closed. 5,744 tests + 19 integration
 
 - **Bug:** `FleetManager.verify()` took a blocking flock on `fleet_nonces.json.lock` while holding the manager's thread lock. `server._gateway` verifies small bodies (under `OFF_LOOP_BODY_BYTES`) inline on the event loop.

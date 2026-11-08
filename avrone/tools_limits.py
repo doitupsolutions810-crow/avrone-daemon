@@ -247,7 +247,10 @@ def _scan_log(p: Path, budget: int) -> dict[str, Any]:
     import json
     from .codex import MAX_LINE_BYTES, iter_lines
     r = {"events": 0, "corrupt": 0, "overlong": 0, "torn": False, "read": 0}
-    with p.open(encoding="utf-8", errors="replace") as f:
+    from .codex import open_log
+    # round 106: p.open() followed a FIFO swapped in after the listing and parked the scan
+    # thread (and the log_health call awaiting it) forever; open_log is O_NOFOLLOW|O_NONBLOCK
+    with open_log(p) as f:
         last = ""
         for line in iter_lines(f, MAX_LINE_BYTES):
             if line is None:

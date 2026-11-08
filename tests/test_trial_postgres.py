@@ -247,8 +247,7 @@ def test_postgres_delivery_write_failure_rolls_back_accepted_record():
             cur.execute(
                 f"""CREATE TRIGGER {trigger_name}
                     BEFORE INSERT ON trial_deliveries
-                    FOR EACH ROW EXECUTE FUNCTION {function_name}(%s)""",
-                (record["trial_id"],),
+                    FOR EACH ROW EXECUTE FUNCTION {function_name}('{record["trial_id"]}')"""
             )
 
     try:

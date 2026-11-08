@@ -29,11 +29,27 @@ def _default_mode() -> int:
     return 0o666 & ~_UMASK
 
 
+TMP_NAME_KEEP = 120  # bytes of the target's name kept in a temp name (NAME_MAX is 255)
+
+
+def tmp_prefix(name: str) -> str:
+    """mkstemp prefix for a temp file beside `name`: ".<name>." when that fits, else a cut of the
+    name plus a hash of the whole. Round 113: ".<name>.XXXXXXXX.tmp" for a 250-byte name is
+    over NAME_MAX, so writing any legal long file name failed with ENAMETOOLONG (and the raw
+    OSError carried the host path)."""
+    raw = os.fsencode(name)
+    if len(raw) <= TMP_NAME_KEEP:
+        return f".{name}."
+    import hashlib
+    cut = os.fsdecode(raw[:TMP_NAME_KEEP]).encode("utf-8", "surrogateescape")[:TMP_NAME_KEEP]
+    return f".{os.fsdecode(cut)}~{hashlib.sha256(raw).hexdigest()[:12]}."
+
+
 def atomic_write(path: str | os.PathLike, data: str | bytes, *, encoding: str = "utf-8",
                  fsync: bool = False, mode: int | None = None) -> None:
     p = Path(path)
     raw = data.encode(encoding) if isinstance(data, str) else data
-    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=tmp_prefix(p.name), suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(raw)

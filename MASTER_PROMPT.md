@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.105.0)
+# AVRONE MASTER PROMPT (v0.106.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,798 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,806 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 279 test files, offline by default
+├── tests/                  # 280 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,13 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.106: Round 113: hostile file names, and names near NAME_MAX that can now be written. 5,806 tests + 19 integration
+
+- **Probe:** I fuzzed every tool (`/workspace/work/fsfuzz.py`, SEED 11301, N 25; 2,075 calls) over a workspace seeded with hostile names. These were non-UTF-8 bytes (`bad\xff\xfe.txt`, `dir\xc3\x28/in\xff.md`), a newline, a tab, ANSI escapes, an RTL override, a quote, `-rf`, a dotfile and a 250-byte name. The names were also passed as tool arguments.
+- **Bug found** (the only failure): every atomic writer named its temp file `.<name>.XXXXXXXX.tmp`. For a legal name of about 240 bytes or more, that is over NAME_MAX (255). So `write_file`, `edit_file` and `fs_write` on such a file failed with a raw `OSError: [Errno 36] File name too long`, and the message carried the host workspace path.
+- **Fix:** new `safeio.tmp_prefix(name)`. It keeps `.<name>.` for names up to 120 bytes. For longer names it keeps the first 120 bytes (multibyte and non-UTF-8 cuts are safe) plus `~` and a 12-hex SHA-256 of the whole name. It is used by `safeio.atomic_write`, `tools.atomic_write_bytes` and `agentfs_tools.quota_write`. Internal fixed-name writers (checkpoint, secrets, memstore, capgate head) were left alone.
+- **Tests:** `tests/test_round113_long_names.py` has 8 tests, all failing on v0.105. They cover 250-byte ASCII, 246-byte UTF-8 and 244-byte non-UTF-8 names; write and rewrite leave no temp file behind; short names keep the old prefix.
+
 ## v0.105: Round 112: a wall clock stepped backwards never strands state. 5,798 tests + 19 integration
 
 - **Edge:** the wall clock steps backwards, as after an NTP correction, a VM resume or a hand-set date. Durations measured with `time.time()` then run long by the size of the step.
@@ -348,16 +355,6 @@ landed and the suite is green. End with what is still open.
 - **Probe:** every POST, PUT and PATCH route got 100k-deep array and object bodies. None returned a 500.
 - **Tests:** `tests/test_round111_deep_json.py` has 10 tests; 7 fail on v0.103.
 
-## v0.103: Round 110: chained tar extended headers are refused, not a RecursionError; agent-dir overwrites drop setuid/setgid. 5,781 tests + 19 integration
-
-- **Bug: `agentpack.read_pack`.** `tarfile` follows each GNU longname/longlink header into the next header recursively. A bundle of about 3,000 chained headers, a few KB gzipped and far under every size and member cap, raised `RecursionError` out of `read_pack`.
-  - On fleet migrate import (`FleetManager.receive_agentpack`), that was an unaudited 500 instead of `agent.migrate_refused`.
-  - In `pack_list`, it was an exception out of `_verify`.
-- **Fix:** `read_pack` now turns `RecursionError` into `PackError("not a valid agent pack: too many chained extended headers")`, so all three callers refuse and audit as usual. CPython's pax header handling is not recursive; a 5,000-header pax chain test guards that.
-- **Bug: `agentfs_tools.quota_write`.** An overwrite copied the old file's mode onto the new content, setuid and setgid included. This is the same issue round 109 fixed in `atomic_write_bytes`.
-- **Fix:** `S_ISUID` and `S_ISGID` are now masked off. Exec bits are kept.
-- **Tests:** `tests/test_round110_pack_headers.py` has 6 tests; 4 fail on v0.102. The pax chain and short-chain guards pass on both.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -369,4 +366,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.105.0 checked out: 5,798 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.106.0 checked out: 5,806 passed, 99% coverage. Next: round <N+1> on <angle>."

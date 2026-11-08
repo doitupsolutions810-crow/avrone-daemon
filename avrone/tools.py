@@ -448,7 +448,8 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
         um = _os.umask(0)
         _os.umask(um)
         mode = 0o666 & ~um
-    fd, tmp = _tempfile.mkstemp(dir=p.parent, prefix=f".{p.name}.", suffix=".tmp")
+    from .safeio import tmp_prefix as _tmp_prefix
+    fd, tmp = _tempfile.mkstemp(dir=p.parent, prefix=_tmp_prefix(p.name), suffix=".tmp")
     try:
         with _os.fdopen(fd, "wb") as fh:
             fh.write(data)

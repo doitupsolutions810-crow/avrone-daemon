@@ -156,7 +156,8 @@ def quota_write(ctx: "AgentContext", root: Path, p: Path, data: bytes, append: b
                 with os.fdopen(fd, "ab") as f:
                     f.write(data)
             else:
-                tmp = p.with_name(f".{p.name}.tmp-{os.getpid()}-{threading.get_ident()}-{os.urandom(4).hex()}")
+                from .safeio import tmp_prefix
+                tmp = p.with_name(f"{tmp_prefix(p.name)}tmp-{os.getpid()}-{threading.get_ident()}-{os.urandom(4).hex()}")
                 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
                 try:
                     with os.fdopen(fd, "wb") as f:

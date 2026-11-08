@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.106: Round 113: hostile file names, and names near NAME_MAX that can now be written. 5,806 tests + 19 integration
+
+- **Probe:** I fuzzed every tool (`/workspace/work/fsfuzz.py`, SEED 11301, N 25; 2,075 calls) over a workspace seeded with hostile names. These were non-UTF-8 bytes (`bad\xff\xfe.txt`, `dir\xc3\x28/in\xff.md`), a newline, a tab, ANSI escapes, an RTL override, a quote, `-rf`, a dotfile and a 250-byte name. The names were also passed as tool arguments.
+- **Bug found** (the only failure): every atomic writer named its temp file `.<name>.XXXXXXXX.tmp`. For a legal name of about 240 bytes or more, that is over NAME_MAX (255). So `write_file`, `edit_file` and `fs_write` on such a file failed with a raw `OSError: [Errno 36] File name too long`, and the message carried the host workspace path.
+- **Fix:** new `safeio.tmp_prefix(name)`. It keeps `.<name>.` for names up to 120 bytes. For longer names it keeps the first 120 bytes (multibyte and non-UTF-8 cuts are safe) plus `~` and a 12-hex SHA-256 of the whole name. It is used by `safeio.atomic_write`, `tools.atomic_write_bytes` and `agentfs_tools.quota_write`. Internal fixed-name writers (checkpoint, secrets, memstore, capgate head) were left alone.
+- **Tests:** `tests/test_round113_long_names.py` has 8 tests, all failing on v0.105. They cover 250-byte ASCII, 246-byte UTF-8 and 244-byte non-UTF-8 names; write and rewrite leave no temp file behind; short names keep the old prefix.
+
 ## v0.105: Round 112: a wall clock stepped backwards never strands state. 5,798 tests + 19 integration
 
 - **Edge:** the wall clock steps backwards, as after an NTP correction, a VM resume or a hand-set date. Durations measured with `time.time()` then run long by the size of the step.

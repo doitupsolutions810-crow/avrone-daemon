@@ -36,8 +36,8 @@ def test_governor_readers(monkeypatch, tmp_path):
     monkeypatch.setattr(governor, "_psutil", lambda: None)
     meminfo = tmp_path / "meminfo"
     meminfo.write_text("MemTotal: 0 kB\n")
-    real_open = open
-    monkeypatch.setattr("builtins.open", lambda p, *a, **k: real_open(meminfo if p == "/proc/meminfo" else p, *a, **k))
+    real_read = governor._read_text  # round 108: governor reads via safeio.open_read, not open()
+    monkeypatch.setattr(governor, "_read_text", lambda p: real_read(str(meminfo) if p == "/proc/meminfo" else p))
     assert governor.read_mem_pct() is None
     monkeypatch.setitem(__import__("sys").modules, "psutil", None)
     monkeypatch.undo()

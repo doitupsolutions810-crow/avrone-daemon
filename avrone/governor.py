@@ -76,9 +76,12 @@ def _run(args: list[str]) -> str | None:
 
 
 def _read_text(path: str) -> str | None:
+    # round 108: plain open() blocked the governor sample forever on a FIFO at a cgroup (root= param),
+    # meminfo or thermal path; O_NONBLOCK + fstat-regular (sysfs and procfs files are regular)
+    from .safeio import open_read
     try:
-        with open(path, errors="replace") as f:
-            return f.read(65536)
+        with open_read(path, follow=True) as f:
+            return f.read(65536).decode("utf-8", errors="replace")
     except (OSError, ValueError):
         return None
 
@@ -299,8 +302,10 @@ def read_temp_c(thermal_glob: str = "/sys/class/thermal/thermal_zone*/temp") -> 
     if not temps:
         for p in glob.glob(thermal_glob):
             try:
-                with open(p) as f:
-                    raw = float(f.read().strip())
+                text = _read_text(p)  # round 108: was open(p).read(): unbounded, blocks on a FIFO
+                if text is None:
+                    continue
+                raw = float(text.strip()[:64])
             except (OSError, ValueError):
                 continue
             temps.append(raw / 1000.0 if abs(raw) > 1000 else raw)  # sysfs reports millidegrees

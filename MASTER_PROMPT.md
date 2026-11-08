@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.100.0)
+# AVRONE MASTER PROMPT (v0.101.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,763 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,769 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 274 test files, offline by default
+├── tests/                  # 275 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,13 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.101: Round 108: governor cgroup, meminfo and thermal reads never block on a FIFO. 5,769 tests + 19 integration
+
+- **Bug (defense in depth):** `governor._read_text` used plain `open()`, and `read_temp_c` used `open(p).read()`, which is unbounded. A FIFO at a cgroup root (passed with `root=`), a meminfo path or a thermal glob match blocked the governor sample forever. The defaults are sysfs and procfs paths, so this only bites with unusual mounts or injected paths.
+- **Fix:** both now go through `safeio.open_read(follow=True)` (`O_NONBLOCK`, then `fstat` must say regular). Reads are capped at 64 KB. Symlinked sysfs entries and `/proc/meminfo` still read normally.
+- **Fuzz:** toolfuzz with SEED 10807, 40 calls per tool, made 3,320 calls with no hangs, raw errors, escapes or slow calls.
+- **Tests:** `tests/test_round108_governor_reads.py` has 6 tests; 3 hang on v0.100. `test_cov11_a::test_governor_readers` now patches `governor._read_text` instead of `builtins.open`.
+
 ## v0.100: Round 107: stat-then-read swaps can no longer pack a host file or hang a thread. 5,763 tests + 19 integration
 
 - **Bug (leak): agent export.** `export_pack` lstat'ed each file in `_walk`, then called `read_bytes()`, which follows symlinks. A same-size symlink swapped in between those two calls put a host file into the bundle that migrates to another node. The length check only caught a swap to a file of a different size. A FIFO swap hung the migrate forever.
@@ -339,21 +346,6 @@ landed and the suite is green. End with what is still open.
   - A FIFO now gives the same refusal as before: "unreadable", `MemoryRefused`, a skipped fix, or `ValueError`.
 - **Tests:** `tests/test_round106_swap_races.py` has 8 tests. Each swaps the file for a FIFO at the exact gap and runs the op in a bounded thread. 5 hang on v0.98; the other 3 guard symlinked configs, normal reads and torn-tail repair.
 
-## v0.98: Round 105: the fleet nonce lock never stalls the event loop, and fails closed. 5,744 tests + 19 integration
-
-- **Bug:** `FleetManager.verify()` took a blocking flock on `fleet_nonces.json.lock` while holding the manager's thread lock. `server._gateway` verifies small bodies (under `OFF_LOOP_BODY_BYTES`) inline on the event loop.
-  - On v0.97, a peer process (a second worker, or a restart that overlaps the old one) hung while holding that lock froze the whole event loop forever.
-  - It also pinned `self._lock`, so register and pick stalled too.
-- **Fix:**
-  - **Lock order:** the cross-process lock is taken first, then `self._lock`, so waiting never holds the manager lock.
-  - **Deadline:** the flock waits `AVRONE_FLEET_NONCE_LOCK_S` (default 5 s, range 0 to 60, junk reads as 5).
-  - **Fail closed:** on timeout, verify raises `GatewayRefused("busy")`. It never checks the nonce without merging the peer's cache, which could accept a replay. The nonce isn't recorded, so the same request is accepted on a retry.
-  - **Inline path:** the gateway sets the `fleet.NONCE_LOCK_WAIT` contextvar to 0, so the inline attempt tries the lock once. On busy it reruns `dispatch_gateway` in `to_thread` with the full wait. Only that thread run is audited.
-  - **HTTP:** `busy` maps to 503 with `Retry-After: 2`.
-- **Tests:** `tests/test_round105_nonce_lock.py` has 8 tests.
-  - 6 fail or hang on v0.97: verify hang, manager lock pinned, gateway audit, env helper, and the two gateway loop tests, which hit a 30 s `timeout` because the loop never ran.
-  - 2 pass on both: the nonce isn't recorded when busy, and uncontended verify stays fast.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -365,4 +357,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.100.0 checked out: 5,763 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.101.0 checked out: 5,769 passed, 99% coverage. Next: round <N+1> on <angle>."

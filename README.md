@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.101: Round 108: governor cgroup, meminfo and thermal reads never block on a FIFO. 5,769 tests + 19 integration
+
+- **Bug (defense in depth):** `governor._read_text` used plain `open()`, and `read_temp_c` used `open(p).read()`, which is unbounded. A FIFO at a cgroup root (passed with `root=`), a meminfo path or a thermal glob match blocked the governor sample forever. The defaults are sysfs and procfs paths, so this only bites with unusual mounts or injected paths.
+- **Fix:** both now go through `safeio.open_read(follow=True)` (`O_NONBLOCK`, then `fstat` must say regular). Reads are capped at 64 KB. Symlinked sysfs entries and `/proc/meminfo` still read normally.
+- **Fuzz:** toolfuzz with SEED 10807, 40 calls per tool, made 3,320 calls with no hangs, raw errors, escapes or slow calls.
+- **Tests:** `tests/test_round108_governor_reads.py` has 6 tests; 3 hang on v0.100. `test_cov11_a::test_governor_readers` now patches `governor._read_text` instead of `builtins.open`.
+
 ## v0.100: Round 107: stat-then-read swaps can no longer pack a host file or hang a thread. 5,763 tests + 19 integration
 
 - **Bug (leak): agent export.** `export_pack` lstat'ed each file in `_walk`, then called `read_bytes()`, which follows symlinks. A same-size symlink swapped in between those two calls put a host file into the bundle that migrates to another node. The length check only caught a swap to a file of a different size. A FIFO swap hung the migrate forever.

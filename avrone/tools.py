@@ -362,7 +362,8 @@ async def t_shell(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if _INSTALL_RE.search(cmd):  # self-change: record it in the resource ledger
         try:
             from .agentkit import record_change
-            record_change(ctx, "shell install", cmd[:200], res.exit_code == 0, (res.stdout or res.stderr)[-200:])
+            await asyncio.to_thread(record_change, ctx, "shell install", cmd[:200], res.exit_code == 0,
+                                    (res.stdout or res.stderr)[-200:])
         except Exception:  # noqa: BLE001
             pass
     return res.text()

@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.94: Round 101: env_install lock and ledger off the event loop. 5,710 tests + 19 integration
+
+- **FIFO at `.install-<mgr>.lock`:** `open(lock, "w")` ran on the event loop and blocked forever. The lock now opens with `safeio.open_lock` (O_NOFOLLOW, O_NONBLOCK, regular files only) in a worker thread. An unusable lock returns `ERROR: install lock unusable ...`.
+- **Symlink at the lock:** `open(lock, "w")` followed the symlink and truncated its target. It is now refused, and the target is left untouched.
+- **Cancel while waiting:** a blocking `fcntl.flock` ran in `to_thread`. A cancelled install left that thread blocked in flock on a file the cancel had already closed, and `asyncio.run` shutdown hung until the lock freed. `_install_lock` now polls `LOCK_EX|LOCK_NB` on the loop (20 ms backoff to 250 ms) and closes the file on cancel.
+- **Bounded wait:** after `INSTALL_LOCK_WAIT_S` (900 s), the install returns `ERROR: another <mgr> install has held the install lock ...` instead of waiting forever.
+- **Ledger off the loop:** `_installed_before` (a scan of up to 16 MB, run twice per install) now runs in `to_thread`. So does `record_change`, in `env_install` and in `shell` install logging.
+- **Tests:** `tests/test_round101_env_install.py` has 7 tests. 6 fail on v0.93 (FIFO hang, symlink, timeout, cancel, big ledger stall); the cancel test hangs on v0.93 without its thread guard. The other test guards the dedupe of concurrent installs of the same package, and the lock release.
+
 ## v0.93: Round 100: CodeX runs listing reuses its scan. 5,703 tests + 19 integration
 
 - **Profile** (100,000 logs plus 50 runs with 4 MB prompts): one `runs(50)` took 4.1 s. Of that, 3.45 s was one `lstat` per log in `newest_files`, and about 1.1 s was re-parsing the 50 start lines. It was the same cost on every listing.

@@ -419,22 +419,55 @@ async def t_env_install(ctx: "AgentContext", args: dict[str, Any]) -> str:
         # manager="x/../../../../srv/app/poetry" opened (and truncated) <that>.lock outside the data dir
         return "ERROR: manager must be pip or apt"
     if policy == "deny":
-        record_change(ctx, f"{mgr} install (denied)", pkg, False, "AVRONE_SELF_CHANGES=deny")
+        await asyncio.to_thread(record_change, ctx, f"{mgr} install (denied)", pkg, False, "AVRONE_SELF_CHANGES=deny")
         return "ERROR: self-changes are disabled on this node (AVRONE_SELF_CHANGES=deny)"
-    prior = _installed_before(ctx, mgr, pkg)
+    # round 101: the ledger scan (up to 16 MB parsed) and the lock open ran on the event loop
+    prior = await asyncio.to_thread(_installed_before, ctx, mgr, pkg)
     if prior:
         return f"{pkg} already installed via {mgr} by {prior} (resource ledger); no change made"
-    lock = _data(ctx) / f".install-{mgr}.lock"
-    with open(lock, "w") as lf:  # one installer per package manager per node: no apt/dpkg lock fights
+    try:
+        lf = await _install_lock(_data(ctx) / f".install-{mgr}.lock")
+    except TimeoutError:
+        return f"ERROR: another {mgr} install has held the install lock for over {INSTALL_LOCK_WAIT_S:.0f}s; try again later"
+    except OSError as e:
+        return f"ERROR: install lock unusable ({e.__class__.__name__}: {e}); remove .install-{mgr}.lock from the data dir"
+    with lf:  # one installer per package manager per node: no apt/dpkg lock fights
         import fcntl
-        await asyncio.to_thread(fcntl.flock, lf, fcntl.LOCK_EX)
         try:
-            prior = _installed_before(ctx, mgr, pkg)
+            prior = await asyncio.to_thread(_installed_before, ctx, mgr, pkg)
             if prior:
                 return f"{pkg} already installed via {mgr} by {prior} (resource ledger); no change made"
             return await _do_install(ctx, mgr, pkg)
         finally:
             fcntl.flock(lf, fcntl.LOCK_UN)
+
+
+INSTALL_LOCK_WAIT_S = 900.0
+
+
+async def _install_lock(path: Path):
+    """The per-manager install lock, held (round 101). Opened with safeio.open_lock: open(lock, "w")
+    followed a symlink planted there (truncating its target) and a FIFO there blocked the event loop
+    forever. Acquired by polling LOCK_NB on the loop instead of a blocking flock in a worker thread:
+    a cancelled install left that thread waiting on a file the cancel had already closed."""
+    import fcntl
+    from .safeio import open_lock
+    lf = await asyncio.to_thread(open_lock, path)
+    deadline = time.monotonic() + INSTALL_LOCK_WAIT_S
+    delay = 0.02
+    try:
+        while True:
+            try:
+                fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return lf
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("install lock busy") from None
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 0.25)
+    except BaseException:
+        lf.close()
+        raise
 
 
 def _installed_before(ctx: "AgentContext", mgr: str, pkg: str) -> str | None:
@@ -468,7 +501,7 @@ async def _do_install(ctx: "AgentContext", mgr: str, pkg: str) -> str:
         f"python3 -m pip show {pkg.split('==')[0]} >/dev/null 2>&1" if mgr == "pip" else f"dpkg -s {pkg} >/dev/null 2>&1",
         timeout=30)
     ok = check.exit_code == 0
-    record_change(ctx, f"{mgr} install", pkg, ok, (res.stdout or res.stderr)[-300:])
+    await asyncio.to_thread(record_change, ctx, f"{mgr} install", pkg, ok, (res.stdout or res.stderr)[-300:])
     return f"{'installed' if ok else 'FAILED'} {pkg} via {mgr} (logged to resource ledger)\n{res.text(1500)}"
 
 

@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.112: Round 119: a full disk under the CodeX logs no longer kills runs. 5,849 tests + 19 integration
+
+- **Bug:** `Codex._append` let `OSError(ENOSPC)` escape `emit()`. Once the log disk filled, every chat, squad and deep run on the node died with a raw `[Errno 28] No space left on device`.
+  - The probe (`/workspace/work/enospc.py`) fails `os.write` only for fds under `runs/`, using `/proc/self/fd`. All three run modes raised on v0.111.
+  - With every write under the data dir failing, all three now complete.
+- **Fix:** ENOSPC, EDQUOT, EROFS, EIO and EFBIG on open or write no longer escape `emit()`. The event:
+  - still reaches live subscribers (HUD and WebSocket)
+  - is left out of the log file
+  - is counted in `Codex.write_errors`, with `last_write_error` and a warning logged once per log
+- **Torn writes:** a partial line from a write cut off by a full disk is fenced off by the existing torn-line check, so the next event starts on a fresh line.
+- **Status:** `GET /api/status` now carries `codex: {emitted, dropped, write_errors, last_write_error}`.
+- **Unchanged:** other errors (EACCES, for example) still raise.
+- **Also probed:** the `netoff.py` re-probe with optional arguments found no further network tools that skip `allow_network`.
+- **Tests:** `tests/test_round119_disk_full.py` has 8 tests; 7 fail on v0.111.
+
 ## v0.111: Round 118: AVRONE_ALLOW_NETWORK=0 now stops every builtin network tool. 5,841 tests + 19 integration
 
 - **Bug:** with network turned off, 11 builtin tools still reached the network:

@@ -312,6 +312,10 @@ class SubscribersFull(RuntimeError):
     pass
 
 
+# storage failures that must not kill the caller of emit() (round 119)
+_STORAGE_ERRNOS = frozenset(x for x in (getattr(errno, n, None) for n in
+                                        ("ENOSPC", "EDQUOT", "EROFS", "EIO", "EFBIG")) if x is not None)
+
 class Codex:
     def __init__(self, data_dir: Path):
         self.log_dir = data_dir / "runs"
@@ -456,6 +460,9 @@ class Codex:
             if e.errno in (errno.ELOOP, errno.ENXIO, errno.EISDIR) or path.is_symlink():
                 self._drop(path, "a symlink or special file")
                 return
+            if e.errno in _STORAGE_ERRNOS:
+                self._write_failed(path, e)
+                return
             raise
         lk = getattr(self, "_runs_lock", None)
         if lk is not None:
@@ -472,8 +479,27 @@ class Codex:
             while view:
                 n = os.write(fd, view)
                 view = view[n:]
+        except OSError as e:
+            # Round 119: a full disk / quota / read-only remount / I/O error raised out of emit()
+            # and killed every chat, squad and deep run on the node with a raw "[Errno 28]". The
+            # event still reaches live subscribers; the file misses it (a partial line is fenced
+            # off by the torn-line check on the next append) and it is counted in write_errors.
+            if e.errno not in _STORAGE_ERRNOS:
+                raise
+            self._write_failed(path, e)
         finally:
             os.close(fd)
+
+    def _write_failed(self, path: Path, e: OSError) -> None:
+        self.write_errors = getattr(self, "write_errors", 0) + 1
+        self.last_write_error = f"{errno.errorcode.get(e.errno or 0, e.errno)}: {e.strerror or e}"
+        self._drop(path, f"write failed ({self.last_write_error})")
+
+    def health(self) -> dict[str, Any]:
+        """Counters for /api/status: events not written to disk and why."""
+        return {"emitted": self.emitted, "dropped": getattr(self, "dropped", 0),
+                "write_errors": getattr(self, "write_errors", 0),
+                "last_write_error": getattr(self, "last_write_error", None)}
 
     def _drop(self, path: Path, why: str) -> None:
         self.dropped = getattr(self, "dropped", 0) + 1

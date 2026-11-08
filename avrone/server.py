@@ -263,6 +263,7 @@ async def status():
         "tools": len(c.tools.names()),
         "admin_enabled": bool(settings.admin_token),
         "agents": c.active,
+        "codex": c.codex.health() if hasattr(c.codex, "health") else None,
     }
 
 

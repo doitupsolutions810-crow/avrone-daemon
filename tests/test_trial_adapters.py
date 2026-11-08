@@ -198,4 +198,10 @@ def test_fleet_api_rejects_oversized_body_and_duplicate_auth_headers(tmp_path, m
             duplicate_headers = list(headers.items()) + [("x-avrone-ts", headers["x-avrone-ts"])]
             response = await client.post(PATH, content=body, headers=duplicate_headers)
             assert response.status_code == 401
+
+            payload = _payload()
+            body, privileged = _signed_headers(payload, nonce="api_nonce_00000008")
+            privileged["x-avrone-privileged"] = "true"
+            response = await client.post(PATH, content=body, headers=privileged)
+            assert response.status_code == 403
     asyncio.run(go())

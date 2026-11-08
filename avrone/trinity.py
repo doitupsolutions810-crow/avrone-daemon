@@ -296,6 +296,8 @@ def _first_action(text: str) -> dict[str, Any] | None:
             break
         try:
             obj, end = _DECODER.raw_decode(text, i)
+        except RecursionError:
+            return None  # deeply nested model output is malformed; fail closed without a 500
         except json.JSONDecodeError:
             i = text.find("{", i + 1)
             continue

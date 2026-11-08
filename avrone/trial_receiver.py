@@ -167,10 +167,7 @@ class TrialStore:
         p.parent.mkdir(parents=True, exist_ok=True)
         self.path = str(p)
         self.receipt_secret = receipt_secret
-        with closing(self._connect()) as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.execute("PRAGMA synchronous=FULL")
-            db.executescript("""
+        schema = """
                 CREATE TABLE IF NOT EXISTS trial_records (
                     trial_id TEXT PRIMARY KEY,
                     record_digest TEXT NOT NULL,
@@ -211,7 +208,21 @@ class TrialStore:
                     received_at INTEGER NOT NULL,
                     UNIQUE(trial_id, conflicting_digest)
                 );
-            """)
+            """
+        deadline = time.monotonic() + 15.0
+        delay = 0.02
+        while True:
+            try:
+                with closing(self._connect()) as db:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    db.execute("PRAGMA synchronous=FULL")
+                    db.executescript(schema)
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).lower() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, 0.25)
 
     @classmethod
     def from_env(cls, fleet_token: str = "") -> "TrialStore":

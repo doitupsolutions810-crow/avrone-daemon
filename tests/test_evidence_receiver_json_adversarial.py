@@ -4,7 +4,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from starlette.requests import Request
 
 from avrone.evidence_receiver import canonical, ingest_evidence
 from avrone.integration_contract import build_evidence_event
@@ -101,4 +102,38 @@ def test_unknown_top_level_field_is_rejected(tmp_path, monkeypatch):
             raw = canonical(event)
             response = await client.post(PATH, content=raw, headers=_headers(raw))
             assert response.status_code == 422
+    asyncio.run(go())
+
+
+
+def test_client_disconnect_returns_controlled_bad_request(tmp_path, monkeypatch):
+    async def go():
+        monkeypatch.setenv("AVRONE_EVIDENCE_HMAC_SECRET", SECRET)
+        monkeypatch.setenv("AVRONE_EVIDENCE_RECEIPT_SECRET", RECEIPT_SECRET)
+        monkeypatch.setenv("AVRONE_EVIDENCE_DB", str(tmp_path / "disconnect.sqlite3"))
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": PATH,
+            "raw_path": PATH.encode(),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 12345),
+            "server": ("test", 80),
+        }
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        request = Request(scope, receive)
+        try:
+            await ingest_evidence(request)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert exc.detail == "incomplete evidence request body"
+        else:
+            raise AssertionError("disconnected upload was not rejected")
     asyncio.run(go())

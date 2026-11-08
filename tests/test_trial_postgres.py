@@ -210,6 +210,44 @@ def test_postgres_repeated_conflict_is_quarantined_once_but_delivery_is_audited_
     assert counts["quarantine"] >= 1
 
 
+def test_postgres_batch_prevalidates_every_event_before_first_write():
+    store = _store()
+    valid = _record()
+    invalid = _record()
+    invalid["check_version"] = ""
+    transport = {
+        key: value for key, value in _provenance("batch_prevalidation_nonce").items()
+        if key != "bridge"
+    }
+    events = [
+        {"record": valid, "bridge": None},
+        {"record": invalid, "bridge": None},
+    ]
+    with pytest.raises(ValueError):
+        store.ingest_batch(events, transport)
+    assert store.get_record(valid["trial_id"]) is None
+    assert store.get_record(invalid["trial_id"]) is None
+
+
+def test_postgres_batch_size_boundary_accepts_max_and_rejects_over_max():
+    from avrone.trial_receiver import MAX_BATCH_EVENTS
+
+    store = _store()
+    records = [_record() for _ in range(MAX_BATCH_EVENTS)]
+    transport = {
+        key: value for key, value in _provenance("batch_size_boundary_nonce").items()
+        if key != "bridge"
+    }
+    events = [{"record": record, "bridge": None} for record in records]
+    accepted = store.ingest_batch(events, transport)
+    assert len(accepted) == MAX_BATCH_EVENTS
+    assert all(item["status"] == "accepted" for item in accepted)
+
+    too_many = events + [{"record": _record(), "bridge": None}]
+    with pytest.raises(ValueError):
+        store.ingest_batch(too_many, transport)
+
+
 def test_postgres_invalid_input_never_creates_a_delivery_or_record():
     store = _store()
     before = store.counts()

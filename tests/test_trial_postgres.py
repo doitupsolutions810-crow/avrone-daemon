@@ -517,11 +517,13 @@ def test_postgres_wrong_receipt_signing_key_cannot_replay_or_read_existing_recor
 def test_postgres_future_schema_version_is_rejected_without_mutating_it():
     import psycopg
     from psycopg import sql
-    from psycopg.conninfo import make_conninfo
+    from urllib.parse import quote
     from avrone.trial_receiver import TrialStoreConfigError
 
     schema = "avrone_schema_guard_" + uuid.uuid4().hex
-    isolated_dsn = make_conninfo(DSN, options=f"-csearch_path={schema}")
+    separator = "&" if "?" in DSN else "?"
+    options = quote("-csearch_path=" + schema, safe="")
+    isolated_dsn = DSN + separator + "options=" + options
     with psycopg.connect(DSN) as conn:
         with conn.cursor() as cur:
             cur.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))

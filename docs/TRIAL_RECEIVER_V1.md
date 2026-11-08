@@ -6,7 +6,7 @@ AVRONE accepts bounded batches at \`POST /api/fleet/trials\`. The route reuses t
 existing Fleet HMAC gateway and adds a dedicated \`trials:ingest\` capability. It
 requires a non-empty explicit \`AVRONE_FLEET_ALLOW\` entry for the signed sender even
 when the fleet's compatibility policy would otherwise allow all token holders.
-The request body is capped at 256 KiB and 32 events; each record is capped at 16 KiB.
+The request body must be UTF-8 and is capped at 256 KiB and 32 events; each record is capped at 16 KiB.
 
 Fleet HMAC signs method, canonical path, timestamp, nonce, and the exact body hash.
 The shared fleet token authenticates membership in a shared-secret trust group; it

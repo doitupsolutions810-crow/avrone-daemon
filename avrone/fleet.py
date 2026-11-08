@@ -576,7 +576,11 @@ MAX_STRICT_JSON_DEPTH = 64
 
 
 def strict_json_loads(raw: bytes) -> Any:
-    """Reject duplicate keys, non-finite numbers, and nesting deeper than the contract cap."""
+    """Reject non-UTF-8, duplicate keys, non-finite numbers, and excessive nesting."""
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("JSON body must be UTF-8") from None
     depth = 0
     in_string = False
     escaped = False

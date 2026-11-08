@@ -182,6 +182,19 @@ def test_fleet_api_rejects_duplicate_key_and_deep_json(tmp_path, monkeypatch):
             response = await client.post(PATH, content=deep,
                                          headers={"content-type": "application/json", **signed})
             assert response.status_code == 400
+
+            # UTF-16LE plus U+0122 (whose low byte is 0x22) can desynchronize a
+            # byte-only quote scanner and hide deeply nested JSON from its cap.
+            payload = _payload()
+            payload["events"][0]["record"]["run_id"] = "run-\u0122"
+            payload["events"][0]["record"]["deep"] = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+            utf16 = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-16-le")
+            signed = sign(FLEET_TOKEN, "POST", PATH, utf16,
+                          ts=str(int(time.time())), nonce="api_nonce_00000009")
+            response = await client.post(PATH, content=utf16,
+                                         headers={"content-type": "application/json", **signed})
+            assert response.status_code == 400
+            assert response.json()["detail"] == "body must be strict JSON"
     asyncio.run(go())
 
 

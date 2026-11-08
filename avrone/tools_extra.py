@@ -485,11 +485,14 @@ class _EditRaced(Exception):
     """The file changed between edit_file's read and its write (another writer)."""
 
 
-def _edit_lock(p: Path) -> threading.Lock:
+def _edit_key(p: Path) -> str:
     try:
-        key = os.path.realpath(p)
+        return os.path.realpath(p)
     except (OSError, ValueError):
-        key = str(p)
+        return str(p)
+
+
+def _edit_lock(key: str) -> threading.Lock:
     with _EDIT_LOCKS_GUARD:
         if len(_EDIT_LOCKS) > 4096:  # drop idle locks; a held one stays (it is still referenced)
             for k in [k for k, lk in _EDIT_LOCKS.items() if not lk.locked()][:2048]:
@@ -497,30 +500,68 @@ def _edit_lock(p: Path) -> threading.Lock:
         return _EDIT_LOCKS.setdefault(key, threading.Lock())
 
 
+async def _acquire_async(lock: threading.Lock) -> None:
+    """Wait for `lock` on the event loop, never in a worker thread: 24 queued edits of one file
+    each parked a to_thread worker on the lock and starved every other off-loop tool (round 116)."""
+    delay = 0.001
+    while not lock.acquire(blocking=False):
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 0.02)
+
+
 def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 
 
-@off_loop  # reads, matches and rewrites the whole file
 async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
     """Round 115: one edit at a time per file, and a read-modify-write that loses a race is redone.
     Squad agents editing different lines of one file in parallel each got "edited", but each
     rewrote the file from its own stale read: 40 parallel edits left 9-13 applied. Edits now
     serialize on a per-path lock, and a change by any other writer (write_file, shell) between
     the read and the write is detected by (dev, ino, size, mtime_ns) and the edit is re-run on
-    the new content, up to EDIT_RETRIES times."""
+    the new content, up to EDIT_RETRIES times.
+
+    Round 116: the lock is waited for on the loop; only the holder takes a worker thread, which
+    releases it when done (also when the caller was cancelled mid-edit)."""
     raw_path = str(args.get("path") or "").strip()
     if not raw_path:
         return "ERROR: edit_file needs a file path"
-    r = fsunify.resolve(ctx, raw_path, "edit_file")
-    with _edit_lock(r.path):
-        for _ in range(EDIT_RETRIES):
-            try:
-                return _edit_file_once(ctx, args, raw_path, r)
-            except _EditRaced:
-                continue
-    return (f"ERROR: {raw_path} kept changing while edit_file ran ({EDIT_RETRIES} tries); "
-            "nothing was written, read_file it and retry")
+
+    def _prep() -> tuple[Any, str]:
+        r = fsunify.resolve(ctx, raw_path, "edit_file")
+        return r, _edit_key(r.path)
+    r, key = await asyncio.to_thread(_prep)
+    lock = _edit_lock(key)
+    await _acquire_async(lock)
+    gate = threading.Lock()
+    state = {"started": False, "abandoned": False}
+
+    def _work() -> str:
+        with gate:
+            if state["abandoned"]:
+                return "ERROR: cancelled"
+            state["started"] = True
+        try:
+            for _ in range(EDIT_RETRIES):
+                try:
+                    return _edit_file_once(ctx, args, raw_path, r)
+                except _EditRaced:
+                    continue
+            return (f"ERROR: {raw_path} kept changing while edit_file ran ({EDIT_RETRIES} tries); "
+                    "nothing was written, read_file it and retry")
+        finally:
+            lock.release()
+    try:
+        return await asyncio.to_thread(_work)
+    except BaseException:
+        with gate:
+            if not state["started"]:  # the worker never ran: it will not release the lock
+                state["abandoned"] = True
+                lock.release()
+        raise
+
+
+t_edit_file.off_loop = True  # type: ignore[attr-defined]  # (file work runs in a worker thread)
 
 
 def _edit_file_once(ctx: "AgentContext", args: dict[str, Any], raw_path: str, r: Any) -> str:

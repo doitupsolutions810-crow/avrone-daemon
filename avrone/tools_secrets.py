@@ -125,7 +125,7 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
     while the file was being redacted, and replacing a log that had just rotated resurrected the
     archived content as the active log. Reads go through read_capped (regular files only)."""
     import contextlib
-    from .safeio import FileTooBig, read_capped
+    from .safeio import FileTooBig, read_capped, tmp_prefix
     fixed = 0
     for rel in sorted(paths):
         p = root / rel
@@ -140,7 +140,7 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
             new = _redact_text(text)
             if new == text:
                 continue
-            fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=p.name + ".", suffix=".tmp")
+            fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=tmp_prefix(p.name), suffix=".tmp")  # round 116: long names
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(new)

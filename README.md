@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.109: Round 116: queued edit_file calls no longer starve the worker pool. 5,823 tests + 19 integration
+
+- **Bug:** in v0.108, every queued edit of one file waited for its turn on the per-path lock while holding a `to_thread` worker. Squad edits to one hot file could fill the default executor (2 CPUs means 6 workers). Every other off-loop tool, plus the server's `to_thread` work, then waited for the whole queue. Probe (`/workspace/work/editstarve.py`): 24 queued edits of a 7 MB file stalled an unrelated `to_thread` call by 0.43 s.
+- **Fix:**
+  - `t_edit_file` resolves the path in a thread, then waits for the lock on the event loop. It retries `acquire(blocking=False)` with backoff from 1 ms up to 20 ms.
+  - Only the lock holder takes a worker, and the worker releases the lock when it is done.
+  - A caller cancelled before its worker starts marks the attempt abandoned and releases the lock itself. A worker that already started finishes and releases.
+  - Result: worst unrelated latency is 0.01 s, and all 24 edits still apply.
+- **Long names:** secret `fix_runs` temp names now use `safeio.tmp_prefix`. A run log with a 240-byte name was left unredacted (ENAMETOOLONG).
+- **Tests:** `tests/test_round116_edit_queue.py` has 4 tests; 2 fail on v0.108. The 2 cancellation tests guard lock release.
+
 ## v0.108: Round 115: parallel edit_file calls on one file all land. 5,819 tests + 19 integration
 
 - **Bug:** squad agents that edited different lines of one file in parallel each got `edited ... (1 replacement)`. But each rewrote the whole file from its own stale read. In the probe (`/workspace/work/editrace.py`), 40 parallel edits left only 9 to 13 applied, across 3 runs. A `write_file` or shell write that landed between edit_file's read and its write was also silently overwritten.

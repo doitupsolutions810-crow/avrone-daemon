@@ -2,7 +2,7 @@ name: CI
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04    # pinned runner image; see actions/runner-images migration note
     services:
       postgres:
         image: postgres:16
@@ -16,7 +16,7 @@ jobs:
           --health-cmd "pg_isready -U postgres -d avrone_test"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 12    # pinned: ubuntu-latest migrated to Ubuntu 26 on 2026-10-19 (actions/runner-images#14748)
+          --health-retries 12
     strategy:
       matrix: { python: ["3.11", "3.12"] }
     steps:

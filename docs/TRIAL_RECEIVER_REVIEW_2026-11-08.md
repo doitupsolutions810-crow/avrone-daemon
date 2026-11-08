@@ -13,6 +13,12 @@ This review is based on live GitHub repository reads performed on 2026-11-08. No
 - PR #13 branch `integration/postgres-trial-store-2026-11-08`: 14 commits ahead and 6 behind main; adds the PostgreSQL store and service-backed tests on top of the receiver work. Its exact current tip SHA was not exposed by the available branch/compare response.
 - Main was not changed by this review.
 
+## Review-branch CI hygiene patch
+
+A fresh Actions run for this review PR (run `42504592638`) reproduced the same no-match pipeline failure on both Python versions. The actual job logs show the two checkout-hygiene `grep | while` pipelines running under `set -o pipefail` without a no-match guard; both jobs stopped in the install step before pip or pytest.
+
+The review branch now adds `|| true` to those two hygiene pipelines only. The dependency-install and pytest pipelines retain their failure behavior. This is a narrow CI reliability fix, not a change to runtime behavior or security policy. The fix is not considered validated until a new Actions run on the post-fix commit completes.
+
 ## PR #7 CI failure diagnosis
 
 - Workflow run `42317688198`: Python 3.12 failed and Python 3.11 was cancelled before steps; job step lists were null.

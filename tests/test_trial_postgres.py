@@ -301,8 +301,26 @@ def test_postgres_delivery_write_failure_rolls_back_accepted_record():
 
 def test_postgres_unreachable_backend_fails_closed_without_sqlite_fallback():
     from avrone.trial_receiver import TrialStoreUnavailable
-    with pytest.raises(TrialStoreUnavailable):
-        PostgresTrialStore("postgresql://postgres:postgres@127.0.0.1:1/unavailable", SECRET)
+
+    dsn = "postgresql://private-user:private-password@127.0.0.1:1/unavailable"
+    with pytest.raises(TrialStoreUnavailable) as raised:
+        PostgresTrialStore(dsn, SECRET)
+    assert "private-password" not in str(raised.value)
+    assert dsn not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "dsn,secret",
+    [
+        ("https://example.invalid/database", SECRET),
+        ("postgresql://127.0.0.1:5432/db", "too-short"),
+    ],
+)
+def test_postgres_invalid_configuration_fails_before_connection(dsn, secret):
+    from avrone.trial_receiver import TrialStoreConfigError
+
+    with pytest.raises(TrialStoreConfigError):
+        PostgresTrialStore(dsn, secret)
 
 
 def test_postgres_canonical_key_order_is_idempotent_and_receipt_is_field_bound():

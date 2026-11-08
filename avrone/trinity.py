@@ -645,6 +645,8 @@ class TrinityCore:
         data_dir = getattr(self.settings, "data_dir", None)
         if not ns or ns == legacy or legacy == "agent" or data_dir is None:
             return
+        if any(not c.isascii() and c.isalnum() for c in str(getattr(ctx, "role", "") or "")):
+            return  # round 122: its old namespace was shared with every role of the same ASCII part
         done = self.__dict__.setdefault("_legacy_mem_done", set())
         if ns in done or len(done) > 10000:
             return

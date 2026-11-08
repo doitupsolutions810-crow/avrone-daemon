@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.115: Round 122: roles in non-Latin scripts get their own identity. 5,883 tests + 19 integration
+
+- **Bug:** `agentfs.sanitize_agent_id` dropped every non-ASCII character, which caused three problems:
+  - All Chinese, Greek, Cyrillic and Arabic roles (研究员, 代码审查员, Ελεγκτής, Аналитик, محلل) became `agent`. They shared one home dir, one memory namespace (round 120 made memory follow the id) and one agent pack, across runs.
+  - Mixed roles collided on their ASCII part: "数据 Analyst" and "代码 Analyst" were both `analyst`.
+  - "Rédacteur" became `r-dacteur`.
+- **Fix:** a role containing non-ASCII letters, digits or combining marks is NFC-normalized first. It keeps its ASCII part and gets `_u` plus 8 hex digits of SHA-256 over the casefolded role.
+  - "Rédacteur", "RÉDACTEUR" and the NFD spelling all map to one id.
+  - Pure-ASCII roles and symbol decoration (emoji) map exactly as before.
+  - Output is ASCII, at most `MAX_ID_LEN`, and idempotent (`sanitize(sanitize(x)) == sanitize(x)`, so agent packs re-import cleanly).
+  - `_u` is used rather than `-` so the suffix is never mistaken for the `-N` counter suffix.
+- **Legacy carry-over:** round 120's carry-over is skipped for these roles, because their old namespace was shared with every role that had the same ASCII part.
+- **Not migrated:** existing home dirs under `agent` and `analyst` are left in place, since they mixed several roles.
+- **Tests:** `tests/test_round122_unicode_roles.py` has 21 tests; 3 fail on v0.114. The others are guards for ASCII stability, safety and idempotence.
+
 ## v0.114: Round 121: a read-only data volume. 5,862 tests + 19 integration
 
 - **Probe:** `/workspace/work/fullfs.py` with `MODE=ro` makes the workspace and data directories `0555` and their files `0444`. It then runs all mutating tools plus chat and squad.

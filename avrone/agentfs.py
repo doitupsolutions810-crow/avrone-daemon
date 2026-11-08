@@ -71,9 +71,24 @@ def sanitize_agent_id(raw: object) -> str:
 
     Lowercased; runs of anything outside [a-z0-9_-] collapse to '-'; leading/trailing
     '-', '_' and '.' are stripped; capped at MAX_ID_LEN. Empty results become 'agent'.
-    The output never contains '/', '\\', '.' or '..'."""
-    s = _BAD.sub("-", str(raw if raw is not None else "").strip().lower())
-    s = s.strip("-_")[:MAX_ID_LEN].strip("-_")
+    The output never contains '/', '\\', '.' or '..'.
+
+    Round 122: a role with letters or digits outside ASCII ("研究员", "Ελεγκτής", "Rédacteur")
+    keeps its ASCII part and gets "_u" + 8 hex of a hash of the whole role (NFC, casefolded).
+    Every non-Latin role used to become "agent" (one shared home, memory and pack for all of
+    them), and "数据 Analyst" / "代码 Analyst" were both "analyst". Pure-ASCII roles, and symbols
+    such as emoji, map exactly as before. The output is ASCII, so the mapping is idempotent."""
+    text = str(raw if raw is not None else "").strip()
+    if not text.isascii():
+        import unicodedata
+        text = unicodedata.normalize("NFC", text)  # "Re\u0301dacteur" is "Rédacteur"
+    s = _BAD.sub("-", text.lower()).strip("-_")
+    if any(not c.isascii() and (c.isalnum() or unicodedata.category(c).startswith("M")) for c in text):
+        import hashlib
+        key = text.casefold()
+        sfx = "_u" + hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:8]
+        return (s[:MAX_ID_LEN - len(sfx)].strip("-_") or "agent") + sfx
+    s = s[:MAX_ID_LEN].strip("-_")
     return s or "agent"
 
 

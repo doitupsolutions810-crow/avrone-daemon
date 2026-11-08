@@ -28,7 +28,7 @@ jobs:
           }
       - name: Focused Great Scale evidence contract tests
         run: |
-          pytest -q tests/test_greatscale.py tests/test_integration_contract.py tests/test_integration_contract_properties.py tests/test_integration_contract_security_edges.py
+          pytest -q tests/test_greatscale.py tests/test_integration_contract.py tests/test_integration_contract_properties.py tests/test_integration_contract_security_edges.py tests/test_integration_contract_adversarial_20261108.py
       - name: Test avrone
         run: |
           set -o pipefail

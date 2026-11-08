@@ -566,3 +566,20 @@ def test_postgres_pool_snapshot_refuses_corrupted_persisted_evidence():
             )
     with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
         store.pool_snapshot()
+
+
+def test_postgres_pool_snapshot_detects_poolability_metadata_tampering():
+    import psycopg
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    record = _record()
+    store = _store()
+    store.accept(record, _provenance("pool_metadata_original"))
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE trial_records SET poolable=0 WHERE trial_id=%s",
+                (record["trial_id"],),
+            )
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        store.pool_snapshot()

@@ -273,14 +273,14 @@ def test_postgres_delivery_write_failure_rolls_back_accepted_record():
         with conn.cursor() as cur:
             cur.execute(
                 f"""CREATE FUNCTION {function_name}() RETURNS trigger
-                    LANGUAGE plpgsql AS $
+                    LANGUAGE plpgsql AS $avrone$
                     BEGIN
                       IF NEW.trial_id = TG_ARGV[0] THEN
                         RAISE EXCEPTION 'injected delivery write failure';
                       END IF;
                       RETURN NEW;
                     END
-                    $"""
+                    $avrone$"""
             )
             cur.execute(
                 f"""CREATE TRIGGER {trigger_name}

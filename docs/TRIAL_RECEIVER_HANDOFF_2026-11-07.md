@@ -6,7 +6,7 @@
 
 - Current `main` head at inspection: `5d08835329656ab944c1bd4a954c27b90430f2ab` (2026-11-07 15:00:26 UTC; v0.93.0).
 - PR [#7 — Add deterministic cross-system evidence trial identity](https://github.com/doitupsolutions810-crow/avrone-daemon/pull/7):
-  - State: open, draft, not merged; mergeable=false.
+  - State at final refresh: open, draft, not merged; GitHub currently reports mergeable=true. The branch is still 16 commits behind current main, so this is not a substitute for a current-main rebase and CI run.
   - Base at PR metadata read: `8a4d4c...`; head: `5ad87b6f37c62960feb69a2cf7c1b4c6768c482b`.
   - Compared with current main: diverged, 11 commits ahead / 16 behind; merge base is older than current main.
   - Four additive files: `avrone/trial_contract.py`, `schemas/avrone.trial.v1.schema.json`, `tests/test_trial_contract.py`, `docs/TRIAL_ENVELOPE_V1.md`.

@@ -629,6 +629,25 @@ def sign(token: str, method: str, path: str, body: bytes, ts: str | None = None,
 # log (fleet.jsonl has no rotation) and fan out to every dashboard: a flood of 1M junk requests left
 # ~230 MB of identical "bad signature" lines. Above this many per minute they are counted instead,
 # and one fleet.refused.suppressed event per window reports how many and which codes.
+import contextvars as _cv
+
+# round 105: the HTTP gateway verifies small bodies inline on the event loop. There it sets this to
+# 0 (try the nonce lock once, never wait) and re-runs a "busy" request in a thread with the full wait.
+NONCE_LOCK_WAIT: "_cv.ContextVar[float | None]" = _cv.ContextVar("avrone_nonce_lock_wait", default=None)
+
+
+def nonce_lock_wait_s() -> float:
+    """AVRONE_FLEET_NONCE_LOCK_S: deadline for the cross-process nonce lock (default 5 s, 0..60).
+    It is taken under the manager's thread lock, so it is kept much shorter than AVRONE_LOCK_WAIT_S."""
+    try:
+        v = float(os.environ.get("AVRONE_FLEET_NONCE_LOCK_S", "").strip() or 5)
+    except ValueError:
+        return 5.0
+    if v != v or v < 0:
+        return 5.0
+    return min(v, 60.0)
+
+
 UNAUTH_CODES = frozenset({"no_token", "bad_timestamp", "bad_nonce", "bad_signature"})
 UNAUTH_AUDIT_WINDOW_S = 60.0
 
@@ -958,12 +977,18 @@ class FleetManager:
             return
         fd = None
         try:
-            from .safeio import _open_regular  # round 102: never follow a symlink planted at the lock
+            from .safeio import _open_regular, flock_wait  # round 102: never follow a planted symlink
             fd = _open_regular(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-            import fcntl
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            o = NONCE_LOCK_WAIT.get()
+            held = flock_wait(fd, nonce_lock_wait_s() if o is None else o)
         except (OSError, ImportError):  # no flock here: thread lock only, as before
-            pass
+            held = True
+        if not held:
+            # round 104/105: a peer process hung while holding the nonce lock froze every signed
+            # request (and, since this runs under self._lock, register/pick too). Fail CLOSED:
+            # checking without the merge could accept a nonce the peer already saw (replay).
+            os.close(fd)
+            raise GatewayRefused("busy", "replay cache is locked by another process; retry shortly")
         try:
             yield
         finally:
@@ -1128,7 +1153,8 @@ class FleetManager:
         # (self._lock) AND across processes sharing this data dir (two uvicorn workers, a restart
         # overlapping the old process): each used to keep its own cache, so a captured request
         # replayed to the OTHER worker ran twice, and each save overwrote the other's nonces.
-        with self._lock, self._nonce_file_lock():
+        # round 105: cross-process lock first, so a wait for it never holds the manager's lock
+        with self._nonce_file_lock(), self._lock:
             self._merge_disk_nonces(now)
             big = len(self._nonces) > NONCE_JOURNAL_MIN
             if not big or now >= getattr(self, "_next_prune", 0.0) or now < getattr(self, "_next_prune", 0.0) - 2:
@@ -1273,6 +1299,8 @@ class FleetManager:
         try:
             self.verify(method, path, body, headers)
         except GatewayRefused as e:
+            if e.code == "busy" and NONCE_LOCK_WAIT.get() == 0:
+                raise  # the inline try; the caller retries in a thread, which audits the outcome
             if e.code in UNAUTH_CODES:
                 self._audit_unauth(e.code, str(e), kind=kind, path=path)
             else:

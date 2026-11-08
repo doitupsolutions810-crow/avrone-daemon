@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.98: Round 105: the fleet nonce lock never stalls the event loop, and fails closed. 5,744 tests + 19 integration
+
+- **Bug:** `FleetManager.verify()` took a blocking flock on `fleet_nonces.json.lock` while holding the manager's thread lock. `server._gateway` verifies small bodies (under `OFF_LOOP_BODY_BYTES`) inline on the event loop.
+  - On v0.97, a peer process (a second worker, or a restart that overlaps the old one) hung while holding that lock froze the whole event loop forever.
+  - It also pinned `self._lock`, so register and pick stalled too.
+- **Fix:**
+  - **Lock order:** the cross-process lock is taken first, then `self._lock`, so waiting never holds the manager lock.
+  - **Deadline:** the flock waits `AVRONE_FLEET_NONCE_LOCK_S` (default 5 s, range 0 to 60, junk reads as 5).
+  - **Fail closed:** on timeout, verify raises `GatewayRefused("busy")`. It never checks the nonce without merging the peer's cache, which could accept a replay. The nonce isn't recorded, so the same request is accepted on a retry.
+  - **Inline path:** the gateway sets the `fleet.NONCE_LOCK_WAIT` contextvar to 0, so the inline attempt tries the lock once. On busy it reruns `dispatch_gateway` in `to_thread` with the full wait. Only that thread run is audited.
+  - **HTTP:** `busy` maps to 503 with `Retry-After: 2`.
+- **Tests:** `tests/test_round105_nonce_lock.py` has 8 tests.
+  - 6 fail or hang on v0.97: verify hang, manager lock pinned, gateway audit, env helper, and the two gateway loop tests, which hit a 30 s `timeout` because the loop never ran.
+  - 2 pass on both: the nonce isn't recorded when busy, and uncontended verify stays fast.
+
 ## v0.97: Round 104: cross-process flocks have a deadline (AVRONE_LOCK_WAIT_S). 5,736 tests + 19 integration
 
 - **Bug:** memstore, capgate receipts, the bridge journal, task_board and checkpoints all used a blocking `fcntl.flock(LOCK_EX)`. A peer process that hung while holding one of those locks pinned every thread waiting on that file forever. Once the default executor's workers were all stuck, every `to_thread` call on the node stopped.

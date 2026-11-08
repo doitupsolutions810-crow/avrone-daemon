@@ -425,10 +425,21 @@ async def _gateway(request: Request, kind: str) -> dict:
         if len(body) > OFF_LOOP_BODY_BYTES:
             # hashing and parsing a 16 MB body took ~60 ms of event-loop time per request (round 71)
             return await asyncio.to_thread(f.dispatch_gateway, *args)
-        return f.dispatch_gateway(*args)
+        from .fleet import NONCE_LOCK_WAIT
+        tok = NONCE_LOCK_WAIT.set(0.0)  # round 105: never wait for the nonce flock on the loop
+        try:
+            return f.dispatch_gateway(*args)
+        except GatewayRefused as e:
+            if e.code != "busy":
+                raise
+        finally:
+            NONCE_LOCK_WAIT.reset(tok)
+        return await asyncio.to_thread(f.dispatch_gateway, *args)  # lock held elsewhere: wait off-loop
     except GatewayRefused as e:
         if e.code == "bad_body":
             raise HTTPException(400, str(e)) from None
+        if e.code == "busy":  # round 105: the nonce lock timed out; the request was not checked
+            raise HTTPException(503, str(e), headers={"Retry-After": "2"}) from None
         raise HTTPException(401 if e.auth else 403, str(e)) from None
 
 

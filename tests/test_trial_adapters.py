@@ -187,7 +187,10 @@ def test_fleet_api_rejects_duplicate_key_and_deep_json(tmp_path, monkeypatch):
             # byte-only quote scanner and hide deeply nested JSON from its cap.
             payload = _payload()
             payload["events"][0]["record"]["run_id"] = "run-\u0122"
-            payload["events"][0]["record"]["deep"] = [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+            deep_value = 0
+            for _ in range(80):
+                deep_value = [deep_value]
+            payload["events"][0]["record"]["deep"] = deep_value
             utf16 = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-16-le")
             signed = sign(FLEET_TOKEN, "POST", PATH, utf16,
                           ts=str(int(time.time())), nonce="api_nonce_00000009")

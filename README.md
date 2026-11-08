@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.114: Round 121: a read-only data volume. 5,862 tests + 19 integration
+
+- **Probe:** `/workspace/work/fullfs.py` with `MODE=ro` makes the workspace and data directories `0555` and their files `0444`. It then runs all mutating tools plus chat and squad.
+- **Bug 1:** every chat and squad died with `PermissionError: [Errno 13] … '/srv/…/runs/<id>.jsonl'`.
+  - **Fix:** `codex._STORAGE_ERRNOS` now includes EACCES and EPERM, so these are handled like ENOSPC from round 119. The event still reaches subscribers and is counted in `write_errors`.
+  - **Behavior change:** EACCES no longer raises from `emit()`. The round 119 "still raises" test now uses EINVAL.
+- **Bug 2:** `memory_save` answered `memory lock unusable: [Errno 13] … '<host path>/memory.jsonl.lock'`.
+  - **Fix:** it now reports `memory lock unusable (memory.jsonl.lock): Permission denied`.
+- **Bug 3:** `write_file` and `artifact_save` errors named the random temp file (`.f.txt.6u8bd1h0.tmp`).
+  - **Fix:** new `safeio.mkstemp_beside(p)` re-raises the same OSError subclass and errno with `filename=p`. It is used by `safeio.atomic_write`, `tools.atomic_write_bytes` and the `tools_secrets` fix runs.
+- **Also probed:** the full-disk sweep (`RLIMIT_FSIZE`) was clean apart from the raw `[Errno 27]` text in tool errors. Operator report tools show paths by design.
+- **Tests:**
+  - `tests/test_round121_readonly_storage.py` has 6 tests; all 6 fail on v0.113.
+  - `tests/test_round119_disk_full.py` was updated for the EACCES change.
+
 ## v0.113: Round 120: an agent's memory follows its agent id. 5,856 tests + 19 integration
 
 - **Bug:** memory was stored under `memstore.agent_namespace(name)`. The name is the role with every non-alphanumeric dropped and cut to 16 characters. The agent's home dir and agent packs used `agentfs.sanitize_agent_id(role)` instead. This caused three failures:

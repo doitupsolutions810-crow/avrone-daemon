@@ -140,7 +140,8 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
             new = _redact_text(text)
             if new == text:
                 continue
-            fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=tmp_prefix(p.name), suffix=".tmp")  # round 116: long names
+            from .safeio import mkstemp_beside
+            fd, tmp = mkstemp_beside(p)  # round 116: long names; round 121: errors name p
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(new)

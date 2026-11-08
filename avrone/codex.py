@@ -314,7 +314,9 @@ class SubscribersFull(RuntimeError):
 
 # storage failures that must not kill the caller of emit() (round 119)
 _STORAGE_ERRNOS = frozenset(x for x in (getattr(errno, n, None) for n in
-                                        ("ENOSPC", "EDQUOT", "EROFS", "EIO", "EFBIG")) if x is not None)
+                                        ("ENOSPC", "EDQUOT", "EROFS", "EIO", "EFBIG",
+                                         # round 121: a read-only / wrongly-owned data volume
+                                         "EACCES", "EPERM")) if x is not None)
 
 class Codex:
     def __init__(self, data_dir: Path):

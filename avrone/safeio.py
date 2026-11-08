@@ -45,11 +45,23 @@ def tmp_prefix(name: str) -> str:
     return f".{os.fsdecode(cut)}~{hashlib.sha256(raw).hexdigest()[:12]}."
 
 
+def mkstemp_beside(p: Path) -> tuple[int, str]:
+    """mkstemp for a temp file beside `p`. Round 121: when the dir refused it (read-only volume,
+    EACCES, full inode table) the error named the random temp file (".f.txt.6u8bd1h0.tmp"),
+    which the caller never asked about; it now names `p` itself."""
+    try:
+        return tempfile.mkstemp(dir=p.parent, prefix=tmp_prefix(p.name), suffix=".tmp")
+    except OSError as e:
+        if e.errno is None:
+            raise
+        raise type(e)(e.errno, e.strerror or os.strerror(e.errno), str(p)) from None
+
+
 def atomic_write(path: str | os.PathLike, data: str | bytes, *, encoding: str = "utf-8",
                  fsync: bool = False, mode: int | None = None) -> None:
     p = Path(path)
     raw = data.encode(encoding) if isinstance(data, str) else data
-    fd, tmp = tempfile.mkstemp(dir=p.parent, prefix=tmp_prefix(p.name), suffix=".tmp")
+    fd, tmp = mkstemp_beside(p)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(raw)

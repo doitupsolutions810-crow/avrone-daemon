@@ -242,7 +242,9 @@ class MemoryStore:
             try:
                 fh = open_lock(self.lock_path)
             except OSError as e:  # a symlink/FIFO at memory.lock was followed (or blocked)
-                raise MemoryRefused(f"memory lock unusable: {e}") from e
+                # round 121: the message named the lock by its full host path (data dir location)
+                why = e.strerror or type(e).__name__
+                raise MemoryRefused(f"memory lock unusable ({self.lock_path.name}): {why}") from e
             held = False
             try:
                 if fcntl is not None:

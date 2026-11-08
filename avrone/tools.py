@@ -500,7 +500,6 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
     users); a new file gets the normal 0666 & ~umask."""
     import os as _os
     import stat as _stat
-    import tempfile as _tempfile
     try:
         # round 109: lstat, and drop setuid/setgid. p.stat() followed a symlink swapped in after
         # the path was resolved and copied a host file's mode (e.g. a setuid binary's 04755) onto
@@ -514,8 +513,8 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
         um = _os.umask(0)
         _os.umask(um)
         mode = 0o666 & ~um
-    from .safeio import tmp_prefix as _tmp_prefix
-    fd, tmp = _tempfile.mkstemp(dir=p.parent, prefix=_tmp_prefix(p.name), suffix=".tmp")
+    from .safeio import mkstemp_beside as _mkstemp_beside
+    fd, tmp = _mkstemp_beside(p)
     try:
         with _os.fdopen(fd, "wb") as fh:
             fh.write(data)

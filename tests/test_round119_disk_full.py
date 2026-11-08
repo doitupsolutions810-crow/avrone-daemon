@@ -83,15 +83,16 @@ def test_torn_write_then_recovery_keeps_log_parseable(tmp_path, monkeypatch):
 
 
 def test_other_errors_still_raise(tmp_path, monkeypatch):
+    # (round 121 moved EACCES/EPERM into the survivable set: a read-only data volume)
     cx = Codex(tmp_path / "d")
     real_open = os.open
 
     def deny(path, *a, **k):
         if str(path).startswith(str(cx.log_dir)):
-            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+            raise OSError(errno.EINVAL, "Invalid argument", str(path))
         return real_open(path, *a, **k)
     monkeypatch.setattr(os, "open", deny)
-    with pytest.raises(PermissionError):
+    with pytest.raises(OSError):
         cx.emit("r3", "a", "A")
 
 

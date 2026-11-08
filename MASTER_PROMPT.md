@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.113.0)
+# AVRONE MASTER PROMPT (v0.114.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,856 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,862 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 287 test files, offline by default
+├── tests/                  # 288 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,21 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.114: Round 121: a read-only data volume. 5,862 tests + 19 integration
+
+- **Probe:** `/workspace/work/fullfs.py` with `MODE=ro` makes the workspace and data directories `0555` and their files `0444`. It then runs all mutating tools plus chat and squad.
+- **Bug 1:** every chat and squad died with `PermissionError: [Errno 13] … '/srv/…/runs/<id>.jsonl'`.
+  - **Fix:** `codex._STORAGE_ERRNOS` now includes EACCES and EPERM, so these are handled like ENOSPC from round 119. The event still reaches subscribers and is counted in `write_errors`.
+  - **Behavior change:** EACCES no longer raises from `emit()`. The round 119 "still raises" test now uses EINVAL.
+- **Bug 2:** `memory_save` answered `memory lock unusable: [Errno 13] … '<host path>/memory.jsonl.lock'`.
+  - **Fix:** it now reports `memory lock unusable (memory.jsonl.lock): Permission denied`.
+- **Bug 3:** `write_file` and `artifact_save` errors named the random temp file (`.f.txt.6u8bd1h0.tmp`).
+  - **Fix:** new `safeio.mkstemp_beside(p)` re-raises the same OSError subclass and errno with `filename=p`. It is used by `safeio.atomic_write`, `tools.atomic_write_bytes` and the `tools_secrets` fix runs.
+- **Also probed:** the full-disk sweep (`RLIMIT_FSIZE`) was clean apart from the raw `[Errno 27]` text in tool errors. Operator report tools show paths by design.
+- **Tests:**
+  - `tests/test_round121_readonly_storage.py` has 6 tests; all 6 fail on v0.113.
+  - `tests/test_round119_disk_full.py` was updated for the EACCES change.
+
 ## v0.113: Round 120: an agent's memory follows its agent id. 5,856 tests + 19 integration
 
 - **Bug:** memory was stored under `memstore.agent_namespace(name)`. The name is the role with every non-alphanumeric dropped and cut to 16 characters. The agent's home dir and agent packs used `agentfs.sanitize_agent_id(role)` instead. This caused three failures:
@@ -347,20 +362,6 @@ landed and the suite is green. End with what is still open.
 - **Also probed:** the `netoff.py` re-probe with optional arguments found no further network tools that skip `allow_network`.
 - **Tests:** `tests/test_round119_disk_full.py` has 8 tests; 7 fail on v0.111.
 
-## v0.111: Round 118: AVRONE_ALLOW_NETWORK=0 now stops every builtin network tool. 5,841 tests + 19 integration
-
-- **Bug:** with network turned off, 11 builtin tools still reached the network:
-  - netdiag: `dns_lookup`, `tcp_ping`, `traceroute`, `rdap_whois`, `ip_geo`
-  - recon: `tls_inspect`, `http_fingerprint`, `port_scan`, `cert_transparency`, `dns_enum`
-  - `osint_domain`
-
-  None of them checked `allow_network`. Only `fetch`, `http_request`, `web_search` and a few others did. The probe (`/workspace/work/netoff.py`) patches `socket.connect`, `getaddrinfo` and `create_subprocess_exec`. It saw DNS resolution, TCP connects (tcp_ping, port_scan) and HTTPS calls (RDAP, crt.sh, DoH) from a node set to `AVRONE_ALLOW_NETWORK=0`.
-- **Fix:** `tools.NETWORK_TOOLS` lists these tools. `ToolRegistry.call` refuses a builtin in that set before it runs, with the message `ERROR: network access is disabled (AVRONE_ALLOW_NETWORK=0)`.
-  - Every entry point goes through `call`: agents, MCP, fleet and admin.
-  - Tools that gate themselves keep their own message.
-- **Also probed:** a numeric-argument sweep (`/workspace/work/numfuzz.py`, 1,455 calls) tried every tool key with 0, -1, ±inf, NaN, 1e308, 2**63, "1e999", bool and strings. No raw errors, no oversized outputs and no escapes. The only hangs were `tcp_ping` to an unroutable host, which is 4 probes × 5 s by design.
-- **Tests:** `tests/test_round118_network_off.py` has 13 tests; 12 fail on v0.110.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -372,4 +373,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.113.0 checked out: 5,856 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.114.0 checked out: 5,862 passed, 99% coverage. Next: round <N+1> on <angle>."

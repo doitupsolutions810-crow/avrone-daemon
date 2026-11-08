@@ -176,7 +176,7 @@ def test_fleet_api_rejects_duplicate_key_and_deep_json(tmp_path, monkeypatch):
             assert response.status_code == 400
 
             deep = (b'{"from":"node-a","hops":1,"capability":"trials:ingest","events":['
-                    + b"[" * 3000 + b"0" + b"]" * 3000 + b"]}")
+                    + b"[" * 80 + b"0" + b"]" * 80 + b"]}")
             signed = sign(FLEET_TOKEN, "POST", PATH, deep,
                           ts=str(int(time.time())), nonce="api_nonce_00000006")
             response = await client.post(PATH, content=deep,

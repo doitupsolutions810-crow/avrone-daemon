@@ -572,8 +572,34 @@ def _parse_hops(raw: Any) -> int | None:
     return None
 
 
+MAX_STRICT_JSON_DEPTH = 64
+
+
 def strict_json_loads(raw: bytes) -> Any:
-    """Evidence ingress decoder: reject duplicate object keys and non-finite numbers."""
+    """Reject duplicate keys, non-finite numbers, and nesting deeper than the contract cap."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):
+            depth += 1
+            if depth > MAX_STRICT_JSON_DEPTH:
+                raise ValueError("JSON nesting depth exceeded")
+        elif byte in (0x7D, 0x5D):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("unbalanced JSON structure")
+
     def pairs(items):
         result = {}
         for key, value in items:
@@ -586,7 +612,6 @@ def strict_json_loads(raw: bytes) -> Any:
         raise ValueError(f"non-finite JSON number: {value}")
 
     return json.loads(raw or b"{}", object_pairs_hook=pairs, parse_constant=reject_constant)
-
 
 def request_capability(kind: str, payload: dict[str, Any]) -> str:
     if payload.get("capability") not in (None, ""):

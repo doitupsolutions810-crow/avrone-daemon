@@ -89,8 +89,12 @@ def soft_contract(x: float, k: float = 0.5) -> float:
 # ---------------------------------------------------------------- additive evidence channel
 def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
     """Smallest N with 1 - (1 - p)^N >= 1 - alpha. None when p == 0 (nothing to detect)."""
-    if not (0 < alpha < 1) or not (0 <= p <= 1):
-        raise ValueError("need 0 <= p <= 1 and 0 < alpha < 1")
+    if (
+        isinstance(p, bool) or not isinstance(p, (int, float))
+        or isinstance(alpha, bool) or not isinstance(alpha, (int, float))
+        or not (0 <= p <= 1) or not (0 < alpha < 1)
+    ):
+        raise ValueError("need numeric 0 <= p <= 1 and 0 < alpha < 1")
     if p == 0:
         return None
     if p == 1:
@@ -100,9 +104,11 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
 
 def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:
     """Map `failures` out of `runs` independent executions of one check into the Great Scale."""
-    if isinstance(failures, bool) or isinstance(runs, bool):
+    if (
+        isinstance(failures, bool) or not isinstance(failures, int)
+        or isinstance(runs, bool) or not isinstance(runs, int)
+    ):
         raise ValueError("failures and runs must be integers")
-    failures, runs = int(failures), int(runs)
     if not (1 <= runs <= MAX_RUNS) or not (0 <= failures <= runs):
         raise ValueError("need 1 <= runs <= 1e9 and 0 <= failures <= runs")
     p = failures / runs

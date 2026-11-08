@@ -26,6 +26,9 @@ jobs:
             done
             exit 1
           }
+      - name: Focused Great Scale evidence contract tests
+        run: |
+          pytest -q tests/test_greatscale.py tests/test_integration_contract.py tests/test_integration_contract_properties.py tests/test_integration_contract_security_edges.py
       - name: Test avrone
         run: |
           set -o pipefail

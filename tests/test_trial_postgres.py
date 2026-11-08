@@ -545,6 +545,12 @@ def test_postgres_future_schema_version_is_rejected_without_mutating_it():
             with conn.cursor() as cur:
                 cur.execute("SELECT version FROM avrone_trial_schema ORDER BY version")
                 assert cur.fetchall() == [(999,)]
+                # Refusing an unsupported version must not create any of the
+                # trial data tables as a side effect of failed initialization.
+                cur.execute(
+                    "SELECT tablename FROM pg_tables WHERE schemaname=current_schema() ORDER BY tablename"
+                )
+                assert cur.fetchall() == [("avrone_trial_schema",)]
     finally:
         with psycopg.connect(DSN) as conn:
             with conn.cursor() as cur:

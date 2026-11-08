@@ -397,3 +397,62 @@ def test_postgres_nonpoolable_operational_outcomes_are_durable_but_not_in_pool()
     after = store.pool_snapshot()
     assert after["runs"] == before["runs"]
     assert after["failures"] == before["failures"]
+
+
+def test_postgres_partial_batch_failure_recovers_cleanly_on_full_replay():
+    import psycopg
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    first_record, second_record = _record(), _record()
+    token = uuid.uuid4().hex
+    function_name = f"avrone_test_fail_batch_{token}"
+    trigger_name = f"avrone_test_fail_batch_{token}"
+    transport = {
+        key: value for key, value in _provenance("partial_batch_nonce_01").items()
+        if key != "bridge"
+    }
+    events = [
+        {"record": first_record, "bridge": None},
+        {"record": second_record, "bridge": None},
+    ]
+
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""CREATE FUNCTION {function_name}() RETURNS trigger
+                    LANGUAGE plpgsql AS $avrone$
+                    BEGIN
+                      IF NEW.trial_id = TG_ARGV[0] THEN
+                        RAISE EXCEPTION 'injected second-event batch failure';
+                      END IF;
+                      RETURN NEW;
+                    END
+                    $avrone$"""
+            )
+            cur.execute(
+                f"""CREATE TRIGGER {trigger_name}
+                    BEFORE INSERT ON trial_deliveries
+                    FOR EACH ROW EXECUTE FUNCTION {function_name}('{second_record["trial_id"]}')"""
+            )
+
+    try:
+        with pytest.raises(TrialStoreUnavailable):
+            _store().ingest_batch(events, transport)
+        store = _store()
+        first_saved = store.get_record(first_record["trial_id"])
+        second_saved = store.get_record(second_record["trial_id"])
+        assert first_saved is not None
+        assert second_saved is None
+    finally:
+        with psycopg.connect(DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON trial_deliveries")
+                cur.execute(f"DROP FUNCTION IF EXISTS {function_name}()")
+
+    replay = _store().ingest_batch(
+        events, {**transport, "request_nonce": "partial_batch_nonce_02"},
+    )
+    assert [item["status"] for item in replay] == ["duplicate", "accepted"]
+    assert all(verify_trial_receipt(SECRET, item["receipt"]) for item in replay)
+    assert _store().get_record(first_record["trial_id"])["record"] == first_record
+    assert _store().get_record(second_record["trial_id"])["record"] == second_record

@@ -12,7 +12,11 @@ Fleet HMAC signs method, canonical path, timestamp, nonce, and the exact body ha
 The shared fleet token authenticates membership in a shared-secret trust group; it
 does not establish unique per-node cryptographic identity because any token holder
 can assert an allowed node name. Stored provenance labels this accurately as
-\`shared_secret_group_member\`. Strong per-node identity requires a future per-peer
+\`shared_secret_group_member\`. The receiver additionally requires the trial's
+\`node\` to equal the signed sender's node component; a sender cannot submit a
+different node's source record. This is a direct-origin contract, not a relay
+contract. Relaying another node's records requires a separately reviewed signed
+origin-attestation envelope. Strong per-node identity requires a future per-peer
 credential or mTLS contract. The route rejects privileged flags and does not grant
 agent execution, shell, admin, or recon capabilities.
 

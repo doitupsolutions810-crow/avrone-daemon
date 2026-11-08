@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.97: Round 104: cross-process flocks have a deadline (AVRONE_LOCK_WAIT_S). 5,736 tests + 19 integration
+
+- **Bug:** memstore, capgate receipts, the bridge journal, task_board and checkpoints all used a blocking `fcntl.flock(LOCK_EX)`. A peer process that hung while holding one of those locks pinned every thread waiting on that file forever. Once the default executor's workers were all stuck, every `to_thread` call on the node stopped.
+- **Fix:** a new `safeio.flock_wait(fd, timeout)` polls `LOCK_EX|LOCK_NB` with backoff from 2 ms to 100 ms. It returns False on timeout. `AVRONE_LOCK_WAIT_S` sets the deadline: default 30 s, range 0 to 3600, and junk reads as the default.
+- **On timeout:**
+  - **Memory:** raises `MemoryRefused` ("locked by another process").
+  - **Receipts:** raises `OSError` and never appends without the lock, which would fork the chain. `_receipt` logs it.
+  - **Bridge:** the post is kept in memory, since persistence is best effort.
+  - **task_board:** returns `ERROR: task board is locked ...`.
+  - **Checkpoint:** `put` returns False and logs a warning.
+- **Not changed:** `fleet_nonces.json.lock` still blocks, because skipping its merge could reopen a replay window. Its holders are this node's own threads and peers on the same data dir.
+- **Tests:** `tests/test_round104_lock_deadlines.py` has 8 tests.
+  - The lock holder is a second open file description, and each op runs in a thread with a join timeout.
+  - 5 hang on v0.96 (memory, receipts, bridge, board, checkpoint). 2 fail there only because the helper is new. 1 guards the uncontended speed.
+
 ## v0.96: Round 103: run_logs counts and prunes rotated archives. 5,728 tests + 19 integration
 
 - **Bug:** `tools_limits.usage` globbed `*.jsonl` only, so the rotated `<run>.jsonl.N` archives from round 72 were invisible.

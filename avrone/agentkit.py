@@ -555,6 +555,10 @@ _BOARD_LOCKS: dict[str, threading.Lock] = {}
 _BOARD_LOCKS_GUARD = threading.Lock()
 
 
+class TaskBoardBusy(RuntimeError):
+    pass
+
+
 @contextlib.contextmanager
 def _board_locked(p: Path):
     """One writer per board: a thread lock for this process, flock for other nodes on the data dir.
@@ -571,10 +575,12 @@ def _board_locked(p: Path):
         try:
             if fh is not None:
                 try:
-                    import fcntl
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                    from .safeio import flock_wait
+                    held = flock_wait(fh.fileno())
                 except (ImportError, OSError):
-                    pass
+                    held = True
+                if not held:  # round 104: a hung peer used to pin this worker thread forever
+                    raise TaskBoardBusy("task board is locked by another process; try again later")
             yield
         finally:
             if fh is not None:
@@ -584,8 +590,11 @@ def _board_locked(p: Path):
 @off_loop  # round 97: file read-modify-write now under _board_locked
 async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = _board(ctx)
-    with _board_locked(p):
-        return _task_board_locked(ctx, args, p)
+    try:
+        with _board_locked(p):
+            return _task_board_locked(ctx, args, p)
+    except TaskBoardBusy as e:
+        return f"ERROR: {e}"
 
 
 def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> str:

@@ -232,7 +232,9 @@ class Bridge:
             except ImportError:  # pragma: no cover - non-POSIX fallback
                 yield
                 return
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            from .safeio import flock_wait
+            if not flock_wait(lock_file.fileno()):  # round 104: _write keeps the post in memory
+                raise OSError("bridge journal lock is held by another process")
             try:
                 yield
             finally:

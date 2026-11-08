@@ -22,6 +22,7 @@ breaks the run (the checkpoint is best effort).
 """
 from __future__ import annotations
 
+import logging
 import math
 import hashlib
 import json
@@ -33,6 +34,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("avrone.checkpoint")
 
 VERSION = 1
 MAX_BYTES_DEFAULT = 64 * 1024 * 1024
@@ -218,8 +221,11 @@ class _Store:
             # target (anywhere the daemon can write); a FIFO there was flock'ed as if a lock file.
             from .safeio import _open_regular
             fd = _open_regular(str(self.path) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-            import fcntl
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            from .safeio import flock_wait
+            if not flock_wait(fd):  # round 104: a hung peer holding the lock: report a failed save
+                os.close(fd)
+                log.warning("checkpoint %s: lock held by another process; save skipped", self.path.name)
+                return False
         except (OSError, ImportError):
             pass  # no data dir yet / no flock: the save below reports any real error
         try:

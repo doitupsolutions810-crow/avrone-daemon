@@ -228,12 +228,17 @@ class MemoryStore:
                 fh = open_lock(self.lock_path)
             except OSError as e:  # a symlink/FIFO at memory.lock was followed (or blocked)
                 raise MemoryRefused(f"memory lock unusable: {e}") from e
+            held = False
             try:
                 if fcntl is not None:
-                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                    from .safeio import flock_wait, lock_wait_s
+                    if not flock_wait(fh.fileno()):  # round 104: a hung peer no longer pins this thread
+                        raise MemoryRefused(f"memory is locked by another process (waited {lock_wait_s():g} s); "
+                                            "try again later")
+                    held = True
                 yield
             finally:
-                if fcntl is not None:
+                if held:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
                 fh.close()
 

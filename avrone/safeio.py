@@ -95,6 +95,44 @@ def open_append(path: str | os.PathLike, mode: str = "ab"):
     return os.fdopen(fd, mode, encoding="utf-8")
 
 
+def lock_wait_s() -> float:
+    """AVRONE_LOCK_WAIT_S: how long a cross-process flock waits before giving up (default 30 s,
+    0..3600). Junk reads as the default."""
+    try:
+        v = float(os.environ.get("AVRONE_LOCK_WAIT_S", "").strip() or 30)
+    except ValueError:
+        return 30.0
+    if v != v or v < 0:
+        return 30.0
+    return min(v, 3600.0)
+
+
+def flock_wait(fd: int, timeout_s: float | None = None) -> bool:
+    """LOCK_EX with a deadline (round 104). A blocking flock waited forever on a peer process that
+    hung while holding the lock; every to_thread worker that touched the same file then blocked
+    too, and once the default executor's workers were all stuck the whole node stopped. Polls
+    LOCK_EX|LOCK_NB with backoff (2 ms to 100 ms). True when held, False on timeout. Raises
+    OSError for errors other than "busy" (callers already treat those as "no flock here")."""
+    import errno
+    import fcntl
+    import time as _t
+    wait = lock_wait_s() if timeout_s is None else max(0.0, float(timeout_s))
+    deadline = _t.monotonic() + wait
+    delay = 0.002
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError as e:
+            if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                raise
+        left = deadline - _t.monotonic()
+        if left <= 0:
+            return False
+        _t.sleep(min(delay, left))
+        delay = min(delay * 2, 0.1)
+
+
 def open_lock(path: str | os.PathLike):
     """A lock file (created if missing) as a binary r/w file object; regular files only."""
     return os.fdopen(_open_regular(path, os.O_RDWR | os.O_CREAT, 0o666), "r+b")

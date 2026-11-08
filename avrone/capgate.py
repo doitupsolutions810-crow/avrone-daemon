@@ -248,10 +248,12 @@ def _chain_lock(p: Path):
             raise OSError("receipts.jsonl.lock is not a regular file")
         try:
             try:
-                import fcntl
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                from .safeio import flock_wait
+                held = flock_wait(fd)
             except (ImportError, OSError):  # no flock (Windows / odd FS): thread lock only
-                pass
+                held = True
+            if not held:  # round 104: never append unlocked (forks the chain); _receipt logs this
+                raise OSError("receipts.jsonl.lock is held by another process; receipt not written")
             yield
         finally:
             os.close(fd)  # closing releases the flock

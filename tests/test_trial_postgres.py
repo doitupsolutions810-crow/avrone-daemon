@@ -388,10 +388,12 @@ def test_postgres_nonpoolable_operational_outcomes_are_durable_but_not_in_pool()
         attempt_id="attempt-operational-1", outcome="blocked",
         check_config={"backend": "postgres", "profile": "strict"},
     )
+    before = store.pool_snapshot()
     result = store.accept(record, _provenance("operational_pool_exclusion_nonce"))
     assert result["status"] == "operational_outcome_stored"
     assert result["accepted"] is True
     assert result["poolable"] is False
     assert store.get_record(record["trial_id"])["record"] == record
-    snapshot = store.pool_snapshot()
-    assert record["trial_id"] not in {item["trial_id"] for item in snapshot.get("trials", [])}
+    after = store.pool_snapshot()
+    assert after["runs"] == before["runs"]
+    assert after["failures"] == before["failures"]

@@ -14,13 +14,31 @@ from avrone import tools_limits as tl
 def test_usage_skips_unstatable(tmp_path, monkeypatch):
     (tmp_path / "a.jsonl").write_text("x")
     (tmp_path / "b.jsonl").write_text("yy")
-    real = Path.is_file
+    import os as _os
+    real = _os.scandir
 
-    def flaky(self):
-        if self.name == "a.jsonl":
-            raise OSError("eio")
-        return real(self)
-    monkeypatch.setattr(Path, "is_file", flaky)
+    class _E:  # round 103: usage() lstats through scandir entries now
+        def __init__(self, e):
+            self._e, self.name, self.path = e, e.name, e.path
+
+        def stat(self, follow_symlinks=True):
+            if self.name == "a.jsonl":
+                raise OSError("eio")
+            return self._e.stat(follow_symlinks=follow_symlinks)
+
+    class _It:
+        def __init__(self, d):
+            self._it = real(d)
+
+        def __enter__(self):
+            return self
+
+        def __iter__(self):
+            return (_E(e) for e in self._it)
+
+        def __exit__(self, *a):
+            self._it.close()
+    monkeypatch.setattr(tl.os, "scandir", _It)
     u = tl.usage(tmp_path)
     assert u["count"] == 1 and u["bytes"] == 2
 

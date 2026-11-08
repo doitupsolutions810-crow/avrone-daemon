@@ -21,6 +21,8 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import stat
 import os
 import time
 from pathlib import Path
@@ -99,33 +101,96 @@ def _runs_dir(ctx: "AgentContext") -> Path | None:
     return Path(dd) / "runs" if dd is not None else None
 
 
+_ARCHIVE_SUFFIX = re.compile(r"\.jsonl\.([1-9][0-9]{0,5})")
+USAGE_SCAN_MAX = 500_000  # entries looked at per call; past it the report says so
+
+
 def usage(runs: Path) -> dict[str, Any]:
-    files = []
-    for p in runs.glob("*.jsonl") if runs.is_dir() else []:
-        try:
-            if p.is_file() and not p.is_symlink():
-                st = p.stat()
-                files.append((st.st_mtime, st.st_size, p))
-        except OSError:
-            continue
+    """Run logs grouped by run: (mtime, bytes, active path, [files]) newest first.
+
+    Round 103: rotated archives (<run>.jsonl.N, round 72) were not counted, so run_logs reported a
+    fraction of the real disk use, and prune deleted only the active file and left every archive
+    behind (an orphaned archive was never freed). One scandir + lstat per entry, symlinks and
+    non-regular files ignored."""
+    groups: dict[str, list] = {}
+    scanned = 0
+    truncated = False
+    try:
+        it = os.scandir(runs)
+    except OSError:
+        return {"files": [], "count": 0, "bytes": 0, "archives": 0, "orphans": 0, "truncated": False}
+    with it:
+        for e in it:
+            scanned += 1
+            if scanned > USAGE_SCAN_MAX:
+                truncated = True
+                break
+            name = e.name
+            if name.endswith(".jsonl"):
+                stem, active = name[:-6], True
+            else:
+                m = _ARCHIVE_SUFFIX.search(name)
+                if m is None or m.end() != len(name):
+                    continue
+                stem, active = name[:m.start()], False
+            if not stem:
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            g = groups.setdefault(stem, [0.0, 0, False, []])
+            g[0] = max(g[0], st.st_mtime)
+            g[1] += st.st_size
+            g[2] = g[2] or active
+            g[3].append((Path(e.path), st.st_mtime_ns, st.st_size))
+    files = [(g[0], g[1], runs / f"{stem}.jsonl", g[3], g[2]) for stem, g in groups.items()]
     files.sort(key=lambda x: x[0], reverse=True)  # newest first
-    return {"files": files, "count": len(files), "bytes": sum(f[1] for f in files)}
+    return {"files": files, "count": len(files), "bytes": sum(f[1] for f in files),
+            "archives": sum(1 for f in files for x in f[3] if not x[0].name.endswith(".jsonl")),
+            "orphans": sum(1 for f in files if not f[4]), "truncated": truncated}
+
+
+def _unlink_if_same(p: Path, mtime_ns: int, size: int) -> bool:
+    """Unlink only if the file is still the one usage() saw: a run that appended (or a codex
+    rotation that renamed onto it) since the scan is left alone."""
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or st.st_mtime_ns != mtime_ns or st.st_size != size:
+        return False
+    try:
+        p.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def prune(runs: Path, older_than_days: int, keep: int, active: set[str], now: float | None = None) -> dict:
     u = usage(runs)
     cutoff = (now or time.time()) - older_than_days * DAY
     removed = freed = 0
-    for i, (mtime, size, p) in enumerate(u["files"]):
+    for i, f in enumerate(u["files"]):
+        mtime, _size, p, parts = f[0], f[1], f[2], f[3]
         if i < keep or mtime >= cutoff or p.stem in active:
             continue
-        try:
-            p.unlink()
-            removed += 1
-            freed += size
-        except OSError:
-            continue
+        gone = 0
+        # oldest archive first, active log last: a crash part-way never leaves a gap in the
+        # newest-first archive chain that log_chain() walks
+        for path, mns, sz in sorted(parts, key=lambda x: -_archive_no(x[0])):
+            if _unlink_if_same(path, mns, sz):
+                freed += sz
+                gone += 1
+        removed += 1 if gone else 0
     return {"removed": removed, "freed": freed}
+
+
+def _archive_no(p: Path) -> int:
+    m = _ARCHIVE_SUFFIX.search(p.name)
+    return int(m.group(1)) if m and m.end() == len(p.name) else 0
 
 
 def _int(v: Any, default: int, lo: int) -> int | None:
@@ -153,7 +218,14 @@ async def t_run_logs(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "run_logs: no run logs yet"
     now = time.time()
     newest, oldest = u["files"][0][0], u["files"][-1][0]
-    head = (f"run_logs: {u['count']} run log(s), {_mb(u['bytes'])}; newest {int((now - newest) // DAY)}d ago, "
+    extra = ""
+    if u.get("archives"):
+        extra += f" (incl. {u['archives']} rotated archive file(s))"
+    if u.get("orphans"):
+        extra += f", {u['orphans']} run(s) with archives only"
+    if u.get("truncated"):
+        extra += f", listing capped at {USAGE_SCAN_MAX} entries"
+    head = (f"run_logs: {u['count']} run log(s), {_mb(u['bytes'])}{extra}; newest {int((now - newest) // DAY)}d ago, "
             f"oldest {int((now - oldest) // DAY)}d ago")
     if args.get("prune") is not True:
         stale = sum(1 for i, f in enumerate(u["files"]) if i >= keep and f[0] < now - days * DAY)

@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.96: Round 103: run_logs counts and prunes rotated archives. 5,728 tests + 19 integration
+
+- **Bug:** `tools_limits.usage` globbed `*.jsonl` only, so the rotated `<run>.jsonl.N` archives from round 72 were invisible.
+  - Probe: 15 runs with two 10 KB archives each reported 3,000 bytes when 353,000 were on disk.
+  - `prune` freed 1,000 bytes and left 10 archives behind. A run with only archives left (its active log gone) could never be freed.
+- **Fix: grouping.** `usage` is now one `os.scandir` with an lstat per entry. It groups each run's active log and archives together and ignores symlinks, non-regular files and junk names (`.jsonl.0`, `.jsonl.01`, `.jsonl.torn`). Scans are capped at `USAGE_SCAN_MAX` (500k entries).
+- **Fix: prune.** `prune` deletes a whole run, oldest archive first and the active log last, so a crash part-way never leaves a gap in the chain `log_chain` walks. Archive-only runs are freed too.
+- **Fix: append race.** `_unlink_if_same` re-lstats each file before unlinking it. A log that a resumed run appended to after the scan is kept.
+- **Report:** `run_logs` now says how many archive files it counted, how many runs have archives only, and when the listing was capped.
+- **Tests:** `tests/test_round103_run_logs_archives.py` has 9 tests.
+  - 7 fail on v0.95 on behavior: size, prune, orphans, the active-run guard, the append race, junk names, and the tool report.
+  - 2 fail only on the new API (`archives` key, `_unlink_if_same`).
+  - `test_cov15_a.py::test_usage_skips_unstatable` now patches `os.scandir` entries.
+
 ## v0.95: Round 102: lock files never follow symlinks, and codex_search uses the reused run scan. 5,719 tests + 19 integration
 
 - **Checkpoint `<file>.lock` and `fleet_nonces.json.lock`:** these were opened with `os.open(O_RDWR|O_CREAT)` and no `O_NOFOLLOW`. A symlink planted there created its target anywhere the daemon could write, and a FIFO there was flock'ed as if it were a lock file.

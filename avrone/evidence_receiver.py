@@ -15,6 +15,7 @@ from typing import Any
 import anyio
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 
 from .integration_contract import verify_evidence_event
 
@@ -199,11 +200,14 @@ async def ingest_evidence(request: Request):
         if int(content_length) > MAX_BODY:
             raise HTTPException(413, "evidence event too large")
     chunks, size = [], 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > MAX_BODY:
-            raise HTTPException(413, "evidence event too large")
-        chunks.append(chunk)
+    try:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_BODY:
+                raise HTTPException(413, "evidence event too large")
+            chunks.append(chunk)
+    except ClientDisconnect:
+        raise HTTPException(400, "incomplete evidence request body")
     raw = b"".join(chunks)
     if content_length and int(content_length) != size:
         raise HTTPException(400, "content length does not match received body")

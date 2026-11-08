@@ -538,6 +538,116 @@ async def fleet_jobs(job_id: str | None = None, x_admin_token: str | None = Head
     return await f.queue.stats()
 
 
+
+TRIAL_BODY_MAX_BYTES = 256 * 1024
+
+
+async def _trial_gateway(request: Request) -> tuple[dict, dict[str, Any]]:
+    """Bounded strict-JSON ingress through the existing Fleet HMAC gateway."""
+    import hashlib
+    from .fleet import GatewayRefused, sender_node
+
+    f = _fleet()
+    content_types = request.headers.getlist("content-type")
+    if len(content_types) != 1 or content_types[0].split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "trial content type must be one application/json header")
+    lengths = request.headers.getlist("content-length")
+    if len(lengths) > 1:
+        raise HTTPException(400, "ambiguous content length")
+    declared = None
+    if lengths:
+        value = lengths[0]
+        if not value.isascii() or not value.isdecimal() or len(value) > 12:
+            raise HTTPException(400, "invalid content length")
+        declared = int(value)
+        if declared > TRIAL_BODY_MAX_BYTES:
+            raise HTTPException(413, "trial batch too large")
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > TRIAL_BODY_MAX_BYTES:
+            raise HTTPException(413, "trial batch too large")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    if declared is not None and declared != size:
+        raise HTTPException(400, "content length does not match received body")
+    if request.headers.getlist("x-avrone-privileged"):
+        raise HTTPException(403, "unsigned privileged headers are never accepted")
+    auth_headers = {}
+    for name in ("x-avrone-ts", "x-avrone-nonce", "x-avrone-sig"):
+        values = request.headers.getlist(name)
+        if len(values) != 1:
+            raise HTTPException(401, "missing or duplicate Fleet authentication header")
+        auth_headers[name] = values[0]
+    try:
+        payload = f.dispatch_gateway(
+            "trial", request.method, request.url.path, raw, auth_headers, True
+        )
+    except GatewayRefused as exc:
+        if exc.code == "bad_body":
+            raise HTTPException(400, str(exc)) from None
+        raise HTTPException(401 if exc.auth else 403, str(exc)) from None
+    sender = sender_node(payload.get("from"))
+    if not f.allow or sender not in f.allow:
+        refused = f._refuse(
+            "sender_not_allowed",
+            "trial ingest requires an explicit sender in AVRONE_FLEET_ALLOW",
+            kind="trial", sender=sender or None,
+        )
+        raise HTTPException(403, str(refused)) from None
+    if payload.get("privileged", False) is not False:
+        raise HTTPException(403, "trial ingest never accepts privileged requests")
+    transport = {
+        "authenticated_sender": sender,
+        "sender_claim": payload.get("from"),
+        "auth_method": "fleet_hmac_shared_token_allowlist",
+        "auth_assurance": "shared_secret_group_member",
+        "request_nonce": auth_headers["x-avrone-nonce"],
+        "request_timestamp": auth_headers["x-avrone-ts"],
+        "request_body_sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return payload, transport
+
+
+@app.post("/api/fleet/trials")
+async def fleet_trials(request: Request):
+    """Receive immutable trial records over Fleet HMAC with a dedicated ingest capability."""
+    import sqlite3
+    from fastapi.responses import JSONResponse
+    from .trial_receiver import TrialStore, TrialStoreConfigError, MAX_BATCH_EVENTS
+
+    payload, transport = await _trial_gateway(request)
+    if set(payload) != {"from", "hops", "capability", "events"}:
+        raise HTTPException(400, "trial batch fields do not match the route contract")
+    if payload.get("capability") != "trials:ingest":
+        raise HTTPException(403, "trial ingest capability is required")
+    events = payload.get("events")
+    if not isinstance(events, list) or not 1 <= len(events) <= MAX_BATCH_EVENTS:
+        raise HTTPException(422, f"events must contain 1..{MAX_BATCH_EVENTS} items")
+    try:
+        store = TrialStore.from_env(fleet_token=_fleet().token)
+    except TrialStoreConfigError as exc:
+        raise HTTPException(503, str(exc)) from None
+    except (sqlite3.Error, OSError):
+        raise HTTPException(503, "trial storage unavailable") from None
+    if _fleet().prev_token and hmac.compare_digest(store.receipt_secret, _fleet().prev_token):
+        raise HTTPException(503, "receipt secret must be separate from all Fleet tokens")
+    try:
+        results = await asyncio.to_thread(store.ingest_batch, events, transport)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)[:300]) from None
+    except (sqlite3.Error, OSError):
+        raise HTTPException(503, "trial storage unavailable") from None
+    conflict = any(result["status"] == "conflict_quarantined" for result in results)
+    all_duplicate = all(result["duplicate"] for result in results)
+    overall = "conflict_quarantined" if conflict else "duplicate" if all_duplicate else "stored"
+    return JSONResponse(
+        {"accepted": not conflict, "status": overall, "results": results},
+        status_code=409 if conflict else 200 if all_duplicate else 201,
+    )
+
+
 @app.post("/api/fleet/memory")
 async def fleet_memory(request: Request):
     """Inbound memory sync from a child node: same signed gateway as run/message (kind "memory")."""

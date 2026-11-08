@@ -213,7 +213,7 @@ SPAWN_MODES = ("squad", "chat", "deep")
 PRIVILEGED_CAPABILITIES = {"priv:shell", "priv:admin"}
 PRIVILEGED_HEADER = "x-avrone-privileged"
 # non-spawn capabilities, kept apart from the (minimal) spawn/message table above
-SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}}
+SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}, "trial": {"trials:ingest"}}
 # netsquad: a squad subtask placed on this node (runs as a sub-squad/chat here, may recurse further down)
 NET_CAPABILITIES: dict[str, set[str]] = {"run": {"squad:net"}}
 NETSQUAD_CAP = "squad:net"
@@ -570,6 +570,22 @@ def _parse_hops(raw: Any) -> int | None:
     if isinstance(raw, str) and re.fullmatch(r"-?[0-9]{1,6}", raw):
         return int(raw)
     return None
+
+
+def strict_json_loads(raw: bytes) -> Any:
+    """Evidence ingress decoder: reject duplicate object keys and non-finite numbers."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError(f"non-finite JSON number: {value}")
+
+    return json.loads(raw or b"{}", object_pairs_hook=pairs, parse_constant=reject_constant)
 
 
 def request_capability(kind: str, payload: dict[str, Any]) -> str:
@@ -1265,10 +1281,10 @@ class FleetManager:
                                           f"AVRONE_FLEET_PRIVILEGED_MAX_HOPS ({hops} > {self.privileged_max_hops})", **ctx)
 
     def dispatch_gateway(self, kind: str, method: str, path: str, body: bytes,
-                         headers: dict[str, str]) -> dict[str, Any]:
-        """The single vetted inbound path for remote spawns/messages. Enforces, in order:
+                         headers: dict[str, str], strict_json: bool = False) -> dict[str, Any]:
+        """The single vetted inbound path for remote requests. Enforces, in order:
         token, HMAC, timestamp window, nonce, sender allowlist, hops, capability.
-        Returns the parsed payload; raises GatewayRefused (audited as `fleet.refused`)."""
+        strict_json enables duplicate-key/non-finite rejection for evidence ingress."""
         try:
             self.verify(method, path, body, headers)
         except GatewayRefused as e:
@@ -1282,9 +1298,10 @@ class FleetManager:
             self._audit("fleet.privileged.refused", code="privileged_unsigned", reason=msg, kind=kind)
             raise self._refuse("privileged_unsigned", msg, kind=kind, privileged=True)
         try:
-            payload = json.loads(body or b"{}")
-        except (ValueError, RecursionError):  # RecursionError: absurdly nested JSON (was a 500)
-            raise self._refuse("bad_body", "body must be JSON", kind=kind) from None
+            payload = strict_json_loads(body) if strict_json else json.loads(body or b"{}")
+        except (ValueError, RecursionError):
+            message = "body must be strict JSON" if strict_json else "body must be JSON"
+            raise self._refuse("bad_body", message, kind=kind) from None
         if not isinstance(payload, dict):
             raise self._refuse("bad_body", "body must be a JSON object", kind=kind)
         decision = self.check_policy(kind, payload)

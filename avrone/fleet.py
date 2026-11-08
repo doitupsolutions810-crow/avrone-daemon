@@ -910,7 +910,10 @@ class FleetManager:
                 continue
             if self.node_state(n) in EXCLUDED_STATES:
                 continue
-            if _finite(n.get("cooldown_until"), 0.0) > time.time():
+            cd, now_ = _finite(n.get("cooldown_until"), 0.0), time.time()
+            # round 112: a cooldown more than two heartbeats ahead can only come from a clock
+            # stepped back (or a hand edit); it used to keep a healthy peer out of picks for that long
+            if now_ < cd <= now_ + 2 * self.heartbeat_s + 1:
                 continue  # just failed to connect: skip it until the cooldown ends or it re-registers
             cands.append(n)
         cands.sort(key=lambda n: (-health_score(n), node_load(n), str(n.get("node_id"))))

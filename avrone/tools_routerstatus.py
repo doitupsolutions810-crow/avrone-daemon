@@ -90,7 +90,7 @@ def route_of(base_url: str) -> str:
 
 def circuit_state(up: Any, threshold: int, now: float | None = None) -> tuple[str, float]:
     """(closed|open|half-open, cooldown seconds remaining) from Upstream's real breaker fields."""
-    now = time.time() if now is None else now
+    now = time.monotonic() if now is None else now  # round 112: the breaker runs on monotonic time
     open_until = _num(getattr(up, "open_until", 0.0)) or 0.0
     fails = _num(getattr(up, "fails", 0)) or 0
     if open_until > now:
@@ -116,7 +116,7 @@ def router_status(ctx: "AgentContext") -> dict[str, Any]:
     mode = str(getattr(s, "llm_mode", "live") or "live")
     rep.update(gateway="on", mode=_label(mode, secrets, 16), threshold=threshold,
                cooldown=cooldown if cooldown is not None else 30.0)
-    now = time.time()
+    now = time.monotonic()
     rows = []
     for i, u in enumerate(ups):
         state, remaining = circuit_state(u, threshold, now)

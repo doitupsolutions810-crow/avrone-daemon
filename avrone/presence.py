@@ -56,7 +56,7 @@ def _host_interfaces() -> list[dict[str, Any]]:
 
 async def environment(core: "TrinityCore", ttl: float = 60) -> dict[str, Any]:
     cached = _CACHE.get(id(core))
-    if cached and time.time() - cached[0] < ttl:
+    if cached and 0 <= time.monotonic() - cached[0] < ttl:  # round 112: monotonic (clock steps)
         return cached[1]
     r = core.runner
     container: dict[str, Any] | None = None
@@ -80,7 +80,7 @@ async def environment(core: "TrinityCore", ttl: float = 60) -> dict[str, Any]:
                      "model": getattr(core.settings, "llm_model", None),
                      "provider_url": getattr(core.settings, "llm_base_url", None)},
     }
-    _CACHE[id(core)] = (time.time(), env)
+    _CACHE[id(core)] = (time.monotonic(), env)
     return env
 
 

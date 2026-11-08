@@ -69,7 +69,9 @@ class Upstream:
     errors: int = 0
 
     def healthy(self) -> bool:
-        return time.time() >= self.open_until
+        # round 112: monotonic. With time.time(), a wall clock stepped back by an hour (NTP fix,
+        # VM resume) kept an opened breaker open for that hour plus the cooldown
+        return time.monotonic() >= self.open_until
 
     def record(self, ok: bool, threshold: int, cooldown: float) -> None:
         self.calls += 1
@@ -80,12 +82,12 @@ class Upstream:
             self.errors += 1
             self.fails += 1
             if self.fails >= threshold:
-                self.open_until = time.time() + cooldown
+                self.open_until = time.monotonic() + cooldown
 
     def status(self) -> dict[str, Any]:
         return {"provider": self.provider, "model": self.model, "state": "open" if not self.healthy() else "closed",
                 "fails": self.fails, "calls": self.calls, "errors": self.errors,
-                "reopen_in": round(max(0.0, self.open_until - time.time()), 1)}
+                "reopen_in": round(max(0.0, self.open_until - time.monotonic()), 1)}
 
 
 def parse_upstreams(settings: Any, env: dict[str, str] | None = None) -> list[Upstream]:

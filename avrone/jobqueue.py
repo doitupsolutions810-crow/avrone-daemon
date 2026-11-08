@@ -26,6 +26,7 @@ log = logging.getLogger("avrone.jobqueue")
 RESULT_MAX = 100000
 ERROR_MAX = 4000
 PRIORITY_MAX = 2**62
+CLOCK_SLACK_S = 5.0  # round 112: `updated` this far ahead of now means the clock stepped back
 EXTEND_MAX_S = 7 * 86400  # one heartbeat can never park a job for longer than this
 # Retention (round 65). Finished jobs (done/dead, each up to RESULT_MAX of result) were never
 # deleted: the file only grew. Unfinished jobs had no cap: an agent in a loop could queue without
@@ -235,6 +236,14 @@ class JobQueue:
     async def claim(self) -> dict[str, Any] | None:
         def _claim() -> Any:
             now = time.time()
+            # round 112: rebase leases written under a clock that has since stepped back. A job
+            # whose `updated` is in the future got its lease_until from that clock too: a dead
+            # worker's job stayed "running" (and a retry backoff stayed parked) for the whole step,
+            # up to EXTEND_MAX_S. Keep the lease time it had left, measured from now.
+            self._db.execute(
+                "UPDATE jobs SET lease_until=CASE WHEN lease_until>0 THEN ?+MAX(0,MIN(lease_until-updated,?)) "
+                "ELSE 0 END, updated=? WHERE status IN ('queued','running') AND updated>?",
+                (now - 0.001, EXTEND_MAX_S, now, now + CLOCK_SLACK_S))  # -1 ms: no time left = expired now
             # A job whose lease ran out after its LAST attempt crashed its worker every time
             # (a poison job): it used to be re-claimed forever. It goes dead instead.
             self._db.execute(

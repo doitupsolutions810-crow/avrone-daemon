@@ -55,7 +55,7 @@ def test_gateway_directly_on_core_and_real_llm(env):
 
 
 def test_chain_and_states(env):
-    now = time.time()
+    now = time.monotonic()  # round 112: breaker deadlines are monotonic
     a, b, c = env.gw.upstreams
     b.fails, b.open_until = 5, now + 20  # open
     c.fails, c.open_until = 3, now - 1   # cooldown over -> half-open

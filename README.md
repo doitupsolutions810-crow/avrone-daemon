@@ -81,6 +81,22 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.105: Round 112: a wall clock stepped backwards never strands state. 5,798 tests + 19 integration
+
+- **Edge:** the wall clock steps backwards, as after an NTP correction, a VM resume or a hand-set date. Durations measured with `time.time()` then run long by the size of the step.
+- **Bugs found:**
+  - **Gateway circuit breaker:** `open_until` was a wall-clock time. After a step back of one hour, an opened breaker stayed open for that hour plus the cooldown, so the upstream was unusable.
+  - **`presence.environment` cache:** the age went negative, so the cached environment was served until the clock caught up.
+  - **Fleet `cooldown_until`:** a value written before the step kept a healthy peer out of `select_nodes`.
+  - **Job queue:** leases and retry backoffs are stored as wall-clock times. After a step back, a dead worker's job stayed `running` for the whole step, up to `EXTEND_MAX_S` (7 days).
+- **Fix:**
+  - The breaker and `router_status` use `time.monotonic()`, and so does the presence cache.
+  - `select_nodes` ignores a cooldown more than two heartbeats ahead.
+  - `JobQueue.claim` rebases any queued or running row whose `updated` is more than `CLOCK_SLACK_S` (5 s) in the future. It keeps the lease time that row had left, measured from now.
+  - Fleet `status_of` and nonce expiry already handled clock steps.
+- **Also checked, clean:** tool-supplied regexes. `search_files` validates the pattern for `re.error`, `RecursionError` and `OverflowError`, and runs the scan in a child process with a deadline.
+- **Tests:** `tests/test_round112_clock_steps.py` has 7 tests; 5 fail on v0.104. `test_tool_routerstatus` now sets breaker times with `time.monotonic()`.
+
 ## v0.104: Round 111: deeply nested JSON is bad JSON everywhere, never a RecursionError. 5,791 tests + 19 integration
 
 - **Sweep:** an AST scan (`/workspace/work/recscan.py`) listed every `json.loads`, `raw_decode`, `ast` and `copy` call whose `try` block catches neither `RecursionError` nor `Exception`. Past the recursion limit, `json.loads` and `raw_decode` raise `RecursionError`, which is not a `ValueError`.

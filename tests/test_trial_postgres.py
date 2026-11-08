@@ -35,6 +35,13 @@ def _provenance(nonce: str) -> dict:
     }
 
 
+
+
+def _worker_initialize(dsn: str) -> bool:
+    store = PostgresTrialStore(dsn, SECRET)
+    return store.counts()["records"] >= 0
+
+
 def _worker_accept(args: tuple[str, dict, str]) -> dict:
     dsn, record, nonce = args
     store = PostgresTrialStore(dsn, SECRET)
@@ -347,3 +354,44 @@ def test_postgres_canonical_key_order_is_idempotent_and_receipt_is_field_bound()
     tampered = copy.deepcopy(second["receipt"])
     tampered["signature"] = "0" * 64
     assert not verify_trial_receipt(SECRET, tampered)
+
+
+def test_postgres_parallel_schema_initializers_all_complete():
+    with ProcessPoolExecutor(max_workers=8, mp_context=get_context("spawn")) as pool:
+        results = list(pool.map(_worker_initialize, [DSN] * 16))
+    assert results == [True] * 16
+
+
+def test_postgres_advisory_migration_lock_contention_fails_bounded_and_redacted():
+    import psycopg
+    from concurrent.futures import ThreadPoolExecutor
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    with psycopg.connect(DSN) as blocker:
+        with blocker.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (PostgresTrialStore.MIGRATION_LOCK,))
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(PostgresTrialStore, DSN, SECRET)
+            with pytest.raises(TrialStoreUnavailable) as raised:
+                future.result(timeout=9)
+            assert DSN not in str(raised.value)
+
+
+def test_postgres_nonpoolable_operational_outcomes_are_durable_but_not_in_pool():
+    from avrone.trial_contract import make_trial_outcome
+
+    store = _store()
+    record = make_trial_outcome(
+        system="avrone", node="pg-test-node",
+        run_id="pg-operational-" + uuid.uuid4().hex,
+        check_id="shared-store-operational", check_version="1",
+        attempt_id="attempt-operational-1", outcome="blocked",
+        check_config={"backend": "postgres", "profile": "strict"},
+    )
+    result = store.accept(record, _provenance("operational_pool_exclusion_nonce"))
+    assert result["status"] == "operational_outcome_stored"
+    assert result["accepted"] is True
+    assert result["poolable"] is False
+    assert store.get_record(record["trial_id"])["record"] == record
+    snapshot = store.pool_snapshot()
+    assert record["trial_id"] not in {item["trial_id"] for item in snapshot.get("trials", [])}

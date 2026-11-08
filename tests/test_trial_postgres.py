@@ -192,6 +192,76 @@ def test_postgres_batch_retry_and_nonpass_exclusion():
     assert store.pool_snapshot()["runs"] == before_runs
 
 
+def test_postgres_repeated_conflict_is_quarantined_once_but_delivery_is_audited_each_time():
+    accepted = _record(failed=False)
+    conflict = dict(accepted)
+    conflict["failed"] = True
+    store = _store()
+    first = store.accept(accepted, _provenance("repeat_conflict_accept_01"))
+    assert first["status"] == "accepted"
+
+    one = store.accept(conflict, _provenance("repeat_conflict_delivery_01"))
+    two = store.accept(conflict, _provenance("repeat_conflict_delivery_02"))
+    assert one["status"] == two["status"] == "conflict_quarantined"
+    assert one["quarantine_id"] == two["quarantine_id"]
+    assert store.get_record(accepted["trial_id"])["record"] == accepted
+    counts = store.counts()
+    assert counts["records"] >= 1
+    assert counts["quarantine"] >= 1
+
+
+def test_postgres_invalid_input_never_creates_a_delivery_or_record():
+    store = _store()
+    before = store.counts()
+    record = _record()
+    invalid = _provenance("invalid_sender_nonce_01")
+    invalid["authenticated_sender"] = "not valid!"
+    with pytest.raises(ValueError):
+        store.accept(record, invalid)
+    assert store.get_record(record["trial_id"]) is None
+    after = store.counts()
+    assert after == before
+
+
+def test_postgres_delivery_write_failure_rolls_back_accepted_record():
+    import psycopg
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    record = _record()
+    token = uuid.uuid4().hex
+    function_name = f"avrone_test_fail_delivery_{token}"
+    trigger_name = f"avrone_test_fail_delivery_{token}"
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""CREATE FUNCTION {function_name}() RETURNS trigger
+                    LANGUAGE plpgsql AS $
+                    BEGIN
+                      IF NEW.trial_id = TG_ARGV[0] THEN
+                        RAISE EXCEPTION 'injected delivery write failure';
+                      END IF;
+                      RETURN NEW;
+                    END
+                    $"""
+            )
+            cur.execute(
+                f"""CREATE TRIGGER {trigger_name}
+                    BEFORE INSERT ON trial_deliveries
+                    FOR EACH ROW EXECUTE FUNCTION {function_name}(%s)""",
+                (record["trial_id"],),
+            )
+
+    try:
+        with pytest.raises(TrialStoreUnavailable):
+            _store().accept(record, _provenance("atomic_delivery_fail_nonce"))
+        assert _store().get_record(record["trial_id"]) is None
+    finally:
+        with psycopg.connect(DSN) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"DROP TRIGGER IF EXISTS {trigger_name} ON trial_deliveries")
+                cur.execute(f"DROP FUNCTION IF EXISTS {function_name}()")
+
+
 def test_postgres_unreachable_backend_fails_closed_without_sqlite_fallback():
     from avrone.trial_receiver import TrialStoreUnavailable
     with pytest.raises(TrialStoreUnavailable):

@@ -47,6 +47,26 @@ disconnected receiver must return an error; the sender must retry. A retry after
 an ambiguous commit is safe because identity uniqueness and receipts live in
 the shared database.
 
+## Adversarial verification coverage
+
+The PostgreSQL CI lane exercises the following boundaries against a real
+PostgreSQL service:
+
+- Stable signed receipt across store reconstruction/restart.
+- Sixteen independent processes racing to accept one identity.
+- Sixteen independent processes racing with two conflicting payloads.
+- Process termination before transaction commit (no partial identity).
+- Process termination after commit but before response delivery (retry returns
+  the original receipt).
+- Batch retry idempotency and exclusion of operational outcomes from pooling.
+- Repeated conflicting delivery creates one quarantine identity while each
+  delivery remains auditable.
+- Invalid provenance is rejected without creating a record or delivery.
+- Invalid later batch item is rejected before any earlier item is committed.
+- Maximum batch size is accepted; one item over the limit is rejected.
+- Injected delivery-table write failure rolls back the accepted record.
+- Unreachable PostgreSQL fails closed without SQLite fallback.
+
 ## Operational constraints
 
 Use a properly operated shared PostgreSQL service with TLS, backups, monitoring,

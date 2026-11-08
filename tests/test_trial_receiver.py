@@ -58,6 +58,26 @@ def test_persist_restart_and_stable_idempotent_receipt(tmp_path):
     assert reopened.counts() == {"records": 1, "deliveries": 2, "quarantine": 0, "poolable": 1}
 
 
+def test_authenticated_sender_must_match_trial_source_node(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3", RECEIPT_SECRET)
+    record = event(node="node-a")
+    with pytest.raises(ValueError, match="does not match trial node"):
+        store.accept(record, provenance(sender="node-b"))
+    assert store.counts() == {
+        "records": 0, "deliveries": 0, "quarantine": 0, "poolable": 0,
+    }
+
+
+def test_sender_claim_agent_suffix_cannot_change_trial_source_node(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3", RECEIPT_SECRET)
+    record = event(node="node-a")
+    proof = provenance(sender="node-a")
+    proof["sender_claim"] = "node-a/worker-7"
+    result = store.accept(record, proof)
+    assert result["status"] == "accepted"
+    assert store.get_record(record["trial_id"])["record"]["node"] == "node-a"
+
+
 def test_conflicting_outcome_is_quarantined_without_overwriting_first_record(tmp_path):
     store = TrialStore(tmp_path / "trials.sqlite3", RECEIPT_SECRET)
     passed = event(failed=False)

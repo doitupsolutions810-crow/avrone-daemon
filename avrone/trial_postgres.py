@@ -253,12 +253,12 @@ class PostgresTrialStore:
     def pool_snapshot(self) -> dict[str, Any]:
         with self._session() as (_, cur):
             cur.execute(
-                """SELECT source, trial_id, record_digest, record_json, receipt_json
-                   FROM trial_records WHERE poolable=1 ORDER BY trial_id"""
+                """SELECT trial_id, record_digest, record_json, receipt_json, poolable, outcome
+                   FROM trial_records ORDER BY trial_id"""
             )
             rows = cur.fetchall()
         trials = []
-        for source, trial_id, stored_digest, record_blob, receipt_blob in rows:
+        for trial_id, stored_digest, record_blob, receipt_blob, stored_poolable, stored_outcome in rows:
             try:
                 record = json.loads(bytes(record_blob).decode("utf-8"))
                 receipt = json.loads(bytes(receipt_blob).decode("utf-8"))
@@ -272,16 +272,18 @@ class PostgresTrialStore:
                 not isinstance(record, dict)
                 or not hmac.compare_digest(str(stored_digest), digest)
                 or record.get("trial_id") != trial_id
-                or not trial_record_poolable(record)
+                or int(stored_poolable) != int(trial_record_poolable(record))
+                or stored_outcome != trial_record_outcome(record)
                 or not verify_trial_receipt(self.receipt_secret, receipt)
                 or receipt.get("trial_id") != trial_id
                 or receipt.get("record_digest") != digest
                 or receipt.get("outcome") != trial_record_outcome(record)
             ):
                 raise TrialStoreUnavailable("stored trial record failed integrity verification")
-            trials.append({
-                "source": source, "trial_id": trial_id, "failed": record["failed"],
-            })
+            if trial_record_poolable(record):
+                trials.append({
+                    "source": record["source"], "trial_id": trial_id, "failed": record["failed"],
+                })
         return pool_trials(trials)
 
     def counts(self) -> dict[str, int]:

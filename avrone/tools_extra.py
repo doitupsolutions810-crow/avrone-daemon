@@ -356,7 +356,7 @@ async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
         async for raw in proc.stdout:
             try:
                 m = json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(m, dict) and "path" in m:
                 hits.append(f"{fsunify.display(ctx, Path(m['path']))}:{m.get('line')}: {m.get('text', '')}")

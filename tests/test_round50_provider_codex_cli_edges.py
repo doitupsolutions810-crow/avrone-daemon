@@ -55,6 +55,12 @@ DEEP = [
 
 @pytest.mark.parametrize("i", range(len(DEEP)))
 def test_deeply_nested_provider_bodies_are_llm_errors(monkeypatch, i):
+    if i == 2:
+        # round 111: deep tool-call arguments are unreadable args like any other junk ({"_raw": ...},
+        # incomplete), not a RecursionError mapped to LLMError; the agent sees a bad call it can fix
+        out = _chat(monkeypatch, lambda req: DEEP[i]())
+        assert '"_raw"' in out
+        return
     with pytest.raises(g.LLMError):
         _chat(monkeypatch, lambda req: DEEP[i]())
 

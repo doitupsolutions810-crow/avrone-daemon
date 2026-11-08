@@ -81,6 +81,23 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.104: Round 111: deeply nested JSON is bad JSON everywhere, never a RecursionError. 5,791 tests + 19 integration
+
+- **Sweep:** an AST scan (`/workspace/work/recscan.py`) listed every `json.loads`, `raw_decode`, `ast` and `copy` call whose `try` block catches neither `RecursionError` nor `Exception`. Past the recursion limit, `json.loads` and `raw_decode` raise `RecursionError`, which is not a `ValueError`.
+- **Bugs found:**
+  - **`trinity.parse_action`** on a model reply nested a few thousand levels deep raised `RecursionError` and failed the whole agent run. An action after the deep junk was never reached.
+  - **`gateway._parse_args`** on tool-call arguments did the same through its `raw_decode` fallback. **`trinity.normalize_call`** did too on string args, since it caught only `JSONDecodeError`.
+  - **`jobqueue._decode`** raised on a stored payload or result column instead of marking it `corrupt`.
+  - **`tools_statehealth._check_jsonl`** raised on a deep state-file line instead of counting it as undecodable.
+- **Fix:**
+  - New `safeio.json_loads`, which turns `RecursionError` into `JSONDecodeError`. It is now used in `gateway`, `trinity`, `jobqueue`, `capgate`, `tools_statehealth`, `fleet` and the server's gateway body parse.
+  - `parse_action` skips a run of nesting it can't decode and keeps scanning for an action.
+  - `_parse_args` gives `{"_raw": ...}` with `complete=False`, the same as any other junk args.
+  - `extract_choice` keeps the plain `json.loads`, so a deep provider body is still a permanent upstream error.
+- **Behavior change:** a provider 200 whose tool-call `arguments` are 100k `[` is now an incomplete call with `_raw` args, like other unreadable args, instead of `LLMError`. `test_round50_provider_codex_cli_edges` case 2 was updated to match. `test_round71` now accepts `json_loads` as the off-loop parse.
+- **Probe:** every POST, PUT and PATCH route got 100k-deep array and object bodies. None returned a 500.
+- **Tests:** `tests/test_round111_deep_json.py` has 10 tests; 7 fail on v0.103.
+
 ## v0.103: Round 110: chained tar extended headers are refused, not a RecursionError; agent-dir overwrites drop setuid/setgid. 5,781 tests + 19 integration
 
 - **Bug: `agentpack.read_pack`.** `tarfile` follows each GNU longname/longlink header into the next header recursively. A bundle of about 3,000 chained headers, a few KB gzipped and far under every size and member cap, raised `RecursionError` out of `read_pack`.

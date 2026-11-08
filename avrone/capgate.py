@@ -27,6 +27,8 @@ import fnmatch
 import hashlib
 import hmac
 import json
+
+from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import os
 import re
 import secrets
@@ -93,7 +95,7 @@ def _clean_rights(rights: Any) -> list[str]:
 def policy() -> dict[str, list[str]]:
     raw = os.environ.get("AVRONE_CAPGATE_POLICY", "")
     try:
-        obj = json.loads(raw) if raw.strip() else {"*": ["*"]}
+        obj = _jloads(raw) if raw.strip() else {"*": ["*"]}
     except (json.JSONDecodeError, RecursionError):
         obj = {}
     if not isinstance(obj, dict):
@@ -209,7 +211,7 @@ def _open_chain(p: Path, mode: str = "rb", create: bool = False):
 def _rec_hash(raw: bytes) -> str | None:
     """The hash of one receipt line, or None for anything that is not a receipt object."""
     try:
-        rec = json.loads(raw)
+        rec = _jloads(raw)
     except (ValueError, RecursionError):
         return None
     h = rec.get("hash") if isinstance(rec, dict) else None
@@ -318,7 +320,7 @@ def _write_head(p: Path, head: str) -> None:
     hp = _head_path(p)
     try:
         with _open_chain(hp) as hf:
-            old = json.loads(hf.read(4096))
+            old = _jloads(hf.read(4096))
         count = int(old.get("count", 0)) + 1 if old.get("sig") == _mac({k: old[k] for k in ("count", "head")}) else None
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         count = None
@@ -356,7 +358,7 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
     with f:
         for i, raw in enumerate(f, 1):
             try:
-                rec = json.loads(raw)
+                rec = _jloads(raw)
                 if not isinstance(rec, dict):  # [1] / 5 / "x" raised AttributeError out of verify_chain
                     raise TypeError("not a receipt object")
                 body = {k: v for k, v in rec.items() if k not in ("hash", "sig")}
@@ -374,7 +376,7 @@ def verify_chain(data_dir: str | Path) -> dict[str, Any]:
     if hp.exists():
         try:
             with _open_chain(hp) as hf:
-                h = json.loads(hf.read(4096))
+                h = _jloads(hf.read(4096))
             body = {"count": int(h["count"]), "head": str(h["head"])}
             signed = hmac.compare_digest(_mac(body).encode(), str(h.get("sig")).encode("utf-8", "surrogatepass"))
         except (OSError, ValueError, TypeError, KeyError, AttributeError):

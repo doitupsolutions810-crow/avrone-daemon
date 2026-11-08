@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+
+from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import os
 import re
 import logging
@@ -338,7 +340,7 @@ def _parse_args(raw: Any, _depth: int = 0) -> tuple[Any, bool]:
     if not text:
         return {}, True
     try:
-        val = json.loads(text)
+        val = _jloads(text)
         if isinstance(val, str) and val.strip()[:1] in ("{", "[", '"') and _depth < 3:
             # double-encoded: "{\"cmd\": \"ls\"}"
             inner, ok = _parse_args(val, _depth + 1)
@@ -353,7 +355,7 @@ def _parse_args(raw: Any, _depth: int = 0) -> tuple[Any, bool]:
             obj, _end = json.JSONDecoder().raw_decode(text, start)
             if isinstance(obj, dict):
                 return obj, True
-        except ValueError:
+        except (ValueError, RecursionError):  # round 111: a deep model reply is just unreadable
             pass
     return {"_raw": raw}, False
 
@@ -535,7 +537,7 @@ def _sse_message(text: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
         if data == "[DONE]":
             break
         try:
-            chunk = json.loads(data)
+            chunk = _jloads(data)
         except (ValueError, RecursionError):
             continue
         if isinstance(chunk, dict) and chunk.get("error") is not None:
@@ -584,7 +586,7 @@ def extract_choice(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
         got = _sse_message(body)
         if got is not None:
             return got
-    data = json.loads(body)
+    data = json.loads(body)  # RecursionError kept: chat() maps it to a permanent upstream error
     if not isinstance(data, dict):
         raise ValueError("response is not an object")
     if data.get("error") is not None and not data.get("choices"):

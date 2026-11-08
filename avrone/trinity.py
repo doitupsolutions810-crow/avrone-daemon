@@ -30,6 +30,8 @@ import asyncio
 import os
 import time
 import json
+
+from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import re
 import uuid
 from collections import deque
@@ -299,6 +301,14 @@ def _first_action(text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             i = text.find("{", i + 1)
             continue
+        except RecursionError:
+            # round 111: a model reply nested past the recursion limit raised RecursionError out
+            # of parse_action and failed the whole run; skip the nested run of brackets instead
+            j = i
+            while j < len(text) and text[j] in "{[\" \t\r\n:,abcdefghijklmnopqrstuvwxyz0123456789":
+                j += 1
+            i = text.find("{", max(j, i + 1))
+            continue
         if _is_action(obj):
             return obj
         i = text.find("{", end)  # skip past the whole non-action object: keeps the scan linear
@@ -387,7 +397,7 @@ def normalize_call(registry: Any, call: Any) -> Any:
     args = out.get("args")
     if isinstance(args, str) and args.strip().startswith("{"):
         try:
-            decoded = json.loads(args)
+            decoded = _jloads(args)
         except json.JSONDecodeError:
             decoded = None
         if isinstance(decoded, dict):
@@ -549,7 +559,7 @@ def _normalize_subtasks(reply: str, n: int) -> list[dict[str, str]]:
     raw: Any = []
     try:
         m = re.search(r"\{.*\}", reply or "", re.S)
-        obj = json.loads(m.group(0)) if m else {}
+        obj = _jloads(m.group(0)) if m else {}
         raw = obj.get("subtasks", []) if isinstance(obj, dict) else []
     except (json.JSONDecodeError, RecursionError):
         raw = []

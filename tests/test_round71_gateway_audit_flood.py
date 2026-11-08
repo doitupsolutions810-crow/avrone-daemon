@@ -158,7 +158,7 @@ def test_big_bodies_verified_off_loop(monkeypatch, tmp_path):
     big = b'{"a":"' + b"x" * (server.OFF_LOOP_BODY_BYTES + 10) + b'"}'
     assert asyncio.run(server._gateway(Req(big), "message")) == {"ok": 1}
     assert asyncio.run(server._verified(Req(big)))["a"]
-    assert "dispatch_gateway" in seen and "verify" in seen and "loads" in seen
+    assert "dispatch_gateway" in seen and "verify" in seen and ("loads" in seen or "json_loads" in seen)
     seen.clear()
     asyncio.run(server._gateway(Req(b"{}"), "message"))
     asyncio.run(server._verified(Req(b"{}")))

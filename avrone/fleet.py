@@ -93,6 +93,8 @@ import contextlib
 import hashlib
 import hmac
 import json
+
+from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import logging
 import math
 import os
@@ -534,7 +536,7 @@ def _load_nonce_snapshot(p: Path) -> Any:
     raw = read_capped(p, NONCE_SNAPSHOT_MAX_BYTES)
     if raw is None:
         raise OSError("fleet_nonces.json is not a regular file")
-    return json.loads(raw.decode("utf-8"))
+    return _jloads(raw.decode("utf-8"))
 
 class GatewayRefused(PermissionError):
     """A fleet request refused by the dispatch gateway. `code` is a stable machine-readable reason;
@@ -811,7 +813,7 @@ class FleetManager:
             if raw is None:  # a symlink or special file: never read, never renamed
                 log.warning("fleet.json is not a regular file; starting with an empty registry")
                 return {}
-            saved = json.loads(raw.decode("utf-8"))
+            saved = _jloads(raw.decode("utf-8"))
         except (OSError, ValueError, UnicodeDecodeError, RecursionError):
             saved = None
         if isinstance(saved, dict):
@@ -1311,7 +1313,7 @@ class FleetManager:
             self._audit("fleet.privileged.refused", code="privileged_unsigned", reason=msg, kind=kind)
             raise self._refuse("privileged_unsigned", msg, kind=kind, privileged=True)
         try:
-            payload = json.loads(body or b"{}")
+            payload = _jloads(body or b"{}")
         except (ValueError, RecursionError):  # RecursionError: absurdly nested JSON (was a 500)
             raise self._refuse("bad_body", "body must be JSON", kind=kind) from None
         if not isinstance(payload, dict):

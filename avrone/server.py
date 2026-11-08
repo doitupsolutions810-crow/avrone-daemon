@@ -459,7 +459,8 @@ async def _verified(request: Request) -> dict:
         raise HTTPException(401, str(e)) from None
     import json as _json
     try:
-        payload = await asyncio.to_thread(_json.loads, body or b"{}") if big else _json.loads(body or b"{}")
+        from .safeio import json_loads as _jl  # round 111: deep nesting is a 400, not a 500
+        payload = await asyncio.to_thread(_jl, body or b"{}") if big else _jl(body or b"{}")
     except ValueError:
         raise HTTPException(400, "body must be JSON") from None
     if not isinstance(payload, dict):

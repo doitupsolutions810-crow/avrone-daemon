@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+
+from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import logging
 import math
 import os
@@ -81,7 +83,7 @@ def _decode(text: Any) -> Any:
     if not text:
         return None
     try:
-        return json.loads(text)
+        return _jloads(text)
     except (TypeError, ValueError):
         return {"corrupt": True, "raw": str(text)[:2000]}
 
@@ -247,7 +249,7 @@ class JobQueue:
                 if not row:
                     return None
                 try:
-                    payload = json.loads(row[2]) if row[2] is not None else {}
+                    payload = _jloads(row[2]) if row[2] is not None else {}
                 except (TypeError, ValueError, RecursionError) as e:
                     # used to raise out of claim() after COMMIT and kill the Worker loop for good
                     self._db.execute("UPDATE jobs SET status='dead', error=?, updated=? WHERE id=?",

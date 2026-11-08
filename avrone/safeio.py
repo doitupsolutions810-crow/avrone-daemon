@@ -270,3 +270,14 @@ def newest_entries(directory: str | os.PathLike, suffix: str, n: int) -> tuple[l
             elif item > best[0]:
                 heapq.heapreplace(best, item)
     return sorted(best), total
+
+
+def json_loads(data, **kw):
+    """json.loads, but absurdly nested input (a few hundred KB of "[" from a model, a peer, a
+    request body or a hand-edited state file) is a JSONDecodeError like any other bad JSON instead
+    of a RecursionError that every `except ValueError` caller let escape (round 111)."""
+    import json as _json
+    try:
+        return _json.loads(data, **kw)
+    except RecursionError:
+        raise _json.JSONDecodeError("JSON nested too deeply", "", 0) from None

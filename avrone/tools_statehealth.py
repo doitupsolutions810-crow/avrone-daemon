@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import fnmatch
 import json
+
+from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -45,7 +47,7 @@ def _check_json(p: Path) -> str | None:
         raw = read_capped(p, MAX_JSONL_BYTES)
         if raw is None:
             return "not a regular file"
-        json.loads(raw.decode("utf-8"))
+        _jloads(raw.decode("utf-8"))
     except FileTooBig:
         return None  # too big to check here; not a problem in itself
     except UnicodeDecodeError:
@@ -76,7 +78,7 @@ def _check_jsonl(p: Path) -> str | None:
         if not line.strip():
             continue
         try:
-            json.loads(line)
+            _jloads(line)
         except (ValueError, UnicodeDecodeError):
             bad += 1
     return f"{bad} undecodable line(s)" if bad else None

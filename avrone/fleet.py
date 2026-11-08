@@ -958,7 +958,8 @@ class FleetManager:
             return
         fd = None
         try:
-            fd = os.open(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            from .safeio import _open_regular  # round 102: never follow a symlink planted at the lock
+            fd = _open_regular(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (OSError, ImportError):  # no flock here: thread lock only, as before

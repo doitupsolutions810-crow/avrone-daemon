@@ -1027,7 +1027,9 @@ async def t_codex_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
         files = [f]
     else:
         from .codex import newest_logs  # round 91: one lstat per log, bounded heap, no full sort
-        files = newest_logs(log_dir, max_runs)
+        lister = getattr(codex, "_newest_logs", None)
+        # round 102: the same reused scan as runs() (100k logs: 3.4 s per search -> one scan per TTL)
+        files = lister(max_runs) if callable(lister) else newest_logs(log_dir, max_runs)
         if not files:
             return "No CodeX runs logged yet."
     hits: list[tuple[float, str]] = []

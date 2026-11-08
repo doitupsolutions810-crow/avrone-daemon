@@ -214,7 +214,10 @@ class _Store:
     def _save_locked(self) -> bool:
         fd = None
         try:
-            fd = os.open(str(self.path) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            # round 102: O_NOFOLLOW + regular only. A symlink at <run>.json.lock created its
+            # target (anywhere the daemon can write); a FIFO there was flock'ed as if a lock file.
+            from .safeio import _open_regular
+            fd = _open_regular(str(self.path) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (OSError, ImportError):

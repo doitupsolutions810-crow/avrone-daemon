@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.95: Round 102: lock files never follow symlinks, and codex_search uses the reused run scan. 5,719 tests + 19 integration
+
+- **Checkpoint `<file>.lock` and `fleet_nonces.json.lock`:** these were opened with `os.open(O_RDWR|O_CREAT)` and no `O_NOFOLLOW`. A symlink planted there created its target anywhere the daemon could write, and a FIFO there was flock'ed as if it were a lock file.
+  - Both now open through `safeio._open_regular` (O_NOFOLLOW, O_NONBLOCK, regular files only).
+  - A refused lock falls back to the thread lock, as when flock is missing, so saves still succeed.
+- **`codex_search`:** the listing now goes through `Codex._newest_logs`, the round 100 scan cache, instead of lstat'ing every log on every search. A new run still shows up at once. A fake codex without the cache falls back to `newest_logs`.
+- **Tests:** `tests/test_round102_locks_search.py` has 9 tests. 3 fail on v0.94 (the checkpoint symlink, the nonce symlink, and the search rescan); the other 6 guard FIFO locks, regular locks, freshness and fallbacks.
+- **Flake:** `test_tools_extra.py::test_search_files` (ripgrep exit 255) failed once under full-suite load. It passes alone and three times in a row in its file, and it doesn't touch the code changed here.
+
 ## v0.94: Round 101: env_install lock and ledger off the event loop. 5,710 tests + 19 integration
 
 - **FIFO at `.install-<mgr>.lock`:** `open(lock, "w")` ran on the event loop and blocked forever. The lock now opens with `safeio.open_lock` (O_NOFOLLOW, O_NONBLOCK, regular files only) in a worker thread. An unusable lock returns `ERROR: install lock unusable ...`.

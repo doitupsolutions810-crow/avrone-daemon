@@ -55,6 +55,21 @@ MAX_KEY = 200
 MAX_FUTURE_SKEW_S = 3600.0
 
 
+LWW_STEP_S = 0.001
+
+
+def _next_ts(have: "dict[str, Any] | None", now: float) -> float:
+    """A local save's LWW timestamp: the wall clock, but never at or behind the record it replaces.
+    Round 117: after the clock stepped back (NTP fix, VM resume) a save got a ts older than the
+    value it overwrote; it won locally (file order) but every fleet peer skipped it in merge(), so
+    the new value never replicated until the clock caught up. The old ts is capped at
+    now + MAX_FUTURE_SKEW_S so a hand-edited far-future record cannot drag saves forward."""
+    if not have:
+        return now
+    prev = min(_ts(have.get("ts")), now + MAX_FUTURE_SKEW_S)
+    return now if now > prev else prev + LWW_STEP_S
+
+
 def _ts(v: Any) -> float:
     """A record's ts as a finite float; anything else (str, bool, NaN, inf, null) reads as 0.0.
     A single corrupt ts used to poison the whole store: eviction/compaction sort and min() over
@@ -421,6 +436,7 @@ class MemoryStore:
         with self._locked():
             records = self._records()
             spaces = self._fold(records)
+            rec["ts"] = _next_ts(spaces.get(ns, {}).get(key), rec["ts"])
             pending: list[dict[str, Any]] = []
             evicted = self._put_locked(spaces, rec, pending)
             self._commit(records, spaces, pending, evicted)
@@ -463,9 +479,14 @@ class MemoryStore:
                     continue
                 space = spaces.get(ns, {})
                 have = space.get(key)
-                if have is not None and float(have.get("ts", 0)) >= ts:
-                    stats["skipped"] += 1
-                    continue
+                if have is not None:
+                    hts = _ts(have.get("ts"))
+                    # round 117: equal ts (two nodes saving in one coarse clock tick) was "skipped"
+                    # on both sides, so each kept its own value forever. Break the tie on the value
+                    # itself: every node converges on the same winner whatever the merge order.
+                    if hts > ts or (hts == ts and str(have.get("value", "")) >= value):
+                        stats["skipped"] += 1
+                        continue
                 # A NEW key into a full namespace evicts the oldest key. When the incoming entry is
                 # itself older than everything kept, it would evict a newer key and then be the
                 # next one evicted, so it was counted "merged" while the store lost a newer memory.

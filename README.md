@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.110: Round 117: memory last-writer-wins survives clock steps and same-tick saves. 5,828 tests + 19 integration
+
+- **Bug 1, clock steps back:** after the clock stepped back (NTP fix, VM resume), `MemoryStore.save` gave the new record a ts older than the value it replaced.
+  - Locally it still won, because of file order.
+  - On every fleet peer, `merge()` saw an older ts and skipped it. The update never replicated until the wall clock caught up, which could take hours.
+  - Probe: `/workspace/work/memstep.py`. After a 10 min step back, the peer kept `v1`.
+- **Fix 1:** `memstore._next_ts` makes a save's ts at least the replaced record's ts + `LWW_STEP_S` (1 ms). The base is capped at `now + MAX_FUTURE_SKEW_S`, so a hand-edited far-future record cannot drag saves forward.
+- **Bug 2, same-tick saves:** two nodes saving one key with equal ts (coarse clocks) each skipped the other's value on merge (`>=`), so they diverged for good.
+- **Fix 2:** ties now break on the value. Every node converges on the same winner whatever the merge order. An identical value is still skipped.
+- **Checked clean:** bridge relay is cursored by post id, not ts, so the clock step does not affect it.
+- **Tests:** `tests/test_round117_memory_lww.py` has 5 tests; 3 fail on v0.109.
+
 ## v0.109: Round 116: queued edit_file calls no longer starve the worker pool. 5,823 tests + 19 integration
 
 - **Bug:** in v0.108, every queued edit of one file waited for its turn on the per-path lock while holding a `to_thread` worker. Squad edits to one hot file could fill the default executor (2 CPUs means 6 workers). Every other off-loop tool, plus the server's `to_thread` work, then waited for the whole queue. Probe (`/workspace/work/editstarve.py`): 24 queued edits of a 7 MB file stalled an unrelated `to_thread` call by 0.43 s.

@@ -615,7 +615,7 @@ async def fleet_trials(request: Request):
     """Receive immutable trial records over Fleet HMAC with a dedicated ingest capability."""
     import sqlite3
     from fastapi.responses import JSONResponse
-    from .trial_receiver import TrialStore, TrialStoreConfigError, MAX_BATCH_EVENTS
+    from .trial_receiver import TrialStoreConfigError, TrialStoreUnavailable, MAX_BATCH_EVENTS, trial_store_from_env
 
     payload, transport = await _trial_gateway(request)
     if set(payload) != {"from", "hops", "capability", "events"}:
@@ -626,10 +626,10 @@ async def fleet_trials(request: Request):
     if not isinstance(events, list) or not 1 <= len(events) <= MAX_BATCH_EVENTS:
         raise HTTPException(422, f"events must contain 1..{MAX_BATCH_EVENTS} items")
     try:
-        store = TrialStore.from_env(fleet_token=_fleet().token)
+        store = trial_store_from_env(fleet_token=_fleet().token)
     except TrialStoreConfigError as exc:
         raise HTTPException(503, str(exc)) from None
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError, TrialStoreUnavailable):
         raise HTTPException(503, "trial storage unavailable") from None
     if _fleet().prev_token and hmac.compare_digest(store.receipt_secret, _fleet().prev_token):
         raise HTTPException(503, "receipt secret must be separate from all Fleet tokens")
@@ -637,7 +637,7 @@ async def fleet_trials(request: Request):
         results = await asyncio.to_thread(store.ingest_batch, events, transport)
     except ValueError as exc:
         raise HTTPException(422, str(exc)[:300]) from None
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError, TrialStoreUnavailable):
         raise HTTPException(503, "trial storage unavailable") from None
     conflict = any(result["status"] == "conflict_quarantined" for result in results)
     all_duplicate = all(result["duplicate"] for result in results)

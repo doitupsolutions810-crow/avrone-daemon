@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.106.0)
+# AVRONE MASTER PROMPT (v0.107.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,806 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,815 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 280 test files, offline by default
+├── tests/                  # 281 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,18 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.107: Round 114: paths past PATH_MAX and tool errors that leaked the host path. 5,815 tests + 19 integration
+
+- **Probe:** I fuzzed every tool (`/workspace/work/deepfuzz.py`, SEED 11401, N 25; 2,075 calls) over a workspace holding a 1,900-level directory tree, near PATH_MAX. Arguments included that tree, the leaf, a 5,000-char `e/e/...` path, `d/` repeated 3,000 times, depth 10**6 and `**/*` globs. There were no hangs and no `RecursionError`: the walkers held.
+- **Bug found:** a path over PATH_MAX made `edit_file` and `artifact_save` (and, in targeted tests, `write_file` and `read_file`) return the raw `OSError: [Errno 36] File name too long: '/tmp/.../ws/d/d/...'`. That was about 4 KB of output, and it gave away the node's host workspace location. Every tool's `OSError` carried the absolute host path the same way.
+- **Fix:** new `tools.error_text`, used by the registry for every tool body's exception.
+  - Paths are named relative to the workspace or data dir. Paths outside both show only `…/<basename>`.
+  - Paths over 160 chars are clipped in the middle, keeping their length.
+  - Both names of a two-path error are shown (`'a -> b'`).
+  - `ENAMETOOLONG` reads `ERROR: path too long (a name is over 255 bytes or the whole path over 4096): ... Use a shorter path.`
+  - Non-`OSError` errors are unchanged.
+- **Tests:** `tests/test_round114_deep_paths.py` has 9 tests; 7 fail on v0.106. The deep-tree test removes its own tree top-down, because pytest's tmp cleanup gives up on a 1,500-level tree.
+
 ## v0.106: Round 113: hostile file names, and names near NAME_MAX that can now be written. 5,806 tests + 19 integration
 
 - **Probe:** I fuzzed every tool (`/workspace/work/fsfuzz.py`, SEED 11301, N 25; 2,075 calls) over a workspace seeded with hostile names. These were non-UTF-8 bytes (`bad\xff\xfe.txt`, `dir\xc3\x28/in\xff.md`), a newline, a tab, ANSI escapes, an RTL override, a quote, `-rf`, a dotfile and a 250-byte name. The names were also passed as tool arguments.
@@ -338,23 +350,6 @@ landed and the suite is green. End with what is still open.
 - **Also checked, clean:** tool-supplied regexes. `search_files` validates the pattern for `re.error`, `RecursionError` and `OverflowError`, and runs the scan in a child process with a deadline.
 - **Tests:** `tests/test_round112_clock_steps.py` has 7 tests; 5 fail on v0.104. `test_tool_routerstatus` now sets breaker times with `time.monotonic()`.
 
-## v0.104: Round 111: deeply nested JSON is bad JSON everywhere, never a RecursionError. 5,791 tests + 19 integration
-
-- **Sweep:** an AST scan (`/workspace/work/recscan.py`) listed every `json.loads`, `raw_decode`, `ast` and `copy` call whose `try` block catches neither `RecursionError` nor `Exception`. Past the recursion limit, `json.loads` and `raw_decode` raise `RecursionError`, which is not a `ValueError`.
-- **Bugs found:**
-  - **`trinity.parse_action`** on a model reply nested a few thousand levels deep raised `RecursionError` and failed the whole agent run. An action after the deep junk was never reached.
-  - **`gateway._parse_args`** on tool-call arguments did the same through its `raw_decode` fallback. **`trinity.normalize_call`** did too on string args, since it caught only `JSONDecodeError`.
-  - **`jobqueue._decode`** raised on a stored payload or result column instead of marking it `corrupt`.
-  - **`tools_statehealth._check_jsonl`** raised on a deep state-file line instead of counting it as undecodable.
-- **Fix:**
-  - New `safeio.json_loads`, which turns `RecursionError` into `JSONDecodeError`. It is now used in `gateway`, `trinity`, `jobqueue`, `capgate`, `tools_statehealth`, `fleet` and the server's gateway body parse.
-  - `parse_action` skips a run of nesting it can't decode and keeps scanning for an action.
-  - `_parse_args` gives `{"_raw": ...}` with `complete=False`, the same as any other junk args.
-  - `extract_choice` keeps the plain `json.loads`, so a deep provider body is still a permanent upstream error.
-- **Behavior change:** a provider 200 whose tool-call `arguments` are 100k `[` is now an incomplete call with `_raw` args, like other unreadable args, instead of `LLMError`. `test_round50_provider_codex_cli_edges` case 2 was updated to match. `test_round71` now accepts `json_loads` as the off-loop parse.
-- **Probe:** every POST, PUT and PATCH route got 100k-deep array and object bodies. None returned a 500.
-- **Tests:** `tests/test_round111_deep_json.py` has 10 tests; 7 fail on v0.103.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -366,4 +361,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.106.0 checked out: 5,806 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.107.0 checked out: 5,815 passed, 99% coverage. Next: round <N+1> on <angle>."

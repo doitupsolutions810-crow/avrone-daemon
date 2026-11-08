@@ -11,6 +11,7 @@ import logging
 import difflib
 import functools
 import inspect
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,50 @@ def _safe_str(v: Any) -> str:
         return str(v)
     except Exception:  # noqa: BLE001 - a hostile __str__ must not escape the tool wrapper
         return f"<{type(v).__name__}>"
+
+
+_ERR_PATH_MAX = 160
+
+
+def _err_path(path: Any, ctx: Any) -> str:
+    """A path for an error message: relative to the workspace or data dir when inside one,
+    else its last component; long paths keep both ends."""
+    try:
+        s = os.fsdecode(path) if isinstance(path, (bytes, str, os.PathLike)) else _safe_str(path)
+    except Exception:  # noqa: BLE001
+        return "<path>"
+    settings = getattr(getattr(ctx, "core", None), "settings", None)
+    shown = None
+    for attr in ("workspace", "data_dir"):
+        base = getattr(settings, attr, None)
+        if not base:
+            continue
+        b = os.path.abspath(os.fsdecode(base))
+        if s == b or s.startswith(b.rstrip(os.sep) + os.sep):
+            shown = os.path.relpath(s, b) if s != b else "."
+            break
+    if shown is None:
+        shown = s if not os.path.isabs(s) else ("…/" + os.path.basename(s.rstrip(os.sep)) if s.strip(os.sep) else s)
+    if len(shown) > _ERR_PATH_MAX:
+        half = _ERR_PATH_MAX // 2 - 2
+        shown = f"{shown[:half]}…[{len(shown)} chars]…{shown[-half:]}"
+    return shown
+
+
+def error_text(e: BaseException, ctx: Any = None) -> str:
+    """ERROR line for a tool body's exception. Round 114: an OSError's message carried the full
+    host path (the node's workspace location) and, for a path over PATH_MAX, ~4 KB of it; it now
+    names the path relative to the workspace, clipped. ENAMETOOLONG says what the limit is."""
+    if isinstance(e, OSError) and (e.filename is not None or e.filename2 is not None):
+        import errno as _errno
+        what = e.strerror or _safe_str(e)
+        names = " -> ".join(_err_path(f, ctx) for f in (e.filename, e.filename2) if f is not None)
+        if e.errno == _errno.ENAMETOOLONG:
+            return (f"ERROR: path too long (a name is over 255 bytes or the whole path over 4096): "
+                    f"{names!r}. Use a shorter path.")
+        code = f"[Errno {e.errno}] " if e.errno is not None else ""
+        return f"ERROR: {type(e).__name__}: {code}{what}: {names!r}"
+    return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
 
 
 def _as_text(out: Any) -> str:
@@ -258,7 +303,7 @@ class ToolRegistry:
             try:
                 out = await _invoke(tool.fn, ctx, args)
             except (Exception, SystemExit) as e:  # errors go back to the agent
-                return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
+                return error_text(e, ctx)
             return _as_text(out)
         allowed, why, cap_id = capgate.gate(ctx, name)
         ddir = capgate.data_dir_of(ctx)
@@ -274,7 +319,7 @@ class ToolRegistry:
         try:
             out = await _invoke(tool.fn, ctx, args)
         except (Exception, SystemExit) as e:  # errors go back to the agent
-            out, outcome = f"ERROR: {type(e).__name__}: {_safe_str(e)}", "error"
+            out, outcome = error_text(e, ctx), "error"
         out = _as_text(out)
         if ddir is not None:
             await _receipt(ddir, caller=caller, tool=name, args=args,

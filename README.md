@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.107: Round 114: paths past PATH_MAX and tool errors that leaked the host path. 5,815 tests + 19 integration
+
+- **Probe:** I fuzzed every tool (`/workspace/work/deepfuzz.py`, SEED 11401, N 25; 2,075 calls) over a workspace holding a 1,900-level directory tree, near PATH_MAX. Arguments included that tree, the leaf, a 5,000-char `e/e/...` path, `d/` repeated 3,000 times, depth 10**6 and `**/*` globs. There were no hangs and no `RecursionError`: the walkers held.
+- **Bug found:** a path over PATH_MAX made `edit_file` and `artifact_save` (and, in targeted tests, `write_file` and `read_file`) return the raw `OSError: [Errno 36] File name too long: '/tmp/.../ws/d/d/...'`. That was about 4 KB of output, and it gave away the node's host workspace location. Every tool's `OSError` carried the absolute host path the same way.
+- **Fix:** new `tools.error_text`, used by the registry for every tool body's exception.
+  - Paths are named relative to the workspace or data dir. Paths outside both show only `…/<basename>`.
+  - Paths over 160 chars are clipped in the middle, keeping their length.
+  - Both names of a two-path error are shown (`'a -> b'`).
+  - `ENAMETOOLONG` reads `ERROR: path too long (a name is over 255 bytes or the whole path over 4096): ... Use a shorter path.`
+  - Non-`OSError` errors are unchanged.
+- **Tests:** `tests/test_round114_deep_paths.py` has 9 tests; 7 fail on v0.106. The deep-tree test removes its own tree top-down, because pytest's tmp cleanup gives up on a 1,500-level tree.
+
 ## v0.106: Round 113: hostile file names, and names near NAME_MAX that can now be written. 5,806 tests + 19 integration
 
 - **Probe:** I fuzzed every tool (`/workspace/work/fsfuzz.py`, SEED 11301, N 25; 2,075 calls) over a workspace seeded with hostile names. These were non-UTF-8 bytes (`bad\xff\xfe.txt`, `dir\xc3\x28/in\xff.md`), a newline, a tab, ANSI escapes, an RTL override, a quote, `-rf`, a dotfile and a 250-byte name. The names were also passed as tool arguments.

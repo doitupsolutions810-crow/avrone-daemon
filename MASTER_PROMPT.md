@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.102.0)
+# AVRONE MASTER PROMPT (v0.103.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,775 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,781 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 276 test files, offline by default
+├── tests/                  # 277 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,16 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.103: Round 110: chained tar extended headers are refused, not a RecursionError; agent-dir overwrites drop setuid/setgid. 5,781 tests + 19 integration
+
+- **Bug: `agentpack.read_pack`.** `tarfile` follows each GNU longname/longlink header into the next header recursively. A bundle of about 3,000 chained headers, a few KB gzipped and far under every size and member cap, raised `RecursionError` out of `read_pack`.
+  - On fleet migrate import (`FleetManager.receive_agentpack`), that was an unaudited 500 instead of `agent.migrate_refused`.
+  - In `pack_list`, it was an exception out of `_verify`.
+- **Fix:** `read_pack` now turns `RecursionError` into `PackError("not a valid agent pack: too many chained extended headers")`, so all three callers refuse and audit as usual. CPython's pax header handling is not recursive; a 5,000-header pax chain test guards that.
+- **Bug: `agentfs_tools.quota_write`.** An overwrite copied the old file's mode onto the new content, setuid and setgid included. This is the same issue round 109 fixed in `atomic_write_bytes`.
+- **Fix:** `S_ISUID` and `S_ISGID` are now masked off. Exec bits are kept.
+- **Tests:** `tests/test_round110_pack_headers.py` has 6 tests; 4 fail on v0.102. The pax chain and short-chain guards pass on both.
+
 ## v0.102: Round 109: rewrites drop setuid/setgid and never copy a symlink target's mode; the python tool refuses a symlinked .avrone/tmp. 5,775 tests + 19 integration
 
 - **Bug: `atomic_write_bytes`** (used by `write_file`, `artifact_save` and the agent-dir writes) has two problems:
@@ -332,17 +342,6 @@ landed and the suite is green. End with what is still open.
 - **Fuzz:** toolfuzz with SEED 10807, 40 calls per tool, made 3,320 calls with no hangs, raw errors, escapes or slow calls.
 - **Tests:** `tests/test_round108_governor_reads.py` has 6 tests; 3 hang on v0.100. `test_cov11_a::test_governor_readers` now patches `governor._read_text` instead of `builtins.open`.
 
-## v0.100: Round 107: stat-then-read swaps can no longer pack a host file or hang a thread. 5,763 tests + 19 integration
-
-- **Bug (leak): agent export.** `export_pack` lstat'ed each file in `_walk`, then called `read_bytes()`, which follows symlinks. A same-size symlink swapped in between those two calls put a host file into the bundle that migrates to another node. The length check only caught a swap to a file of a different size. A FIFO swap hung the migrate forever.
-- **Bug (hang): checkpoints.** `_Store` load, the disk merge (which runs under the save lock) and `_read` all called `stat()`/`is_file()` before `read_bytes()`. A FIFO swapped in hung the checkpoint forever, and a symlink was followed to any JSON file.
-- **Bug (hang and memory): `.env` load.** It called `is_file()`, then `read_text()`. A FIFO hung startup, and a multi-GB file was read whole.
-- **Bug (hang): single-file root in searchproc.** A `stat()` before `read_bytes()` left the same window.
-- **Fix:**
-  - `agentpack` and `checkpoint` now read through `safeio.read_capped` (`O_NOFOLLOW|O_NONBLOCK`, regular files only, size capped). A swapped file gives the error "changed while packing". A vanished file still gives "vanished".
-  - `.env` loading and the searchproc root use `open_read(follow=True)`. Symlinked `.env` files still work. `DOTENV_MAX_BYTES` is 4 MB, and a larger file is ignored.
-- **Tests:** `tests/test_round107_read_swaps.py` has 11 tests. 7 fail or hang on v0.99. The other 4 guard symlinked `.env` files, normal search, `_read` on a FIFO and a different-size swap. Two existing agentpack tests now patch `safeio.read_capped`.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -354,4 +353,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.102.0 checked out: 5,775 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.103.0 checked out: 5,781 passed, 99% coverage. Next: round <N+1> on <angle>."

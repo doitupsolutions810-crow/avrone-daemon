@@ -357,6 +357,11 @@ def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict
                 blobs[rel] = data
             else:
                 raise PackError(f"unexpected member {m.name!r}")
+    except RecursionError:
+        # round 110: tarfile follows each GNU longname/longlink or pax header into the next header
+        # recursively; a few thousand chained headers raised RecursionError out of read_pack (a 500
+        # on fleet migrate import, a crash in pack_list's verify) instead of a refusal
+        raise PackError("not a valid agent pack: too many chained extended headers") from None
     except (tarfile.TarError, OSError, EOFError, zlib_error()) as e:
         raise PackError(f"not a valid agent pack: {e}") from None
     if man is None or mem is None:

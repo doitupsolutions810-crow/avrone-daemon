@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.103: Round 110: chained tar extended headers are refused, not a RecursionError; agent-dir overwrites drop setuid/setgid. 5,781 tests + 19 integration
+
+- **Bug: `agentpack.read_pack`.** `tarfile` follows each GNU longname/longlink header into the next header recursively. A bundle of about 3,000 chained headers, a few KB gzipped and far under every size and member cap, raised `RecursionError` out of `read_pack`.
+  - On fleet migrate import (`FleetManager.receive_agentpack`), that was an unaudited 500 instead of `agent.migrate_refused`.
+  - In `pack_list`, it was an exception out of `_verify`.
+- **Fix:** `read_pack` now turns `RecursionError` into `PackError("not a valid agent pack: too many chained extended headers")`, so all three callers refuse and audit as usual. CPython's pax header handling is not recursive; a 5,000-header pax chain test guards that.
+- **Bug: `agentfs_tools.quota_write`.** An overwrite copied the old file's mode onto the new content, setuid and setgid included. This is the same issue round 109 fixed in `atomic_write_bytes`.
+- **Fix:** `S_ISUID` and `S_ISGID` are now masked off. Exec bits are kept.
+- **Tests:** `tests/test_round110_pack_headers.py` has 6 tests; 4 fail on v0.102. The pax chain and short-chain guards pass on both.
+
 ## v0.102: Round 109: rewrites drop setuid/setgid and never copy a symlink target's mode; the python tool refuses a symlinked .avrone/tmp. 5,775 tests + 19 integration
 
 - **Bug: `atomic_write_bytes`** (used by `write_file`, `artifact_save` and the agent-dir writes) has two problems:

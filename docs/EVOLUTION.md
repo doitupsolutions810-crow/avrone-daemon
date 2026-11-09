@@ -56,3 +56,21 @@ No force-push. No branch deletion. Existing files not overwritten beyond these a
 Verify.sh exists in the repo tree. docker-verify job is present in .github/workflows/ci.yml.
 
 If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head 7c98b16)
+
+Most recent CI run (42651744409) completed with real runners assigned (runner_id 1000008018/8019/8020 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout, after docker-verify success):
+- test (3.11): 7 failed, 5116 passed. Root cause: RecursionError in json.JSONDecoder.raw_decode / json.loads on pathological deep/nested JSON in parse_action (_first_action) and jobqueue.claim payload parsing. Tests: test_pathological_replies_stay_fast, test_parse_action_is_bounded_on_huge_and_deep_input, test_corrupt_rows_never_kill_claim.
+- test (3.12): cancelled.
+
+Minimal fixes pushed to same branch:
+- avrone/trinity.py: catch RecursionError alongside JSONDecodeError in _first_action so deep nesting is skipped (returns None for pure pathological input, continues scan).
+- avrone/jobqueue.py: catch RecursionError in claim()'s payload json.loads (and _decode) so deep arrays do not raise out of claim.
+
+No force-push. No branch deletion. Existing files not overwritten beyond these additive edits.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.

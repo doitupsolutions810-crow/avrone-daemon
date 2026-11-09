@@ -31,6 +31,8 @@ def _text(value: Any, field: str, limit: int) -> str:
         raise EvidenceContractError(f"{field} must be a non-empty string of at most {limit} chars")
     if value != value.strip():
         raise EvidenceContractError(f"{field} must not have leading or trailing whitespace")
+    if unicodedata.normalize("NFC", value) != value:
+        raise EvidenceContractError(f"{field} must be NFC-normalized")
     # Machine identifiers must not contain C0/C1 controls, bidi controls, zero-width
     # format characters, or surrogate code points. These can spoof logs and identities.
     if any(unicodedata.category(ch) in {"Cc", "Cf", "Cs"} for ch in value):
@@ -127,8 +129,12 @@ def verify_evidence_event(event: Any) -> tuple[bool, str]:
         if not isinstance(evidence, dict):
             raise EvidenceContractError("evidence must be an object")
         expected = evidence_snapshot(evidence.get("failures"), evidence.get("runs"))
-        if _canonical(expected) != _canonical(evidence):
-            raise EvidenceContractError("Great Scale evidence does not match measured counts")
+        if set(evidence) != set(expected):
+            raise EvidenceContractError("Great Scale evidence fields do not match the summary schema")
+        for key, expected_value in expected.items():
+            actual_value = evidence[key]
+            if type(actual_value) is not type(expected_value) or actual_value != expected_value:
+                raise EvidenceContractError("Great Scale evidence does not match measured counts")
         body = {key: event[key] for key in required if key != "digest"}
         actual = hashlib.sha256(_canonical(body)).hexdigest()
         supplied = event["digest"]

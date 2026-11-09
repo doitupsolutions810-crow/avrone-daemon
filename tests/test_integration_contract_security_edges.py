@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import random
+import unicodedata
 
 import pytest
 
@@ -46,8 +47,29 @@ def test_invalid_provenance_depths_are_rejected(depth):
 def test_unicode_identifiers_round_trip_but_unicode_digest_does_not():
     record = make(source="sourcé", run_id="rún-⚛")
     assert verify_evidence_event(record) == (True, "")
+    decomposed = unicodedata.normalize("NFD", "sourcé")
+    with pytest.raises(EvidenceContractError, match="NFC"):
+        make(source=decomposed)
+    forged = copy.deepcopy(record)
+    forged["source"] = decomposed
+    from avrone.integration_contract import _canonical
+    import hashlib
+    forged["digest"] = hashlib.sha256(
+        _canonical({key: value for key, value in forged.items() if key != "digest"})
+    ).hexdigest()
+    assert verify_evidence_event(forged)[0] is False
     record["digest"] = "é" * 64
     assert verify_evidence_event(record)[0] is False
+
+
+@pytest.mark.parametrize("field", ["source", "run_id", "check_id", "capability_id", "human_root", "refs"])
+def test_every_identifier_channel_rejects_non_nfc_text(field):
+    decomposed = unicodedata.normalize("NFD", "café")
+    kwargs = {field: [decomposed] if field == "refs" else decomposed}
+    if field == "human_root":
+        kwargs["provenance_depth"] = 1
+    with pytest.raises(EvidenceContractError, match="NFC"):
+        make(**kwargs)
 
 
 def test_deeply_nested_untrusted_summary_is_rejected_cleanly():

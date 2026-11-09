@@ -53,6 +53,16 @@ def test_reference_count_and_length_boundaries_are_inclusive():
         event(refs=["x" * (MAX_REF + 1)])
 
 
+
+def test_capability_and_human_root_reference_boundaries_are_inclusive():
+    maximum = "x" * MAX_REF
+    record = event(capability_id=maximum, human_root="operator:root", provenance_depth=1)
+    assert verify_evidence_event(record) == (True, "")
+    with pytest.raises(EvidenceContractError):
+        event(capability_id=maximum + "x", human_root="operator:root", provenance_depth=1)
+    with pytest.raises(EvidenceContractError):
+        event(capability_id="cap:1", human_root=maximum + "x", provenance_depth=1)
+
 def test_reference_order_is_digest_significant_but_duplicates_are_canonicalized():
     left = event(refs=["alpha", "beta", "alpha"])
     same = event(refs=["alpha", "beta"])
@@ -93,6 +103,15 @@ def test_json_serialization_round_trip_and_key_order_do_not_change_digest():
     assert verify_evidence_event(reordered) == (True, "")
     assert decoded["digest"] == reordered["digest"]
 
+
+
+def test_oversized_nested_summary_is_rejected_without_digest_work():
+    record = event()
+    candidate = copy.deepcopy(record)
+    candidate["evidence"]["untrusted"] = "x" * 2_000_000
+    valid, reason = verify_evidence_event(candidate)
+    assert valid is False
+    assert reason
 
 def test_validly_rehashed_unknown_nested_summary_field_is_still_rejected():
     from avrone.integration_contract import _canonical

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import Decimal, ROUND_CEILING, localcontext
 from typing import TYPE_CHECKING, Any
 
 from .tools import Tool
@@ -99,7 +100,29 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
         return None
     if p == 1:
         return 1
-    return max(1, math.ceil(math.log(alpha) / math.log(1 - p) - 1e-12))
+
+    # Decimal logarithms avoid cancellation in log(1 - p) for small p.
+    # Precision scales with the decimal exponent so even subnormal float inputs
+    # produce a finite, minimal Python integer rather than a zero denominator.
+    probability = Decimal.from_float(float(p))
+    confidence = Decimal.from_float(float(alpha))
+    with localcontext() as context:
+        context.prec = max(
+            50,
+            max(0, -probability.adjusted()) + 50,
+            max(0, -confidence.adjusted()) + 50,
+        )
+        log_confidence = confidence.ln()
+        log_survival = (Decimal(1) - probability).ln()
+        count = int(
+            (log_confidence / log_survival).to_integral_value(rounding=ROUND_CEILING)
+        )
+        # Correct any final-ulp rounding at an exact integer boundary.
+        while Decimal(count) * log_survival > log_confidence:
+            count += 1
+        while count > 1 and Decimal(count - 1) * log_survival <= log_confidence:
+            count -= 1
+    return max(1, count)
 
 
 def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:

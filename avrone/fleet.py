@@ -215,13 +215,14 @@ SPAWN_MODES = ("squad", "chat", "deep")
 PRIVILEGED_CAPABILITIES = {"priv:shell", "priv:admin"}
 PRIVILEGED_HEADER = "x-avrone-privileged"
 # non-spawn capabilities, kept apart from the (minimal) spawn/message table above
-SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}}
+SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}, "trials": {"evidence:ingest"}}
 # netsquad: a squad subtask placed on this node (runs as a sub-squad/chat here, may recurse further down)
 NET_CAPABILITIES: dict[str, set[str]] = {"run": {"squad:net"}}
 NETSQUAD_CAP = "squad:net"
 MEMORY_PATH = "/api/fleet/memory"
 MEMORY_SYNC_MAX_ENTRIES = 200
 AGENTPACK_PATH = "/api/fleet/agentpack"
+TRIALS_PATH = "/api/fleet/trials"
 DEFAULT_MIGRATE_INTERVAL_S, MIN_MIGRATE_INTERVAL_S = 60.0, 10.0
 
 
@@ -721,6 +722,7 @@ class FleetManager:
         self.worker = None
         self.netsquad_counts: dict[str, int] = {}  # node id -> netsquad placements (telemetry)
         self._migrating: set[str] = set()  # agent ids with an outbound migration in flight
+        self._trial_store_instance = None  # opened lazily; SQLite connections are per operation
         # Guards every check-then-act on shared gateway state (nonce cache, node registry, the
         # in-flight migration set, fleet.json). verify() is sync and may run on several threads
         # (sync handlers, to_thread callers): its "nonce seen?" check and the insert, and the
@@ -1250,9 +1252,10 @@ class FleetManager:
             if not self.allowed(sender):
                 why = "empty allowlist with AVRONE_FLEET_REQUIRE_ALLOW" if not self.allow else "AVRONE_FLEET_ALLOW"
                 raise self._refuse("sender_not_allowed", f"sender {sender} not in AVRONE_FLEET_ALLOW ({why})", **ctx)
-        if kind == "agentpack" and (not self.allow or sender not in self.allow):
-            # moving a whole agent home is never open to "any token holder": explicit allowlist only
-            raise self._refuse("sender_not_allowed", f"agent migration from {sender or '?'} refused: sender must be "
+        if kind in {"agentpack", "trials"} and (not self.allow or sender not in self.allow):
+            # Agent homes and evidence receipts require an explicit sender allowlist, never token-only allow-all.
+            what = "agent migration" if kind == "agentpack" else "trial ingestion"
+            raise self._refuse("sender_not_allowed", f"{what} from {sender or '?'} refused: sender must be "
                                "listed in a non-empty AVRONE_FLEET_ALLOW", **ctx)
         hops = _parse_hops(payload.get("hops", 1))
         if hops is None:
@@ -1825,6 +1828,88 @@ class FleetManager:
                     bytes=man["total_bytes"], created=man["created"], home=man["home"])
         return {"ok": True, "agent_id": aid, "target": node["node_id"], "files": len(man["files"]),
                 "bytes": man["total_bytes"], "remote": res}
+
+    def _trial_store(self):
+        store = getattr(self, "_trial_store_instance", None)
+        if store is not None:
+            return store
+        with self._state_lock:
+            store = getattr(self, "_trial_store_instance", None)
+            if store is None:
+                from .trial_store import TrialStore
+                store = TrialStore(self.data_dir)
+                self._trial_store_instance = store
+        return store
+
+    def receive_trials(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Receive trials only after dispatch_gateway authenticated this signed payload."""
+        from .trial_store import MAX_TRIAL_BATCH
+
+        if not isinstance(payload, dict):
+            raise ValueError("trial payload must be an object")
+        if request_capability("trials", payload) != "evidence:ingest":
+            raise PermissionError("capability evidence:ingest required")
+        sender = sender_node(payload.get("from"))
+        if not ID_RE.match(sender) or sender == self.node_id:
+            raise ValueError("invalid trial sender node id")
+        if not self.allow or sender not in self.allow:
+            raise PermissionError("trial ingestion requires an explicit AVRONE_FLEET_ALLOW entry")
+        if payload.get("privileged", False) is not False:
+            raise PermissionError("trial ingestion never accepts privileged requests")
+        trials = payload.get("trials")
+        if not isinstance(trials, list):
+            raise ValueError("trials must be a list")
+        if len(trials) > MAX_TRIAL_BATCH:
+            raise ValueError(f"too many trials ({len(trials)} > {MAX_TRIAL_BATCH})")
+        request_id = payload.get("request_id")
+        store = self._trial_store()
+        result = store.receive_batch(
+            trials, peer=sender, transport="fleet_hmac_v1", request_id=request_id
+        )
+        result["snapshot"] = store.snapshot()
+        self._audit(
+            "fleet.trials.ingest", sender=sender, status=result["status"],
+            accepted=result["accepted"], duplicates=result["duplicates"],
+            rejected=result["rejected"], conflicts=result["conflicts"],
+            pooled=result["pooled"], operational=result["operational"],
+            independence="not_assessed",
+        )
+        for item in result["items"]:
+            self._audit(
+                "evidence.trial.receipt.v1", sender=sender,
+                status=item.get("status"), trial_id=item.get("trial_id"),
+                source=item.get("source"), check_version=item.get("check_version"),
+                outcome=item.get("outcome"), independence="not_assessed",
+            )
+        return result
+
+    async def push_trials(self, node_id: str, trials: list[dict[str, Any]],
+                          request_id: str | None = None) -> dict[str, Any]:
+        """Send validated trial envelopes to one explicitly selected fleet peer."""
+        from .trial_contract import validate_trial_envelope
+        from .trial_store import MAX_TRIAL_BATCH
+
+        if not isinstance(trials, list) or len(trials) > MAX_TRIAL_BATCH:
+            raise ValueError(f"trials must be a list of at most {MAX_TRIAL_BATCH} records")
+        if any(not validate_trial_envelope(record) for record in trials):
+            raise ValueError("every trial must be a valid avrone.trial/v1 envelope")
+        if request_id is None:
+            request_id = secrets.token_hex(16)
+        if not isinstance(request_id, str) or len(request_id) > 128:
+            raise ValueError("request_id must be a string of at most 128 characters")
+        node = self.pick(node_id)
+        hops = _parse_hops(getattr(self.core, "fleet_hops", 0))
+        if hops is None:
+            hops = 0
+        self.check_outbound("trials", "evidence:ingest", hops, first_hop=node_id)
+        payload = {
+            "from": self.node_id,
+            "hops": hops + 1,
+            "capability": "evidence:ingest",
+            "request_id": request_id,
+            "trials": trials,
+        }
+        return await self._post(node["url"], TRIALS_PATH, payload, timeout=30)
 
     def receive_agentpack(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Server side of /api/fleet/agentpack. Call ONLY with a payload returned by dispatch_gateway."""

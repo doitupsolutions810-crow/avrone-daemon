@@ -215,13 +215,16 @@ SPAWN_MODES = ("squad", "chat", "deep")
 PRIVILEGED_CAPABILITIES = {"priv:shell", "priv:admin"}
 PRIVILEGED_HEADER = "x-avrone-privileged"
 # non-spawn capabilities, kept apart from the (minimal) spawn/message table above
-SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}}
+SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"},
+                                             "evidence": {"evidence:ingest"}}
 # netsquad: a squad subtask placed on this node (runs as a sub-squad/chat here, may recurse further down)
 NET_CAPABILITIES: dict[str, set[str]] = {"run": {"squad:net"}}
 NETSQUAD_CAP = "squad:net"
 MEMORY_PATH = "/api/fleet/memory"
 MEMORY_SYNC_MAX_ENTRIES = 200
 AGENTPACK_PATH = "/api/fleet/agentpack"
+EVIDENCE_PATH = "/api/fleet/evidence"
+EVIDENCE_CAPABILITY = "evidence:ingest"
 DEFAULT_MIGRATE_INTERVAL_S, MIN_MIGRATE_INTERVAL_S = 60.0, 10.0
 
 
@@ -1531,7 +1534,29 @@ class FleetManager:
         # squad runs under that id so its agents read them, and only posts written here go back.
         origin_run = re.sub(r"[^A-Za-z0-9_-]", "", str(payload.get("origin_run") or ""))[:40]
         rid = f"net-{sender or path[-1]}-{origin_run}" if origin_run else None
-        bridge_merge(c, payload.get("bridge"), sender or path[-1], run_id=rid)
+        bridge_posts = cap_bridge_posts(payload.get("bridge"))
+        evidence_posts = [p for p in bridge_posts if isinstance(p, dict) and p.get("kind") == "evidence"]
+        if evidence_posts:
+            if not sender or not self.allow or sender not in self.allow:
+                bridge_posts = [p for p in bridge_posts
+                                if not (isinstance(p, dict) and p.get("kind") == "evidence")]
+                self._audit("fleet.evidence.refused", code="sender_not_allowlisted",
+                            sender=sender or None, count=len(evidence_posts))
+            else:
+                import sqlite3
+                try:
+                    from .trial_receiver import TrialStore, ingest_authenticated_bridge_posts
+                    summary = ingest_authenticated_bridge_posts(
+                        TrialStore(self.data_dir / "trial_evidence.sqlite3"),
+                        evidence_posts, sender, self.allow,
+                    )
+                    self._audit("fleet.evidence.bridge", sender=sender, **summary)
+                except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+                    self._audit("fleet.evidence.refused", code="storage_or_contract",
+                                reason=str(exc)[:160], sender=sender)
+                    bridge_posts = [p for p in bridge_posts
+                                    if not (isinstance(p, dict) and p.get("kind") == "evidence")]
+        bridge_merge(c, bridge_posts, sender or path[-1], run_id=rid)
         # never privileged; hops / route / budget ref-counted with every live run (see _run_scope)
         with self._run_scope(hops, "", netsquad=(list(path), budget)):
             if rid:
@@ -1653,6 +1678,22 @@ class FleetManager:
         return data
 
     # ------------------------------------------------------------ memory sync
+    async def push_trial(self, node_id: str, envelope: dict[str, Any]) -> dict[str, Any]:
+        """Send one versioned trial to an already registered, allowlisted peer over fleet HMAC."""
+        from .trial_contract import validate_trial_envelope
+        if not validate_trial_envelope(envelope):
+            raise ValueError("trial envelope rejected")
+        self.check_outbound("evidence", EVIDENCE_CAPABILITY, 0, node_id)
+        node = self.pick(node_id)
+        payload = {
+            "schema": "avrone.trial-delivery/v1",
+            "capability": EVIDENCE_CAPABILITY,
+            "from": self.node_id,
+            "hops": 1,
+            "trial": envelope,
+        }
+        return await self._post(node["url"], EVIDENCE_PATH, payload, timeout=30)
+
     async def push_memory(self, entries: list[dict[str, Any]], origin: str) -> dict[str, Any]:
         """Send memory entries ({ns, key, value, ts, agent}) up to the parent over the signed gateway."""
         if not self.enabled:

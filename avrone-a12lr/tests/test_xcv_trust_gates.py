@@ -1,10 +1,13 @@
 """
-Descent XCV separation test — canonical module.
+Descent XCV / XCVI separation test — canonical module.
 Asserts that a perfect Great Scale snapshot never implies authorization
 when any independent trust gate is absent, expired, mismatched, or false.
 All denial cases: geometry pristine, authorization denied.
 Control case: every gate clean -> authorized.
 Invariants: psi >= phi^-2 (cone floor), E_Q >= 0, residual partition sums to 8.
+
+XCVI: trust_context values must be strict booleans (type(v) is bool).
+Strings, ints, and any non-bool are rejected with trust_context_invalid.
 """
 from __future__ import annotations
 
@@ -18,6 +21,12 @@ import pytest
 
 GOLDEN_RATIO = (5 ** 0.5 + 1) / 2
 PHI_INV_SQ = GOLDEN_RATIO ** -2  # phi^-2 ≈ 0.381966
+REQUIRED_TRUST_GATES = (
+    "numerical_gates",
+    "provenance_bound",
+    "capability_scoped",
+    "receipt_chained",
+)
 
 
 def heat_S(h: float) -> float:
@@ -66,6 +75,12 @@ def is_authorized(
     verifier_key: str = "trusted-verifier",
     known_commits: set[str] | None = None,
 ) -> tuple[bool, list[str]]:
+    """Return (authorized, reasons). ALL independent gates must pass.
+
+    trust_context values must be strict booleans — type(v) is bool.
+    Strings, ints, and any non-bool are rejected with trust_context_invalid
+    before any other trust_context gate logic runs.
+    """
     reasons: list[str] = []
 
     # Gate 1: mathematical / numerical
@@ -98,7 +113,6 @@ def is_authorized(
             reasons.append("capability_wrong_operation")
         if not cap.get("signature_valid"):
             reasons.append("capability_signature_invalid")
-        # Attenuation: reduced scope must not be exceeded
         if cap.get("attenuated") and cap.get("scope_exceeded"):
             reasons.append("capability_scope_exceeded")
 
@@ -111,12 +125,25 @@ def is_authorized(
         if receipt.get("verifier") != verifier_key:
             reasons.append("receipt_untrusted_verifier")
 
-    # Gate 5: trust_context explicit falses
+    # Gate 5: trust_context — strict boolean enforcement (XCVI)
     tc = snap.get("trust_context")
-    if isinstance(tc, dict):
-        for k, v in tc.items():
-            if v is False:
-                reasons.append(f"trust_context_{k}_false")
+    if tc is not None:
+        if not isinstance(tc, dict):
+            reasons.append("trust_context_invalid")
+        else:
+            for k, v in tc.items():
+                if type(v) is not bool:
+                    reasons.append("trust_context_invalid")
+                    break
+            else:
+                for g in REQUIRED_TRUST_GATES:
+                    if g not in tc:
+                        reasons.append("trust_context_invalid")
+                        break
+                else:
+                    for k, v in tc.items():
+                        if v is False:
+                            reasons.append(f"trust_context_{k}_false")
 
     return (len(reasons) == 0, reasons)
 
@@ -268,10 +295,103 @@ def test_edge_11_source_commit_absent_from_repo_history_denies():
     assert "source_commit_unknown" in reasons
 
 
+# ── XCVI type-confusion and incomplete-gate cases ──────────────────────────
+
+def test_edge_12_string_boolean_trust_context_denies():
+    """Shape-valid string \"true\" must be rejected — type(v) is bool required."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": "true",
+        "provenance_bound": "true",
+        "capability_scoped": "true",
+        "receipt_chained": "true",
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_13_int_boolean_trust_context_denies():
+    """Integer 1 must be rejected — only true bools pass."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": 1,
+        "provenance_bound": 1,
+        "capability_scoped": 1,
+        "receipt_chained": 1,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_14_missing_required_trust_gate_denies():
+    """Incomplete trust_context (missing one of REQUIRED_TRUST_GATES) denies."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": True,
+        # receipt_chained deliberately absent
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_15_mixed_type_trust_context_denies():
+    """One string among true bools still invalidates the whole context."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": "yes",
+        "receipt_chained": True,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_16_none_value_in_trust_context_denies():
+    """None is not a bool; must deny."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": True,
+        "receipt_chained": None,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
 # ── Control ────────────────────────────────────────────────────────────────
 
 def test_control_all_gates_pass_authorizes():
     snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": True,
+        "receipt_chained": True,
+    }
     cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
            "operation": "accept", "signature_valid": True}
     receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}

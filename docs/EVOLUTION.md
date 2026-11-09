@@ -111,3 +111,20 @@ No force-push. No branch deletion. Existing files not overwritten beyond this re
 Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
 
 If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head ed173473)
+
+Most recent CI run (42690093190) completed with real runners assigned (runner_id 1000008099/8100/8101 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout, after docker-verify success):
+- test (3.11): failed on tests/test_master_prompt.py::test_committed_prompt_is_current. Root cause: tree() in tools/make_master_prompt.py lists raw sorted(d.iterdir())[:12], so CI's creation of __pycache__ under plugins/ (and similar) inserts an extra line that is absent from the clean committed MASTER_PROMPT.md. Diff shows - │   ├── __pycache__ before calculator.py.
+- test (3.12): cancelled.
+- docker-verify: succeeded (Verify.sh present and ran).
+
+Minimal fix pushed to same branch (commit f67dabd9): in tools/make_master_prompt.py tree(), filter out __pycache__, *.egg-info and dotfiles so generation is deterministic across clean trees and CI bytecode environments. Current MASTER_PROMPT.md already matches the filtered tree.
+
+No force-push. No branch deletion. Existing files not overwritten beyond this additive edit.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.

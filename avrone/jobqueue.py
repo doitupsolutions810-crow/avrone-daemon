@@ -44,7 +44,7 @@ def _decode(text: Any) -> Any:
         return None
     try:
         return json.loads(text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {"corrupt": True, "raw": str(text)[:2000]}
 
 
@@ -152,7 +152,7 @@ class JobQueue:
                     return None
                 try:
                     payload = json.loads(row[2]) if row[2] is not None else {}
-                except (TypeError, ValueError) as e:
+                except (TypeError, ValueError, RecursionError) as e:
                     # used to raise out of claim() after COMMIT and kill the Worker loop for good
                     self._db.execute("UPDATE jobs SET status='dead', error=?, updated=? WHERE id=?",
                                      (_err_text(f"corrupt payload: {e}"), now, row[0]))

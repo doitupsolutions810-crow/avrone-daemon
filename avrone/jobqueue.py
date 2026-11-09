@@ -35,6 +35,8 @@ DEFAULT_MAX_PENDING, HARD_MAX_PENDING = 10_000, 1_000_000
 DEFAULT_KEEP_FINISHED, HARD_KEEP_FINISHED = 5_000, 1_000_000
 DEFAULT_RETAIN_S = 7 * 86400
 PRUNE_EVERY = 100
+COMPLETE_TRIES = 4  # round 126: Worker retries recording a result before leaving it to the lease
+COMPLETE_BACKOFF_S = 0.5
 
 
 class QueueFull(Exception):
@@ -414,29 +416,52 @@ class Worker:
             try:
                 try:
                     result = await self.handler(job["kind"], job["payload"])
-                finally:
-                    if beat is not None:
-                        beat.cancel()
-                        try:
-                            await beat
-                        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                            pass
-                await self.q.complete(jid, result, token)
-            except asyncio.CancelledError:
-                if token:
-                    try:  # hand the job back so the next worker can run it now, not after the lease
-                        await asyncio.shield(self.q.release(jid, token))
-                    except BaseException:  # noqa: BLE001
-                        pass
-                raise
-            except Exception as e:  # noqa: BLE001
-                try:
-                    await self.q.fail(jid, f"{type(e).__name__}: {e}", token,
-                                      permanent=isinstance(e, PermanentJobError))
                 except asyncio.CancelledError:
+                    if token:
+                        try:  # hand the job back so the next worker can run it now, not after the lease
+                            await asyncio.shield(self.q.release(jid, token))
+                        except BaseException:  # noqa: BLE001
+                            pass
                     raise
-                except Exception:  # noqa: BLE001
-                    log.warning("job %s: could not record failure", jid, exc_info=True)
+                except Exception as e:  # noqa: BLE001
+                    try:
+                        await self.q.fail(jid, f"{type(e).__name__}: {e}", token,
+                                          permanent=isinstance(e, PermanentJobError))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001
+                        log.warning("job %s: could not record failure", jid, exc_info=True)
+                    continue
+                await self._complete(jid, result, token)
+            finally:
+                if beat is not None:
+                    beat.cancel()
+                    try:
+                        await beat
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                        pass
+
+    async def _complete(self, jid: str, result: Any, token: str | None) -> bool:
+        """Record a finished job's result. Round 126: a complete() that raised (full disk, "database
+        is locked" past busy_timeout, an I/O error) was handled as if the HANDLER had failed: fail()
+        requeued the job with that storage error as its error, so work that succeeded ran again and
+        a job could go 'dead' after max_attempts successful runs. The write is now retried with
+        backoff while the lease heartbeat keeps running; if it never lands the job is left to its
+        lease (reaped and run again: at-least-once), never counted as a failed run."""
+        for i in range(COMPLETE_TRIES):
+            try:
+                return await self.q.complete(jid, result, token)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                if getattr(self.q, "_closed", False):
+                    return False
+                log.warning("job %s: could not record result (try %d of %d)", jid, i + 1,
+                            COMPLETE_TRIES, exc_info=True)
+                if i < COMPLETE_TRIES - 1:
+                    await asyncio.sleep(min(COMPLETE_BACKOFF_S * (2 ** i), 5.0))
+        log.error("job %s: result not recorded; it runs again when its lease ends", jid)
+        return False
 
     def start(self) -> None:
         if self._task is None:

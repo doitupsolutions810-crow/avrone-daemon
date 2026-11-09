@@ -81,6 +81,22 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.119: Round 126: a job whose result can't be saved is not counted as a failed run. 5,913 tests + 19 integration
+
+- **Bug** (probe `jqfull.py`, RLIMIT_FSIZE): on a full disk, `JobQueue.complete()` raised `sqlite3.OperationalError` ("disk I/O error"). `Worker` handled that as if the **handler** had failed: `fail()` requeued the job with the storage error as its error.
+  - Work that had succeeded ran again.
+  - If space stayed short long enough, a job went `dead` after max_attempts successful runs.
+- **Fix:**
+  - `Worker._complete` retries recording the result `COMPLETE_TRIES` (4) times, with backoff starting at 0.5 s and capped at 5 s. The lease heartbeat keeps running during the retries.
+  - If the result never lands, the job is left to its lease: it is reaped and run again (at-least-once), never recorded as a failed run.
+  - Handler errors fail exactly as before.
+- **Probed clean:**
+  - `xproc.py`: 4 processes x 25 parallel `memory_save`, `task_board` add, `research_note` and `bridge_post` on one shared workspace kept every write. Board ids and bridge ids are unique.
+  - `jqxproc.py`: 6 processes enqueued and claimed 900 jobs, each claimed exactly once, with no lock errors.
+  - After the disk is freed, the queue works again and `integrity_check` is ok.
+  - The memory store under the file-size limit loses nothing and leaves no temp files.
+- **Tests:** `tests/test_round126_jobqueue_complete.py` (4). 3 fail on v0.118.
+
 ## v0.118: Round 125: edit_file serializes across processes. 5,909 tests + 19 integration
 
 - **Bug** (probe `editxproc.py`): the round 115/116 per-path edit lock is per process. The daemon and the MCP server, or two workers sharing a workspace, could each read the same file, change their own line and replace it. With 4 processes x 25 edits of distinct lines, every edit answered "edited", but only 92-96 of the 100 changes survived. This closes the "edit_file lock is in-process only" known limit.

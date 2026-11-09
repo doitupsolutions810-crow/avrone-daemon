@@ -1,13 +1,17 @@
 import asyncio
+import hashlib
 import json
+import time
+import uuid
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from avrone.fleet import FleetManager, sign
 from avrone.server import app
-from avrone.trial_contract import make_trial
-from avrone.trial_receiver import TrialStore, verify_receipt
+from avrone.trial_contract import canonical_trial, make_trial
+from avrone.trial_receiver import TrialStore, signed_receipt, verify_receipt
 
 TOKEN = "trial-fleet-test-secret-" + "x" * 40
 PATH = "/api/fleet/evidence"
@@ -173,13 +177,45 @@ def test_fleet_http_rejects_deep_json_and_invalid_media_type(tmp_path, monkeypat
     run(go())
 
 
+def test_outbound_push_trial_rejects_receipt_for_wrong_peer(tmp_path, monkeypatch):
+    fleet = fleet_for(tmp_path, monkeypatch)
+
+    async def fake_post(base, path, payload, timeout=30):
+        receipt_data = {
+            "receipt_id": str(uuid.uuid4()),
+            "trial_id": payload["trial"]["trial_id"],
+            "payload_digest": hashlib.sha256(canonical_trial(payload["trial"])).hexdigest(),
+            "status": "accepted",
+            "received_at": int(time.time()),
+        }
+        return {
+            "status": "accepted",
+            "receipt": signed_receipt(TOKEN, receipt_data, payload["from"], "fleet", "other-peer"),
+        }
+
+    fleet.pick = lambda node_id: {"url": "http://peer-node"}
+    fleet._post = fake_post
+    with pytest.raises(RuntimeError, match="mismatched trial receipt"):
+        run(fleet.push_trial("sender-node", sample()))
+
+
 def test_outbound_push_trial_uses_existing_allowlisted_peer_and_contract(tmp_path, monkeypatch):
     fleet = fleet_for(tmp_path, monkeypatch)
     captured = {}
 
     async def fake_post(base, path, payload, timeout=30):
         captured.update(base=base, path=path, payload=payload, timeout=timeout)
-        return {"status": "accepted"}
+        receipt_data = {
+            "receipt_id": str(uuid.uuid4()),
+            "trial_id": payload["trial"]["trial_id"],
+            "payload_digest": hashlib.sha256(canonical_trial(payload["trial"])).hexdigest(),
+            "status": "accepted",
+            "received_at": int(time.time()),
+        }
+        return {
+            "status": "accepted",
+            "receipt": signed_receipt(TOKEN, receipt_data, payload["from"], "fleet", "peer-node"),
+        }
 
     fleet.pick = lambda node_id: {"url": "http://peer-node"}
     fleet._post = fake_post

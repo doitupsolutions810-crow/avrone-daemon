@@ -1663,7 +1663,7 @@ class FleetManager:
         headers = {"content-type": "application/json", **sign(self.token, "POST", path, body)}
         async with self._client(timeout) as c:
             r = await c.post(base + path, content=body, headers=headers)
-        if r.status_code >= 400:
+        if r.status_code >= 400 and not (path == EVIDENCE_PATH and r.status_code == 409):
             raise RuntimeError(f"{base}{path} -> {r.status_code}: {r.text[:300]}")
         try:
             data = r.json()
@@ -1692,7 +1692,19 @@ class FleetManager:
             "hops": 1,
             "trial": envelope,
         }
-        return await self._post(node["url"], EVIDENCE_PATH, payload, timeout=30)
+        result = await self._post(node["url"], EVIDENCE_PATH, payload, timeout=30)
+        from .trial_contract import canonical_trial
+        from .trial_receiver import verify_receipt
+        receipt = result.get("receipt")
+        expected_digest = hashlib.sha256(canonical_trial(envelope)).hexdigest()
+        expected_receiver = str(node.get("node_id") or node_id)
+        if (not verify_receipt(self.token, receipt)
+                or receipt.get("authenticated_sender") != self.node_id
+                or receipt.get("receiver_node") != expected_receiver
+                or receipt.get("trial_id") != envelope["trial_id"]
+                or receipt.get("payload_digest") != expected_digest):
+            raise RuntimeError("peer returned an invalid or mismatched trial receipt")
+        return result
 
     async def push_memory(self, entries: list[dict[str, Any]], origin: str) -> dict[str, Any]:
         """Send memory entries ({ns, key, value, ts, agent}) up to the parent over the signed gateway."""

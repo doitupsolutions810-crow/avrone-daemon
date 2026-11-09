@@ -580,7 +580,7 @@ async def fleet_evidence(request: Request):
         result = await asyncio.to_thread(
             store.accept, envelope, sender, "fleet", request.headers.get("x-avrone-nonce")
         )
-        receipt = signed_receipt(fleet.token, result, sender, "fleet")
+        receipt = signed_receipt(fleet.token, result, sender, "fleet", fleet.node_id)
     except TrialStoreFull as exc:
         raise HTTPException(503, str(exc)) from None
     except (sqlite3.Error, OSError):

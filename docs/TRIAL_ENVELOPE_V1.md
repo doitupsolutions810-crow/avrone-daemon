@@ -20,7 +20,7 @@ The receiver is POST /api/fleet/evidence. The body follows avrone.trial-delivery
 
 The receiver additionally requires the signed from node to be in a non-empty AVRONE_FLEET_ALLOW list. This is intentionally stricter than the fleet's optional allow-all mode. The body cap is 64 KiB, duplicate JSON keys and non-finite numbers are rejected, and deeply nested JSON fails closed. FleetManager.push_trial(node_id, envelope) sends only to a peer already present in the fleet registry and allowed by the existing outbound policy.
 
-The response includes a receipt HMAC signed with the existing fleet token. Statuses are accepted (201), duplicate (200), stored_non_pass (202), and quarantined (409). A conflicting replay is appended to the quarantine table; the first accepted record is never overwritten.
+The response includes a receipt HMAC signed with the existing fleet token and binds both the authenticated sender claim and receiver node. FleetManager.push_trial verifies the receipt before returning it. Statuses are accepted (201), duplicate (200), stored_non_pass (202), and quarantined (409). A conflicting replay is appended to the quarantine table; repeated identical conflicts reuse the same quarantine row, and the first accepted record is never overwritten.
 
 ## Bridge adapter
 

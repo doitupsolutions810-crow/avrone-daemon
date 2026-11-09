@@ -297,14 +297,15 @@ class TrialStore:
                              "failed": bool(r["failed"])} for r in rows])
 
 
-def signed_receipt(secret: str, result: dict[str, Any], authenticated_sender: str, transport: str) -> dict[str, Any]:
+def signed_receipt(secret: str, result: dict[str, Any], authenticated_sender: str,
+                   transport: str, receiver_node: str) -> dict[str, Any]:
     if not isinstance(secret, str) or not secret:
         raise ValueError("receipt signing secret is unavailable")
     unsigned = {
         "receipt_id": result["receipt_id"], "trial_id": result["trial_id"],
         "payload_digest": result["payload_digest"], "status": result["status"],
         "received_at": int(result["received_at"]), "authenticated_sender": _sender(authenticated_sender),
-        "transport": transport,
+        "receiver_node": _sender(receiver_node), "transport": transport,
     }
     signature = hmac.new(secret.encode("utf-8"), _canonical_receipt(unsigned), hashlib.sha256).hexdigest()
     return {**unsigned, "signature": signature}
@@ -313,7 +314,7 @@ def signed_receipt(secret: str, result: dict[str, Any], authenticated_sender: st
 def verify_receipt(secret: str, receipt: Any) -> bool:
     required = {
         "receipt_id", "trial_id", "payload_digest", "status", "received_at",
-        "authenticated_sender", "transport", "signature",
+        "authenticated_sender", "receiver_node", "transport", "signature",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         return False
@@ -329,6 +330,7 @@ def verify_receipt(secret: str, receipt: Any) -> bool:
         if isinstance(receipt["received_at"], bool) or not isinstance(receipt["received_at"], int):
             return False
         _sender(receipt["authenticated_sender"])
+        _sender(receipt["receiver_node"])
         if receipt["transport"] not in {"fleet", "bridge"}:
             return False
         signature = receipt["signature"]

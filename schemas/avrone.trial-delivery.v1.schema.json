@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.avrone.local/avrone.trial-delivery.v1.schema.json",
+  "title": "AVRONE Fleet Trial Delivery v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "capability", "from", "hops", "trial"],
+  "properties": {
+    "schema": {"const": "avrone.trial-delivery/v1"},
+    "capability": {"const": "evidence:ingest"},
+    "from": {"type": "string", "minLength": 1, "maxLength": 80},
+    "hops": {"type": "integer", "minimum": 1, "maximum": 3},
+    "trial": {"$ref": "avrone.trial.v1.schema.json"}
+  }
+}

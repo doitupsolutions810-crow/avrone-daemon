@@ -5,7 +5,7 @@ the same Bridge. A post is::
 
     {id, run_id, agent, role, kind, text, refs: [post ids], ts, origin_node}
 
-with kind one of finding | question | answer | correction | conclusion.
+with kind one of finding | question | answer | correction | conclusion | evidence.
 
 Bounds (env knobs, clamped to hard ceilings)
   AVRONE_BRIDGE_MAX_POSTS   posts kept per run (default 500, hard cap 5000); the oldest are
@@ -39,7 +39,7 @@ from typing import Any, Iterable
 
 from .tools import Tool, off_loop
 
-KINDS = ("finding", "question", "answer", "correction", "conclusion")
+KINDS = ("finding", "question", "answer", "correction", "conclusion", "evidence")
 MAX_TEXT = 4000
 MAX_REFS = 20
 DEFAULT_MAX_POSTS, HARD_MAX_POSTS = 500, 5000

@@ -166,6 +166,7 @@ def max_message_chars() -> int:
 
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 HARD_MAX_BODY_BYTES = 512 * 1024 * 1024
+TRIAL_EVIDENCE_MAX_BODY_BYTES = 64 * 1024
 
 
 def max_body_bytes(path: str = "") -> int:
@@ -177,6 +178,8 @@ def max_body_bytes(path: str = "") -> int:
     if path == "/api/fleet/agentpack":
         from .agentpack import quota_bytes
         n = max(n, (quota_bytes() + 1024 * 1024) * 4 // 3 + 4 * 1024 * 1024)
+    if path == "/api/fleet/evidence":
+        n = min(n, TRIAL_EVIDENCE_MAX_BODY_BYTES)
     return n
 
 
@@ -527,6 +530,76 @@ async def fleet_message(request: Request):
         raise HTTPException(400, str(e)[:300]) from None
     except (RuntimeError, KeyError) as e:
         raise HTTPException(502, str(e)) from None
+
+
+@app.post("/api/fleet/evidence")
+async def fleet_evidence(request: Request):
+    """Receive one bounded trial over the existing authenticated fleet gateway."""
+    import sqlite3
+    from .fleet import ID_RE, sender_node
+    from .trial_contract import validate_trial_envelope
+    from .trial_receiver import TrialStore, TrialStoreFull, signed_receipt, strict_json_loads
+
+    content_types = request.headers.getlist("content-type")
+    media_type = content_types[0].split(";", 1)[0].strip().lower() if len(content_types) == 1 else ""
+    if media_type != "application/json":
+        raise HTTPException(415, "trial delivery content type must be application/json")
+    for name in ("x-avrone-ts", "x-avrone-nonce", "x-avrone-sig"):
+        if len(request.headers.getlist(name)) != 1:
+            raise HTTPException(401, "ambiguous or missing fleet authentication header")
+    if len(request.headers.getlist("content-length")) > 1:
+        raise HTTPException(400, "ambiguous content length")
+
+    payload = await _gateway(request, "evidence")
+    raw = await request.body()
+    try:
+        strict_payload = strict_json_loads(raw)
+    except ValueError:
+        raise HTTPException(400, "trial delivery body is not strict JSON") from None
+    if not isinstance(strict_payload, dict) or strict_payload != payload:
+        raise HTTPException(400, "trial delivery body is ambiguous")
+
+    required = {"schema", "capability", "from", "hops", "trial"}
+    if set(payload) != required or payload.get("schema") != "avrone.trial-delivery/v1":
+        raise HTTPException(422, "unsupported trial delivery contract")
+    if payload.get("capability") != "evidence:ingest":
+        raise HTTPException(403, "evidence:ingest capability required")
+
+    sender = sender_node(payload.get("from"))
+    if not isinstance(sender, str) or not ID_RE.fullmatch(sender):
+        raise HTTPException(403, "signed fleet sender identity is invalid")
+    fleet = _fleet()
+    if not fleet.allow or sender not in fleet.allow:
+        raise HTTPException(403, "trial evidence sender must be explicitly allowlisted")
+
+    envelope = payload.get("trial")
+    if not validate_trial_envelope(envelope):
+        raise HTTPException(422, "trial envelope rejected")
+    try:
+        store = TrialStore(fleet.data_dir / "trial_evidence.sqlite3")
+        result = await asyncio.to_thread(
+            store.accept, envelope, sender, "fleet", request.headers.get("x-avrone-nonce")
+        )
+        receipt = signed_receipt(fleet.token, result, sender, "fleet", fleet.node_id)
+    except TrialStoreFull as exc:
+        raise HTTPException(503, str(exc)) from None
+    except (sqlite3.Error, OSError):
+        raise HTTPException(503, "trial evidence storage unavailable") from None
+    except ValueError:
+        raise HTTPException(422, "trial envelope or receipt rejected") from None
+
+    status_code = {
+        "accepted": 201, "duplicate": 200, "stored_non_pass": 202, "quarantined": 409,
+    }[result["status"]]
+    response = {
+        "accepted": result["status"] != "quarantined",
+        "status": result["status"],
+        "poolable": result["poolable"],
+        "receipt": receipt,
+    }
+    if "quarantine_id" in result:
+        response["quarantine_id"] = result["quarantine_id"]
+    return SafeJSONResponse(response, status_code=status_code)
 
 
 @app.get("/api/fleet/directory")

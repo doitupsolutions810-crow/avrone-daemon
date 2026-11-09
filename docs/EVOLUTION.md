@@ -128,3 +128,20 @@ No force-push. No branch deletion. Existing files not overwritten beyond this ad
 Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
 
 If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head 2ea0953) — GREEN
+
+Most recent CI run (42699758348) completed with success. Real runners assigned (runner_id 1000008110/8111/8112 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. Previous minimal fix (exclude __pycache__ from MASTER_PROMPT tree listing) resolved the nondeterminism.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: recent workflow runs show failures (e.g. CI run 42569883235 and squad-round-notify failures), but those are outside the scope of the requested branch focus. No force-push, no branch deletion performed.

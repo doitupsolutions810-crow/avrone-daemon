@@ -39,3 +39,17 @@ prove independent sampling, equivalent environments, causal comparability, or
 representative coverage. The evidence pool continues to report
 \`independence: not_assessed\` unless a separately reviewed sampling design supports
 a stronger statement.
+
+
+## Cross-runtime canonicalization boundary
+
+The v1 reference canonicalizer recursively NFC-normalizes configuration strings and keys, rejects
+normalized-key collisions, limits integers to the interoperable safe-integer range, and serializes
+with the AVRONE Python reference encoder (`json.dumps`, sorted keys, compact separators,
+`ensure_ascii=False`, `allow_nan=False`). This produces stable identities in AVRONE and for
+clients that use the same reference rules. It is **not** a declaration that every language's
+default JSON encoder emits identical numeric bytes: for example, a runtime may serialize
+`1.0`, `1e-7`, or negative zero differently. Non-Python producers must use a reviewed v1
+compatibility implementation or send configuration through an AVRONE producer; do not calculate
+the config digest with default `JSON.stringify`. A future language-neutral numeric canonicalizer
+requires a new, versioned contract and shared test vectors.

@@ -103,18 +103,33 @@ def is_authorized(
     if cap is None:
         reasons.append("capability_missing")
     else:
+        if "audience" not in cap:
+            reasons.append("capability_audience_missing")
+        if "operation" not in cap:
+            reasons.append("capability_operation_missing")
+        if "signature_valid" not in cap:
+            reasons.append("capability_signature_valid_missing")
         if cap.get("expired"):
             reasons.append("capability_expired")
         if cap.get("revoked"):
             reasons.append("capability_revoked")
-        if cap.get("audience") != "avrone-daemon":
+        if cap.get("audience") is not None and cap.get("audience") != "avrone-daemon":
             reasons.append("capability_wrong_audience")
-        if cap.get("operation") not in ("accept", "execute", "attest"):
+        if cap.get("operation") is not None and cap.get("operation") not in ("accept", "execute", "attest"):
             reasons.append("capability_wrong_operation")
-        if not cap.get("signature_valid"):
+        if cap.get("signature_valid") is False:
             reasons.append("capability_signature_invalid")
         if cap.get("attenuated") and cap.get("scope_exceeded"):
             reasons.append("capability_scope_exceeded")
+        # Temporal: not_before in the future is a clock-skew deny
+        if cap.get("not_before") is not None:
+            try:
+                # treat as epoch seconds; if > now+60s, deny
+                import time
+                if float(cap["not_before"]) > time.time() + 60:
+                    reasons.append("capability_not_before_future")
+            except (TypeError, ValueError):
+                reasons.append("capability_not_before_invalid")
 
     # Gate 4: execution receipt
     if receipt is None:
@@ -373,6 +388,116 @@ def test_edge_16_none_value_in_trust_context_denies():
         "provenance_bound": True,
         "capability_scoped": True,
         "receipt_chained": None,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+# ── Longer robust suite (17–22) ────────────────────────────────────────────
+
+def test_edge_17_empty_trust_context_dict_denies():
+    """Empty dict lacks REQUIRED_TRUST_GATES."""
+    snap = make_snapshot()
+    snap["trust_context"] = {}
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_18_list_value_in_trust_context_denies():
+    """A list is not a bool."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": [True],
+        "receipt_chained": True,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_19_nested_dict_value_denies():
+    """Nested dict is not a bool."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": {"ok": True},
+        "receipt_chained": True,
+    }
+    cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
+           "operation": "accept", "signature_valid": True}
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "trust_context_invalid" in reasons
+
+
+def test_edge_20_capability_missing_required_field_denies():
+    """Capability without audience field fails closed."""
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": True,
+        "receipt_chained": True,
+    }
+    cap = {"expired": False, "revoked": False, "operation": "accept", "signature_valid": True}
+    # audience deliberately absent
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "capability_audience_missing" in reasons or "capability_wrong_audience" in reasons
+
+
+def test_edge_21_not_before_far_future_denies():
+    """Capability with not_before in the far future is clock-skew denied."""
+    import time
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": True,
+        "provenance_bound": True,
+        "capability_scoped": True,
+        "receipt_chained": True,
+    }
+    cap = {
+        "expired": False,
+        "revoked": False,
+        "audience": "avrone-daemon",
+        "operation": "accept",
+        "signature_valid": True,
+        "not_before": time.time() + 86400 * 365,  # one year ahead
+    }
+    receipt = {"envelope_hash": envelope_hash(snap), "verifier": "trusted-verifier"}
+    ok, reasons = is_authorized(snap, cap, receipt)
+    assert not ok
+    assert "capability_not_before_future" in reasons
+
+
+def test_edge_22_bool_subclass_rejected():
+    """Only exact bool type; a custom subclass fails type(v) is bool."""
+    class FakeBool(int):
+        def __bool__(self):
+            return True
+
+    snap = make_snapshot()
+    snap["trust_context"] = {
+        "numerical_gates": FakeBool(1),
+        "provenance_bound": True,
+        "capability_scoped": True,
+        "receipt_chained": True,
     }
     cap = {"expired": False, "revoked": False, "audience": "avrone-daemon",
            "operation": "accept", "signature_valid": True}

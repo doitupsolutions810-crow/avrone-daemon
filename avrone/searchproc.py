@@ -21,14 +21,71 @@ from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
-    if root.is_file():
+    """Iterative depth-first walk; os.walk's recursive generator overflows on deep trees.
+
+    Directory descriptors are opened relative to their already-open parent and with
+    O_NOFOLLOW. This avoids both Python recursion and following a directory symlink
+    swapped in between enumeration and descent. File reads remain O_NOFOLLOW via
+    safeio.read_capped in run().
+    """
+    try:
+        root_stat = root.stat()
+    except OSError:
+        return
+    if stat.S_ISREG(root_stat.st_mode):
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
+    if not stat.S_ISDIR(root_stat.st_mode):
+        return
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_fd = os.open(root, flags)
+    except OSError:
+        return
+
+    stack: list[tuple[int, Path]] = [(root_fd, root)]
+    try:
+        while stack:
+            dir_fd, directory = stack.pop()
+            children: list[tuple[int, Path]] = []
+            try:
+                with os.scandir(dir_fd) as entries:
+                    files: list[Path] = []
+                    dirs: list[tuple[int, Path]] = []
+                    for entry in entries:
+                        child = directory / entry.name
+                        try:
+                            is_dir = entry.is_dir(follow_symlinks=False)
+                        except OSError:
+                            is_dir = False
+                        if not is_dir:
+                            # Keep symlinks/special files in the file list so run()
+                            # applies lstat + regular-file checks and never reads them.
+                            files.append(child)
+                            continue
+                        if entry.name in skip_names or str(child) in skip_paths:
+                            continue
+                        try:
+                            child_fd = os.open(
+                                entry.name, flags, dir_fd=dir_fd,
+                            )
+                        except OSError:
+                            continue
+                        dirs.append((child_fd, child))
+                for child in sorted(files, key=lambda p: p.name):
+                    yield child
+                # LIFO stack: reverse insertion preserves os.walk's ascending DFS order.
+                stack.extend(reversed(sorted(dirs, key=lambda item: str(item[1]))))
+            finally:
+                os.close(dir_fd)
+    finally:
+        # A consumer may stop after cap hits or an exception; close queued descriptors.
+        for queued_fd, _ in stack:
+            try:
+                os.close(queued_fd)
+            except OSError:
+                pass
 
 
 def run(req: dict, out) -> None:

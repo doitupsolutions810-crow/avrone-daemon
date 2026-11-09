@@ -56,6 +56,13 @@ REQUIRED_TRUST_GATES = (
     "receipt_chained",
 )
 
+# Keys expected by Descent XCV separation tests (observational only)
+TRUST_CONTEXT_KEYS = (
+    "source_commit", "artifact_digest", "signature_verified",
+    "capability_valid", "execution_receipt", "numerical_gates_passed",
+    "domain_assumptions_valid",
+)
+
 
 def heat(h: float) -> float:
     x = max(0.0, min(1.0, float(h)))
@@ -120,6 +127,9 @@ def evidence_snapshot(
     Optional `trust_context` is attached verbatim under key `trust_context` when provided.
     Default-off: when omitted the key is absent. Purely observational — never used in any
     acceptance decision. Authorization logic lives in is_authorized.
+
+    When provided, also records trust_gates_present and all_trust_gates_pass (computed
+    from TRUST_CONTEXT_KEYS; unknown keys raise). Does not alter geometry.
     """
     if isinstance(failures, bool) or isinstance(runs, bool):
         raise ValueError("failures and runs must be integers")
@@ -142,7 +152,14 @@ def evidence_snapshot(
     if trust_context is not None:
         if not isinstance(trust_context, dict):
             raise ValueError("trust_context must be a dict when provided")
+        for k in trust_context:
+            if k not in TRUST_CONTEXT_KEYS:
+                raise ValueError("unknown trust_context key")
         out["trust_context"] = trust_context
+        present = bool(trust_context)
+        all_pass = present and all(trust_context.get(k) is True for k in TRUST_CONTEXT_KEYS)
+        out["trust_gates_present"] = present
+        out["all_trust_gates_pass"] = all_pass
     return out
 
 

@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.118: Round 125: edit_file serializes across processes. 5,909 tests + 19 integration
+
+- **Bug** (probe `editxproc.py`): the round 115/116 per-path edit lock is per process. The daemon and the MCP server, or two workers sharing a workspace, could each read the same file, change their own line and replace it. With 4 processes x 25 edits of distinct lines, every edit answered "edited", but only 92-96 of the 100 changes survived. This closes the "edit_file lock is in-process only" known limit.
+- **Fix:** `tools_extra._dir_flock` holds an exclusive flock on the file's **directory** for the read-modify-write.
+  - **Why the directory:** `atomic_write` replaces the file's inode, so a lock on the old inode would not be seen by an editor that opened the new one. No lock files appear in the workspace.
+  - **Bounded:** the wait goes through `safeio.flock_wait`. If the directory can't be opened or locked in time, the edit goes on with the stamp check alone, as before.
+- **After the fix:** 100 of 100 edits kept on 3 of 3 runs. The in-process race (`editrace.py`, 40 of 40) and worker starvation (`editstarve.py`, max to_thread latency 0.02 s) are unchanged.
+- **Also probed clean:** `llmfuzz.py` sent 19 hostile model-reply shapes through chat, squad and deep. They included 200k-deep JSON in final, args and subtasks, 1e999/NaN finals, 5,000 subtasks, a 3 MB reply, NUL bytes, surrogates and 20k concatenated objects. Every run answered 200 with a string, and none took more than 2.1 s.
+- **Tests:** `tests/test_round125_edit_xprocess.py` (4). 3 fail on v0.117.
+
 ## v0.117: Round 124: storage failures in tool results name the file and what ran out. 5,905 tests + 19 integration
 
 - **Bug** (probe `fullfs.py`, RLIMIT_FSIZE=1): `write_file`, `artifact_save` and `memory_save` answered a bare `ERROR: OSError: [Errno 27] File too large`. `write()` errors carry no filename, so the agent wasn't told which file failed, or that retrying could not help.

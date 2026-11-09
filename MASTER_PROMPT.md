@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.117.0)
+# AVRONE MASTER PROMPT (v0.118.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,905 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~5,909 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -102,7 +102,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 291 test files, offline by default
+├── tests/                  # 292 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -315,6 +315,16 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.118: Round 125: edit_file serializes across processes. 5,909 tests + 19 integration
+
+- **Bug** (probe `editxproc.py`): the round 115/116 per-path edit lock is per process. The daemon and the MCP server, or two workers sharing a workspace, could each read the same file, change their own line and replace it. With 4 processes x 25 edits of distinct lines, every edit answered "edited", but only 92-96 of the 100 changes survived. This closes the "edit_file lock is in-process only" known limit.
+- **Fix:** `tools_extra._dir_flock` holds an exclusive flock on the file's **directory** for the read-modify-write.
+  - **Why the directory:** `atomic_write` replaces the file's inode, so a lock on the old inode would not be seen by an editor that opened the new one. No lock files appear in the workspace.
+  - **Bounded:** the wait goes through `safeio.flock_wait`. If the directory can't be opened or locked in time, the edit goes on with the stamp check alone, as before.
+- **After the fix:** 100 of 100 edits kept on 3 of 3 runs. The in-process race (`editrace.py`, 40 of 40) and worker starvation (`editstarve.py`, max to_thread latency 0.02 s) are unchanged.
+- **Also probed clean:** `llmfuzz.py` sent 19 hostile model-reply shapes through chat, squad and deep. They included 200k-deep JSON in final, args and subtasks, 1e999/NaN finals, 5,000 subtasks, a 3 MB reply, NUL bytes, surrogates and 20k concatenated objects. Every run answered 200 with a string, and none took more than 2.1 s.
+- **Tests:** `tests/test_round125_edit_xprocess.py` (4). 3 fail on v0.117.
+
 ## v0.117: Round 124: storage failures in tool results name the file and what ran out. 5,905 tests + 19 integration
 
 - **Bug** (probe `fullfs.py`, RLIMIT_FSIZE=1): `write_file`, `artifact_save` and `memory_save` answered a bare `ERROR: OSError: [Errno 27] File too large`. `write()` errors carry no filename, so the agent wasn't told which file failed, or that retrying could not help.
@@ -332,21 +342,6 @@ landed and the suite is green. End with what is still open.
 - **Checked clean:** tools return `ERROR:` text for surrogate args, model requests already scrub content (`clean_text`), WS events and the MCP server already escape.
 - **Tests:** `tests/test_round123_surrogates.py` (7), 6 fail on v0.115.
 
-## v0.115: Round 122: roles in non-Latin scripts get their own identity. 5,883 tests + 19 integration
-
-- **Bug:** `agentfs.sanitize_agent_id` dropped every non-ASCII character, which caused three problems:
-  - All Chinese, Greek, Cyrillic and Arabic roles (研究员, 代码审查员, Ελεγκτής, Аналитик, محلل) became `agent`. They shared one home dir, one memory namespace (round 120 made memory follow the id) and one agent pack, across runs.
-  - Mixed roles collided on their ASCII part: "数据 Analyst" and "代码 Analyst" were both `analyst`.
-  - "Rédacteur" became `r-dacteur`.
-- **Fix:** a role containing non-ASCII letters, digits or combining marks is NFC-normalized first. It keeps its ASCII part and gets `_u` plus 8 hex digits of SHA-256 over the casefolded role.
-  - "Rédacteur", "RÉDACTEUR" and the NFD spelling all map to one id.
-  - Pure-ASCII roles and symbol decoration (emoji) map exactly as before.
-  - Output is ASCII, at most `MAX_ID_LEN`, and idempotent (`sanitize(sanitize(x)) == sanitize(x)`, so agent packs re-import cleanly).
-  - `_u` is used rather than `-` so the suffix is never mistaken for the `-N` counter suffix.
-- **Legacy carry-over:** round 120's carry-over is skipped for these roles, because their old namespace was shared with every role that had the same ASCII part.
-- **Not migrated:** existing home dirs under `agent` and `analyst` are left in place, since they mixed several roles.
-- **Tests:** `tests/test_round122_unicode_roles.py` has 21 tests; 3 fail on v0.114. The others are guards for ASCII stability, safety and idempotence.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -358,4 +353,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.117.0 checked out: 5,905 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.118.0 checked out: 5,909 passed, 99% coverage. Next: round <N+1> on <angle>."

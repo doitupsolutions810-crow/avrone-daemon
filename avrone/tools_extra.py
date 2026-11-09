@@ -509,6 +509,28 @@ async def _acquire_async(lock: threading.Lock) -> None:
         delay = min(delay * 2, 0.02)
 
 
+def _dir_flock(p: Path) -> int | None:
+    """Round 125: hold an exclusive flock on the file's directory for the read-modify-write.
+    The per-path lock is per process: the daemon and the MCP server (or two workers) editing one
+    file each read the same content, and 4 processes x 25 edits of distinct lines kept 92-96.
+    The directory is locked, not the file: atomic_write replaces the file's inode, so a lock on
+    the old inode would not be seen by an editor that opened the new one. Bounded wait
+    (safeio.flock_wait); when the directory cannot be opened or locked in time the edit goes on
+    with the stamp check alone, as before."""
+    from .safeio import flock_wait
+    try:
+        fd = os.open(p.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+    except (OSError, ValueError):
+        return None
+    try:
+        if flock_wait(fd):
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
 def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 
@@ -541,7 +563,9 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
             if state["abandoned"]:
                 return "ERROR: cancelled"
             state["started"] = True
+        dfd = None
         try:
+            dfd = _dir_flock(r.path)
             for _ in range(EDIT_RETRIES):
                 try:
                     return _edit_file_once(ctx, args, raw_path, r)
@@ -550,6 +574,8 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
             return (f"ERROR: {raw_path} kept changing while edit_file ran ({EDIT_RETRIES} tries); "
                     "nothing was written, read_file it and retry")
         finally:
+            if dfd is not None:
+                os.close(dfd)  # releases the flock
             lock.release()
     try:
         return await asyncio.to_thread(_work)

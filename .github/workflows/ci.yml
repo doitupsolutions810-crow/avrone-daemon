@@ -16,8 +16,20 @@ jobs:
           # status line ("successfully downloaded text file (SHA: ...)") to
           # delivered text files. Line 1 must parse as TOML/JSON/py source, so
           # strip such a wrapper line when present (no-op on clean checkouts).
-          grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
-            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done
+          strip_download_markers() {
+            local matches rc
+            set +e
+            matches="$(grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null)"
+            rc=$?
+            set -e
+            if [ "$rc" -gt 1 ]; then return "$rc"; fi
+            if [ -n "$matches" ]; then
+              while IFS= read -r f; do
+                sed -i '1{/^successfully downloaded text file/d}' "$f"
+              done <<< "$matches"
+            fi
+          }
+          strip_download_markers
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" 2>&1 | tee /tmp/pip.log || {
             tail -n 8 /tmp/pip.log | while IFS= read -r l; do
@@ -26,11 +38,26 @@ jobs:
             done
             exit 1
           }
+      - name: Focused trial boundary tests
+        run: pytest -q tests/test_trial_contract.py tests/test_trial_receiver.py tests/test_trial_adapters.py tests/test_fleet_trial_ingress_hardening.py
+        env: { AVRONE_LLM_MODE: mock, AVRONE_RUNNER: local }
       - name: Test avrone
         run: |
           set -o pipefail
-          grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
-            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done
+          strip_download_markers() {
+            local matches rc
+            set +e
+            matches="$(grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null)"
+            rc=$?
+            set -e
+            if [ "$rc" -gt 1 ]; then return "$rc"; fi
+            if [ -n "$matches" ]; then
+              while IFS= read -r f; do
+                sed -i '1{/^successfully downloaded text file/d}' "$f"
+              done <<< "$matches"
+            fi
+          }
+          strip_download_markers
           pytest -q 2>&1 | tee /tmp/pytest.log || {
             tail -n 10 /tmp/pytest.log | while IFS= read -r l; do
               l="${l//%/%25}"

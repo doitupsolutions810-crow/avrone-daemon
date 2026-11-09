@@ -6,6 +6,7 @@ import time
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from fastapi import FastAPI
 
 from avrone import server

@@ -117,6 +117,19 @@ async def _reap(proc) -> None:
         pass
 
 
+
+def _surrogate_at(argv: list[str]) -> str | None:
+    """'U+D800 at position N of argument K' for the first lone surrogate in argv, else None."""
+    for k, a in enumerate(argv):
+        for i, ch in enumerate(a):
+            if 0xD800 <= ord(ch) <= 0xDFFF:
+                return f"U+{ord(ch):04X} at position {i}"
+    return None
+
+
+def _escape_surrogates(text: str) -> str:
+    return "".join(f"\\u{ord(c):04x}" if 0xD800 <= ord(c) <= 0xDFFF else c for c in text)
+
 class _Capture:
     """Bounded reader for one pipe: head + rolling tail, middle counted. A command that prints
     forever (`yes`, a chatty server) can no longer grow the server's memory without limit."""
@@ -238,6 +251,14 @@ class Runner:
         timeout = _norm_timeout(timeout, getattr(self.s, "command_timeout", None))
         if any("\x00" in a for a in argv):
             return CommandResult(cmd.replace("\x00", "\\0"), -1, "", "refused: command contains a NUL byte")
+        if _surrogate_at(argv) is not None:
+            bad = _surrogate_at([cmd]) or _surrogate_at(argv)
+            # round 127: a lone UTF-16 surrogate (valid JSON "\ud800") used to fail inside exec with
+            # "could not start command: UnicodeEncodeError: 'utf-8' codec can't encode ..." and the
+            # result echoed the raw surrogate back into the transcript
+            return CommandResult(_escape_surrogates(cmd), -1, "",
+                                 f"refused: command contains a lone UTF-16 surrogate ({bad}), which is not "
+                                 "valid text. Remove or replace that character and run it again.")
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv, cwd=str(cwd) if cwd else None, env={**os.environ, **env} if env else None,

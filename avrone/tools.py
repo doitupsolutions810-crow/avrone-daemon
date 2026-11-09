@@ -101,6 +101,14 @@ def error_text(e: BaseException, ctx: Any = None) -> str:
         return f"ERROR: {type(e).__name__}: {code}{what}: {names!r}"
     if isinstance(e, OSError) and e.errno in _STORAGE_HINTS:
         return _storage_text(e, "")
+    if isinstance(e, UnicodeEncodeError) and isinstance(e.object, str) and \
+            any(0xD800 <= ord(c) <= 0xDFFF for c in e.object[e.start:e.end]):
+        # round 127: "'utf-8' codec can't encode character '\\ud800' in position 1: surrogates not
+        # allowed" told the model nothing it could act on
+        ch = e.object[e.start]
+        return (f"ERROR: the text contains a lone UTF-16 surrogate (U+{ord(ch):04X} at position {e.start}), "
+                "which is not valid text and cannot be stored or run. Remove or replace that character "
+                "and try again.")
     return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
 
 

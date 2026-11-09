@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.120: Round 127: lone surrogates in commands get a plain refusal. 5,920 tests + 19 integration
+
+- **Bug** (probe `surleak.py`: every str argument of every tool carried `"\ud800"`, which is valid JSON):
+  - `shell` and `git` answered `[exit -1] could not start command: UnicodeEncodeError: 'utf-8' codec can't encode ...`, and the echoed command carried the raw surrogate back into the transcript.
+  - `evolve_skill_propose` answered the bare Python codec message.
+- **Fix:**
+  - `sovereign._exec` refuses before exec, the same way it refuses NUL: `refused: command contains a lone UTF-16 surrogate (U+D800 at position N), which is not valid text. Remove or replace that character and run it again.` The echoed command shows `\ud800` escaped. This covers the local, Docker and per-agent container runners.
+  - `tools.error_text` maps a surrogate `UnicodeEncodeError` from any tool body to a plain `ERROR:` line that gives the code point and position. Other encode errors are unchanged.
+- **Probed clean:** all other tools already gave a plain `ERROR:` (path tools, `memory_save`, `image_inspect`).
+- **Tests:** `tests/test_round127_surrogate_commands.py` (7). 5 fail on v0.119.
+
 ## v0.119: Round 126: a job whose result can't be saved is not counted as a failed run. 5,913 tests + 19 integration
 
 - **Bug** (probe `jqfull.py`, RLIMIT_FSIZE): on a full disk, `JobQueue.complete()` raised `sqlite3.OperationalError` ("disk I/O error"). `Worker` handled that as if the **handler** had failed: `fail()` requeued the job with the storage error as its error.

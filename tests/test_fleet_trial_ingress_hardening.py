@@ -31,7 +31,10 @@ def test_strict_json_rejects_depth_over_limit_and_accepts_exact_limit():
     accepted = b"[" * MAX_STRICT_JSON_DEPTH + b"0" + b"]" * MAX_STRICT_JSON_DEPTH
     with pytest.raises(ValueError, match="depth"):
         strict_json_loads(too_deep)
-    assert strict_json_loads(accepted) == 0
+    parsed = strict_json_loads(accepted)
+    for _ in range(MAX_STRICT_JSON_DEPTH):
+        parsed = parsed[0]
+    assert parsed == 0
 
 
 def test_strict_json_does_not_count_braces_inside_escaped_strings():

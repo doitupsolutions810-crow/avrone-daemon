@@ -121,20 +121,17 @@ def test_nonpass_and_completed_result_share_identity_for_conflict_detection():
 
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        {"nested": {"list": [1, 2, 3]}},
-        {"unicode": "naïve — 東京 — 🧪"},
-        {"negative_zero": -0.0},
-        {"decimal": 0.125},
-        {"exponent": 1e-7},
-    ],
-)
-def test_config_canonicalization_is_repeatable_within_reference_runtime(value):
-    # v1's canonical bytes are produced by the reference AVRONE Python implementation.
-    # External runtimes must use the documented fixtures rather than their default JSON encoder.
-    assert sample(check_config=value)["check_config_sha256"] == sample(check_config=value)["check_config_sha256"]
+def test_config_canonicalization_matches_v1_reference_vector():
+    value = {
+        "nested": {"list": [1, 2, 3]},
+        "unicode": "naïve — 東京 — 🧪",
+        "negative_zero": -0.0,
+        "decimal": 0.125,
+        "exponent": 1e-7,
+    }
+    assert sample(check_config=value)["check_config_sha256"] == (
+        "1da5a956d20795d0653fb251d09d91d7fe163e5a924b39dbd0a91614dadc6124"
+    )
 
 
 def test_config_rejects_excessive_node_count():

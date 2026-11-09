@@ -245,3 +245,33 @@ def test_fleet_adapter_clamps_nonfinite_and_extreme_timeouts():
     assert fleet.sent_timeout == 30.0
     asyncio.run(FleetTrialAdapter.send(fleet, "node-b", [wrapped], timeout=999999))
     assert fleet.sent_timeout == 60.0
+
+
+
+def test_fleet_api_rejects_invalid_utf8_and_nonfinite_json(tmp_path, monkeypatch):
+    async def go():
+        async with _client(tmp_path, monkeypatch) as client:
+            invalid_utf8 = b'{"from":"node-a","hops":1,"capability":"trials:ingest","events":[]}\xff'
+            signed = sign(
+                FLEET_TOKEN, "POST", PATH, invalid_utf8,
+                ts=str(int(time.time())), nonce="api_nonce_invalid_utf8",
+            )
+            response = await client.post(
+                PATH, content=invalid_utf8,
+                headers={"content-type": "application/json", **signed},
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "body must be strict JSON"
+
+            nonfinite = b'{"from":"node-a","hops":1,"capability":"trials:ingest","events":[],"x":NaN}'
+            signed = sign(
+                FLEET_TOKEN, "POST", PATH, nonfinite,
+                ts=str(int(time.time())), nonce="api_nonce_nonfinite",
+            )
+            response = await client.post(
+                PATH, content=nonfinite,
+                headers={"content-type": "application/json", **signed},
+            )
+            assert response.status_code == 400
+            assert response.json()["detail"] == "body must be strict JSON"
+    asyncio.run(go())

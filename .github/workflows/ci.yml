@@ -20,8 +20,9 @@ jobs:
           # status line ("successfully downloaded text file (SHA: ...)") to
           # delivered text files. Line 1 must parse as TOML/JSON/py source, so
           # strip such a wrapper line when present (no-op on clean checkouts).
+          # || true so a no-match grep (exit 1) does not abort under pipefail.
           grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
-            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done
+            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done || true
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" 2>&1 | tee /tmp/pip.log || {
             tail -n 8 /tmp/pip.log | while IFS= read -r l; do
@@ -34,7 +35,7 @@ jobs:
         run: |
           set -o pipefail
           grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
-            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done
+            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done || true
           pytest -q 2>&1 | tee /tmp/pytest.log || {
             tail -n 10 /tmp/pytest.log | while IFS= read -r l; do
               l="${l//%/%25}"
@@ -52,4 +53,4 @@ jobs:
         run: docker build -t avrone:verify .
       - name: Run Verify.sh inside image
         run: |
-          docker run --rm --user 10001:10001 avrone:verify bash -c "cp /app/Verify.sh /tmp/Verify.sh 2>/dev/null || true; sed -i 's|cd \"\$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)\"|cd /app|' /tmp/Verify.sh; bash /tmp/Verify.sh"
+          docker run --rm --user 10001:10001 avrone:verify bash /app/Verify.sh

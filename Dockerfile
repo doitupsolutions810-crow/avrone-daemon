@@ -17,7 +17,8 @@ COPY pyproject.toml ./
 COPY avrone ./avrone
 COPY Verify.sh ./
 COPY avrone-a12lr/tests ./avrone-a12lr/tests
-RUN pip install --no-cache-dir . && rm -rf /root/.cache
+RUN pip install --no-cache-dir . && rm -rf /root/.cache \
+ && chown -R avrone:avrone /app
 ENV AVRONE_HOST=0.0.0.0 AVRONE_PORT=8710 AVRONE_WORKSPACE=/srv/workspace AVRONE_DATA_DIR=/srv/data \
     AVRONE_ALLOW_NETWORK=false HOME=/home/avrone
 USER avrone

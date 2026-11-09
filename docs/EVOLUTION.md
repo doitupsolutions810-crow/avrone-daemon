@@ -1,5 +1,3 @@
-See /tmp/evolution.md for full content -- this is a placeholder due to size; actual content was prepared but tool call truncated in simulation. In real use, full content is passed.
-
 ## CI Status Check 2026-11-09 (descent/xcv-trust-gates)
 
 Most recent CI run (42571502200, workflow_dispatch, head ea711bac) completed with real runners assigned (not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
@@ -20,3 +18,22 @@ to Dockerfile. No force-push, no branch deletion, no overwrites of other files.
 Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml.
 
 Recommend re-running CI on the branch after this fix. If green, pause further automation on this path.
+
+## CI Status Check 2026-11-09 later (descent/xcv-trust-gates, head 0231088)
+
+Most recent CI run (42632876286) completed with real runners assigned (runner_id non-zero, runner_name present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed:
+- test (3.11): failed immediately in Install step with exit 1. Root cause: `set -o pipefail` + `grep ... | while ...` pipeline. When no files match the defensive "successfully downloaded text file" pattern (normal for clean checkouts), grep exits 1, the pipeline fails, and the job aborts before `pip install`.
+- docker-verify: failed with "[verify] AVRONE root: /tmp" and exit 2. Root cause: the `bash -c` command's nested escaping failed to sed-rewrite the ROOT= line in the copied Verify.sh, so BASH_SOURCE pointed at /tmp/Verify.sh and the required files (pyproject.toml, avrone/, avrone-a12lr/tests/) were not found there.
+- test (3.12): cancelled.
+
+Minimal fix pushed to same branch (commit 6ade79a7):
+- Added `|| true` after both defensive grep pipelines in the test job so a no-match is a true no-op under pipefail.
+- Simplified docker-verify run step to `docker run --rm --user 10001:10001 avrone:verify bash /app/Verify.sh` (files are already COPYed to /app; BASH_SOURCE yields the correct root).
+
+No force-push. No branch deletion. Existing files not overwritten beyond the additive CI edit.
+
+Verify.sh exists in the repo tree. docker-verify job is present in .github/workflows/ci.yml.
+
+If the next run on this branch is green, pause this automation.

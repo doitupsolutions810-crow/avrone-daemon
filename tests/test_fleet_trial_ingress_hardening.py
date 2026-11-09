@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from avrone.fleet import MAX_STRICT_JSON_DEPTH, strict_json_loads
@@ -33,7 +35,12 @@ def test_strict_json_rejects_depth_over_limit_and_accepts_exact_limit():
 
 
 def test_strict_json_does_not_count_braces_inside_escaped_strings():
-    raw = b'{"text":"braces [ { and escaped quote \\" plus slash \\\\","items":[1,2]}'
+    sample_text = 'braces [ { and escaped quote " plus slash ' + chr(92)
+    raw = json.dumps(
+        {"text": sample_text, "items": [1, 2]},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
     parsed = strict_json_loads(raw)
     assert parsed["items"] == [1, 2]
-    assert "braces [ {" in parsed["text"]
+    assert parsed["text"] == sample_text

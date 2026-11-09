@@ -15,6 +15,8 @@ RUN groupadd --system --gid "${AVRONE_GID}" avrone \
 WORKDIR /app
 COPY pyproject.toml ./
 COPY avrone ./avrone
+COPY Verify.sh ./
+COPY avrone-a12lr/tests ./avrone-a12lr/tests
 RUN pip install --no-cache-dir . && rm -rf /root/.cache
 ENV AVRONE_HOST=0.0.0.0 AVRONE_PORT=8710 AVRONE_WORKSPACE=/srv/workspace AVRONE_DATA_DIR=/srv/data \
     AVRONE_ALLOW_NETWORK=false HOME=/home/avrone

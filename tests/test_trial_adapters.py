@@ -54,7 +54,7 @@ def test_bridge_adapter_adds_read_only_correlations_and_checks_binding(tmp_path)
         raise AssertionError("missing Bridge post was accepted")
 
 
-def test_fleet_adapter_requires_explicit_allowlist_and_uses_existing_signed_post():
+def test_fleet_adapter_requires_explicit_allowlist_and_uses_public_signed_egress():
     class FakeFleet:
         enabled = True
         allow = {"node-b"}
@@ -68,9 +68,9 @@ def test_fleet_adapter_requires_explicit_allowlist_and_uses_existing_signed_post
     wrapped = {"record": record(), "bridge": None}
     result = asyncio.run(FleetTrialAdapter.send(fleet, "node-b", [wrapped]))
     assert result["accepted"] is True
-    assert fleet.checked == ("trial", "trials:ingest", 0, "node-b")
-    assert fleet.sent[1] == PATH
-    assert fleet.sent[2]["capability"] == "trials:ingest"
+    assert fleet.sent[0] == "node-b"
+    assert fleet.sent[1]["capability"] == "trials:ingest"
+    assert fleet.sent[2] == 30.0
 
     fleet.allow = set()
     try:

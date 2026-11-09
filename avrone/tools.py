@@ -95,9 +95,33 @@ def error_text(e: BaseException, ctx: Any = None) -> str:
         if e.errno == _errno.ENAMETOOLONG:
             return (f"ERROR: path too long (a name is over 255 bytes or the whole path over 4096): "
                     f"{names!r}. Use a shorter path.")
+        if e.errno in _STORAGE_HINTS:
+            return _storage_text(e, f" {names!r}")
         code = f"[Errno {e.errno}] " if e.errno is not None else ""
         return f"ERROR: {type(e).__name__}: {code}{what}: {names!r}"
+    if isinstance(e, OSError) and e.errno in _STORAGE_HINTS:
+        return _storage_text(e, "")
     return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
+
+
+import errno as _errno_mod  # noqa: E402
+
+# round 124: storage failures read as "ERROR: OSError: [Errno 27] File too large" with no file and
+# no hint whether a retry could help; they now say what ran out and that the write did not land
+_STORAGE_HINTS = {c: h for c, h in (
+    (getattr(_errno_mod, "ENOSPC", None), "the disk is full"),
+    (getattr(_errno_mod, "EDQUOT", None), "the disk quota is used up"),
+    (getattr(_errno_mod, "EFBIG", None), "the file-size limit was reached"),
+    (getattr(_errno_mod, "EROFS", None), "the storage is read-only"),
+    (getattr(_errno_mod, "EIO", None), "the storage reported an I/O error"),
+) if c is not None}
+
+
+def _storage_text(e: OSError, names: str) -> str:
+    code = _errno_mod.errorcode.get(e.errno, str(e.errno))
+    why = e.strerror or os.strerror(e.errno)
+    return (f"ERROR: could not write{names}: {_STORAGE_HINTS[e.errno]} ({code}: {why}). The write did not "
+            f"complete. Retrying will fail the same way until space is freed or the limit is raised.")
 
 
 def _as_text(out: Any) -> str:
@@ -520,12 +544,16 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
             fh.write(data)
         _os.chmod(tmp, mode)
         _os.replace(tmp, p)
-    except BaseException:
+    except BaseException as e:
         try:
             _os.unlink(tmp)
         except OSError:
             pass
-        raise
+        from .safeio import with_target as _with_target
+        t = _with_target(e, p)
+        if t is e:
+            raise
+        raise t from e
 
 
 async def t_read(ctx: "AgentContext", args: dict[str, Any]) -> str:

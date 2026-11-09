@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.117: Round 124: storage failures in tool results name the file and what ran out. 5,905 tests + 19 integration
+
+- **Bug** (probe `fullfs.py`, RLIMIT_FSIZE=1): `write_file`, `artifact_save` and `memory_save` answered a bare `ERROR: OSError: [Errno 27] File too large`. `write()` errors carry no filename, so the agent wasn't told which file failed, or that retrying could not help.
+- **Fix:**
+  - `safeio.with_target(e, p)` attaches the target path to a filename-less OSError and keeps its class and errno. It is used by `safeio.atomic_write`, `tools.atomic_write_bytes` and `memory_save`.
+  - `tools.error_text` maps ENOSPC, EDQUOT, EFBIG, EROFS and EIO to text like: `ERROR: could not write 'f.txt': the disk is full (ENOSPC: No space left on device). The write did not complete. Retrying will fail the same way until space is freed or the limit is raised.`
+  - Paths stay workspace-relative. Other errors are unchanged.
+- **Re-probe:** lone surrogates sent through the signed fleet routes, `/api/terminal`, `/ws/events`, and a restart came back clean after v0.116 (`surfuzz2.py`, `surfuzz3.py`).
+- **Tests:** `tests/test_round124_storage_errors.py` (15). 14 fail on v0.116.
+
 ## v0.116: Round 123: a lone surrogate no longer breaks the HTTP API. 5,890 tests + 19 integration
 
 - **Bug** (probe `surfuzz.py`, lone surrogates/NUL/bidi in every tool arg and POST body): POST `/api/chat` with `{"message": "\ud800"}` (valid JSON) answered 500, because the run's task text could not be rendered as UTF-8. The text stayed in the live agent table and run list, so **every later GET `/api/status` and `/api/runs` answered 500 until restart**.

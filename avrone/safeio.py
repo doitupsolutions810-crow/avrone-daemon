@@ -14,6 +14,7 @@ file is removed and the error is raised unchanged.
 from __future__ import annotations
 
 import os
+from typing import Any
 import stat
 import tempfile
 from pathlib import Path
@@ -57,6 +58,18 @@ def mkstemp_beside(p: Path) -> tuple[int, str]:
         raise type(e)(e.errno, e.strerror or os.strerror(e.errno), str(p)) from None
 
 
+def with_target(e: BaseException, p: Any) -> BaseException:
+    """`e` naming `p` when it names no file. Round 124: a full disk or file-size limit hit while
+    writing raised a bare "[Errno 27] File too large" (write() errors carry no filename), so the
+    agent was not told which file failed. Same class and errno; anything else is returned as is."""
+    if isinstance(e, OSError) and e.errno is not None and e.filename is None and e.filename2 is None:
+        try:
+            return type(e)(e.errno, e.strerror or os.strerror(e.errno), str(p))
+        except Exception:  # a subclass with its own constructor
+            return e
+    return e
+
+
 def atomic_write(path: str | os.PathLike, data: str | bytes, *, encoding: str = "utf-8",
                  fsync: bool = False, mode: int | None = None) -> None:
     p = Path(path)
@@ -70,12 +83,15 @@ def atomic_write(path: str | os.PathLike, data: str | bytes, *, encoding: str = 
                 os.fsync(f.fileno())
         os.chmod(tmp, _default_mode() if mode is None else mode)
         os.replace(tmp, p)
-    except BaseException:
+    except BaseException as e:
         try:
             os.unlink(tmp)
         except OSError:
             pass
-        raise
+        t = with_target(e, p)
+        if t is e:
+            raise
+        raise t from e
 
 
 def open_nofollow(path: str | os.PathLike, flags: int, mode: int = 0o666) -> int:

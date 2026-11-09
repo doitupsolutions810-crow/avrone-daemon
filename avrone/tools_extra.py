@@ -770,6 +770,10 @@ async def t_memory_save(ctx: "AgentContext", args: dict[str, Any]) -> str:
         memstore.MemoryStore(_mem_file(ctx)).save(ns, key, value, run_id=ctx.run_id, agent=ctx.name)
     except memstore.MemoryRefused as e:
         return f"ERROR: {e}"
+    except OSError as e:  # round 124: name the store, not a bare "[Errno 27]"
+        from .safeio import with_target
+        from .tools import error_text
+        return error_text(with_target(e, _mem_file(ctx)), ctx)
     _emit(ctx, "memory.save", key=key, ns=ns, bytes=len(value.encode()))
     return f"saved memory '{key}'"
 

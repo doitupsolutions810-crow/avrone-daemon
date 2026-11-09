@@ -435,18 +435,37 @@ def _fleet():
     return f
 
 
-async def _gateway(request: Request, kind: str) -> dict:
-    """Inbound remote spawn/message: the single vetted path (fleet.dispatch_gateway)."""
+async def _gateway(request: Request, kind: str, max_body_bytes: int | None = None) -> dict:
+    """Inbound fleet request through the single authenticated dispatch gateway.
+
+    Optional max_body_bytes is enforced while streaming, before the full body is
+    materialized or HMAC-verified. Existing routes retain their established limit.
+    """
     from .fleet import GatewayRefused
     f = _fleet()
-    body = await request.body()
+    if max_body_bytes is None:
+        body = await request.body()
+    else:
+        declared = request.headers.get("content-length", "")
+        try:
+            if declared.isdigit() and int(declared) > max_body_bytes:
+                raise HTTPException(413, "fleet request body exceeds the trial limit")
+        except ValueError:
+            pass
+        chunks = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > max_body_bytes:
+                raise HTTPException(413, "fleet request body exceeds the trial limit")
+            chunks.append(chunk)
+        body = b"".join(chunks)
     args = (kind, request.method, request.url.path, body, {k.lower(): v for k, v in request.headers.items()})
     try:
         if len(body) > OFF_LOOP_BODY_BYTES:
-            # hashing and parsing a 16 MB body took ~60 ms of event-loop time per request (round 71)
             return await asyncio.to_thread(f.dispatch_gateway, *args)
         from .fleet import NONCE_LOCK_WAIT
-        tok = NONCE_LOCK_WAIT.set(0.0)  # round 105: never wait for the nonce flock on the loop
+        tok = NONCE_LOCK_WAIT.set(0.0)
         try:
             return f.dispatch_gateway(*args)
         except GatewayRefused as e:
@@ -454,11 +473,11 @@ async def _gateway(request: Request, kind: str) -> dict:
                 raise
         finally:
             NONCE_LOCK_WAIT.reset(tok)
-        return await asyncio.to_thread(f.dispatch_gateway, *args)  # lock held elsewhere: wait off-loop
+        return await asyncio.to_thread(f.dispatch_gateway, *args)
     except GatewayRefused as e:
         if e.code == "bad_body":
             raise HTTPException(400, str(e)) from None
-        if e.code == "busy":  # round 105: the nonce lock timed out; the request was not checked
+        if e.code == "busy":
             raise HTTPException(503, str(e), headers={"Retry-After": "2"}) from None
         raise HTTPException(401 if e.auth else 403, str(e)) from None
 
@@ -581,6 +600,21 @@ async def fleet_memory(request: Request):
         raise HTTPException(403, str(e)) from None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/fleet/trials")
+async def fleet_trials(request: Request):
+    """Authenticated, bounded receiver for avrone.trial/v1 evidence envelopes."""
+    from .trial_store import MAX_TRIAL_BODY_BYTES, TrialStoreError
+    payload = await _gateway(request, "trials", max_body_bytes=MAX_TRIAL_BODY_BYTES)
+    try:
+        return await asyncio.to_thread(_fleet().receive_trials, payload)
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)[:300]) from None
+    except TrialStoreError:
+        raise HTTPException(503, "trial evidence store unavailable; no acceptance is reported") from None
 
 
 @app.post("/api/fleet/agentpack")

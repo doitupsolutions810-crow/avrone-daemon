@@ -74,3 +74,23 @@ No force-push. No branch deletion. Existing files not overwritten beyond these a
 Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
 
 If the next run on this branch is green, pause this automation.
+
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head aab13645)
+
+Most recent CI run (42662128129) completed with real runners assigned (runner_id 1000008078/8080/8079 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout):
+- test (3.11): failed with RecursionError in parse_action / _first_action on deep nested JSON (tests: test_pathological_replies_stay_fast, test_parse_action_is_bounded_on_huge_and_deep_input). Also test_master_prompt.py assertion on test file count (213 vs 212).
+- docker-verify: succeeded.
+- test (3.12): cancelled.
+
+Root cause: _first_action only caught json.JSONDecodeError, not RecursionError from deep JSON. Previous claimed fix was not present in the code at this head.
+
+Minimal fix pushed to same branch (commit 697a97f5): in avrone/trinity.py _first_action, changed except json.JSONDecodeError to except (json.JSONDecodeError, RecursionError) so pathological deep nesting is skipped.
+
+No force-push. No branch deletion. Existing files not overwritten beyond this additive edit.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.

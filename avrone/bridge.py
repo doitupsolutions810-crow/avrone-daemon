@@ -77,8 +77,17 @@ def bridge_run_id(run_id: Any) -> str:
 
 
 def safe_run_id(run_id: Any) -> str:
-    rid = _RUN_RE.sub("", str(run_id or ""))[:80].lstrip(".")
-    return rid or "run"
+    """The bridge file name for a run. Round 129: ids that differ only in dropped characters
+    ("r\ud800" and "r", "运行1" and "运行2", or two ids sharing their first 80 characters) used to
+    share one bridge file, so one run read and capped the other's posts. An id that had to be
+    changed now carries 12 hex of its SHA-256, as the task board's file name has since round 112.
+    An id that is already safe is unchanged."""
+    raw = str(run_id or "")
+    rid = _RUN_RE.sub("", raw)[:80].lstrip(".")
+    if rid == raw and rid:
+        return rid
+    import hashlib
+    return (rid or "run") + "-" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
 def _clip(text: Any) -> str:

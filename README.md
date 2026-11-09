@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.122: Round 129: runs no longer share a bridge file through their sanitized ids. 5,946 tests + 19 integration
+
+- **Bug** (probe `capsur.py`): `bridge.safe_run_id` stripped non-ASCII characters, surrogates and punctuation, and cut ids at 80 characters. So `"r\ud800"` and `"r"`, or `"运行1"` and `"运行2"`, shared one bridge file. Each run read the other's posts, and those posts counted against its own post cap.
+  - Run ids are generated internally, so this was mostly latent. The task board had already guarded against it since round 112.
+- **Fix:** an id that had to be changed now carries 12 hex of its SHA-256, the same rule the task board uses. Ids that are already safe are unchanged, so no existing files move.
+- **Probed clean:** with capgate audit on, every receipt for a call carrying lone surrogates in its args, run id or agent name was recorded. `verify_chain` passes, and the memory, bridge, receipt and run log files stay valid UTF-8.
+- **Tests:** `tests/test_round129_bridge_run_ids.py` (17). 5 fail on v0.121.
+
 ## v0.121: Round 128: every tool answer is valid text. 5,929 tests + 19 integration
 
 - **Bug** (probes `surleak.py` with a UTF-8 encode check, and `nestfuzz.py` covering list args, surrogate dict keys, nested dicts and tool names): some answers echoed their input with a lone UTF-16 surrogate still in it:

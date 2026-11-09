@@ -30,6 +30,7 @@ import asyncio
 import os
 import time
 import json
+import math
 
 from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import re
@@ -419,13 +420,31 @@ def normalize_action(registry: Any, action: dict[str, Any]) -> dict[str, Any]:
             del out["final"]
         elif not isinstance(f, str) and f is not None:
             try:
-                out["final"] = json.dumps(f, ensure_ascii=False)
-            except (TypeError, ValueError):
+                # round 130: allow_nan dumped 1e999 as "Infinity" and {"x": NaN} as text that is
+                # not JSON; non-finite numbers now read "inf"/"-inf"/"nan" inside valid JSON
+                out["final"] = f if isinstance(f, str) else json.dumps(
+                    _finite_json(f), ensure_ascii=False, allow_nan=False)
+                if isinstance(f, float) and not math.isfinite(f):
+                    out["final"] = _finite_json(f)
+            except (TypeError, ValueError, RecursionError):
                 out["final"] = str(f)
     if isinstance(out.get("tools"), list):
         out["tools"] = [normalize_call(registry, c) for c in out["tools"]]
     return out
 
+
+
+def _finite_json(v: Any, depth: int = 0) -> Any:
+    """v with each non-finite float as the string "inf", "-inf" or "nan" (round 130)."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return "nan" if v != v else ("inf" if v > 0 else "-inf")
+    if depth > 200:
+        return v
+    if isinstance(v, dict):
+        return {k: _finite_json(x, depth + 1) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_finite_json(x, depth + 1) for x in v]
+    return v
 
 DEFAULT_TOOL_OUTPUT_MAX = 20000
 REPEAT_CALL_LIMIT = 3  # same tool + args + output this many times in a row = the agent is looping

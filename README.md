@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.123: Round 130: a model's non-finite "final" renders as valid text. 5,957 tests + 19 integration
+
+- **Bug** (probe `llmfuzz.py`, cases `final_num` and `final_nan`): a model reply of `{"final": 1e999}` answered `"Infinity"`, and `{"final": {"x": NaN}}` answered `{"x": NaN}`, which is not valid JSON.
+- **Fix:** `normalize_action` uses the new `trinity._finite_json` to write each non-finite number as `"inf"`, `"-inf"` or `"nan"`, then dumps with `allow_nan=False`. Structured finals stay valid JSON. Finite numbers and strings are unchanged.
+- **Probed clean:**
+  - Every other id-to-filename sanitizer either dedups (MCP tool names) or already hashes (task board, and the bridge since round 129).
+  - The fleet's `status_of` handles a clock step-back, and offline eviction never removes a live peer.
+- **Tests:** `tests/test_round130_final_nonfinite.py` (11). 9 fail on v0.122.
+
 ## v0.122: Round 129: runs no longer share a bridge file through their sanitized ids. 5,946 tests + 19 integration
 
 - **Bug** (probe `capsur.py`): `bridge.safe_run_id` stripped non-ASCII characters, surrogates and punctuation, and cut ids at 80 characters. So `"r\ud800"` and `"r"`, or `"运行1"` and `"运行2"`, shared one bridge file. Each run read the other's posts, and those posts counted against its own post cap.

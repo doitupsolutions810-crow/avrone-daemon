@@ -215,7 +215,7 @@ SPAWN_MODES = ("squad", "chat", "deep")
 PRIVILEGED_CAPABILITIES = {"priv:shell", "priv:admin"}
 PRIVILEGED_HEADER = "x-avrone-privileged"
 # non-spawn capabilities, kept apart from the (minimal) spawn/message table above
-SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}}
+SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}, "trial": {"trials:ingest"}}
 # netsquad: a squad subtask placed on this node (runs as a sub-squad/chat here, may recurse further down)
 NET_CAPABILITIES: dict[str, set[str]] = {"run": {"squad:net"}}
 NETSQUAD_CAP = "squad:net"
@@ -572,6 +572,66 @@ def _parse_hops(raw: Any) -> int | None:
     if isinstance(raw, str) and re.fullmatch(r"-?[0-9]{1,6}", raw):
         return int(raw)
     return None
+
+
+MAX_STRICT_JSON_DEPTH = 64
+
+
+def strict_json_loads(raw: bytes) -> Any:
+    """Parse UTF-8 JSON; reject duplicate keys, non-finite values and excess nesting."""
+    if not isinstance(raw, (bytes, bytearray)):
+        raise ValueError("JSON body must be bytes")
+    try:
+        text = bytes(raw).decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise ValueError("JSON body must be UTF-8") from None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte in (0x7B, 0x5B):
+            depth += 1
+            if depth > MAX_STRICT_JSON_DEPTH:
+                raise ValueError("JSON nesting depth exceeded")
+        elif byte in (0x7D, 0x5D):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("unbalanced JSON structure")
+
+    def unique_pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError(f"non-finite JSON number: {value}")
+
+    def finite_float(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("non-finite JSON number")
+        return number
+
+    return json.loads(
+        text or "{}",
+        object_pairs_hook=unique_pairs,
+        parse_constant=reject_constant,
+        parse_float=finite_float,
+    )
 
 
 def request_capability(kind: str, payload: dict[str, Any]) -> str:
@@ -1297,10 +1357,9 @@ class FleetManager:
                                           f"AVRONE_FLEET_PRIVILEGED_MAX_HOPS ({hops} > {self.privileged_max_hops})", **ctx)
 
     def dispatch_gateway(self, kind: str, method: str, path: str, body: bytes,
-                         headers: dict[str, str]) -> dict[str, Any]:
-        """The single vetted inbound path for remote spawns/messages. Enforces, in order:
-        token, HMAC, timestamp window, nonce, sender allowlist, hops, capability.
-        Returns the parsed payload; raises GatewayRefused (audited as `fleet.refused`)."""
+                         headers: dict[str, str], strict_json: bool = False) -> dict[str, Any]:
+        """The single vetted inbound path for remote requests. Evidence ingress enables
+        strict_json to reject duplicate keys, non-finite values and non-UTF-8 bodies."""
         try:
             self.verify(method, path, body, headers)
         except GatewayRefused as e:
@@ -1316,9 +1375,10 @@ class FleetManager:
             self._audit("fleet.privileged.refused", code="privileged_unsigned", reason=msg, kind=kind)
             raise self._refuse("privileged_unsigned", msg, kind=kind, privileged=True)
         try:
-            payload = _jloads(body or b"{}")
-        except (ValueError, RecursionError):  # RecursionError: absurdly nested JSON (was a 500)
-            raise self._refuse("bad_body", "body must be JSON", kind=kind) from None
+            payload = strict_json_loads(body) if strict_json else _jloads(body or b"{}")
+        except (ValueError, RecursionError):
+            message = "body must be strict JSON" if strict_json else "body must be JSON"
+            raise self._refuse("bad_body", message, kind=kind) from None
         if not isinstance(payload, dict):
             raise self._refuse("bad_body", "body must be a JSON object", kind=kind)
         decision = self.check_policy(kind, payload)
@@ -1651,6 +1711,30 @@ class FleetManager:
         if not isinstance(data, dict):  # every caller does .get() on it
             raise RuntimeError(f"{base}{path} -> {r.status_code} but JSON {type(data).__name__}, not an object")
         return data
+
+    async def post_trial_batch(self, target: str, payload: dict[str, Any],
+                               timeout: float = 30.0) -> dict[str, Any]:
+        """Public allowlisted egress contract for the versioned trial receiver."""
+        if not isinstance(target, str) or not target or not self.allow or target not in self.allow:
+            raise GatewayRefused(
+                "target_not_allowed",
+                "trial relay requires an explicit AVRONE_FLEET_ALLOW target",
+            )
+        if not isinstance(payload, dict) or payload.get("capability") != "trials:ingest":
+            raise ValueError("trial payload must request trials:ingest")
+        if payload.get("from") != self.node_id or payload.get("hops") != 1:
+            raise ValueError("trial payload sender and hop count must match the local Fleet node")
+        from .trial_receiver import MAX_BATCH_EVENTS, MAX_BODY_BYTES
+        events = payload.get("events")
+        if not isinstance(events, list) or not 1 <= len(events) <= MAX_BATCH_EVENTS:
+            raise ValueError(f"trial events must contain 1..{MAX_BATCH_EVENTS} items")
+        # Match _post's exact JSON wire encoding before sending.
+        body = json.dumps(payload).encode()
+        if len(body) > MAX_BODY_BYTES:
+            raise ValueError(f"trial batch exceeds {MAX_BODY_BYTES} bytes")
+        self.check_outbound("trial", "trials:ingest", 0, target)
+        node = self.pick(target)
+        return await self._post(node["url"], "/api/fleet/trials", payload, timeout=timeout)
 
     # ------------------------------------------------------------ memory sync
     async def push_memory(self, entries: list[dict[str, Any]], origin: str) -> dict[str, Any]:

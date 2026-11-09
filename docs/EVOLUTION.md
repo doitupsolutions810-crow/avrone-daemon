@@ -37,3 +37,22 @@ No force-push. No branch deletion. Existing files not overwritten beyond the add
 Verify.sh exists in the repo tree. docker-verify job is present in .github/workflows/ci.yml.
 
 If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head f5dc383)
+
+Most recent CI run (42642326487) completed with real runners assigned (runner_id 1000008007/8008/8009 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout):
+- test (3.12): 7 failed, 5116 passed. Root cause: tests/test_xcv_trust_separation.py KeyError on missing 'trust_gates_present'/'all_trust_gates_pass' and DID NOT RAISE on unknown key. evidence_snapshot attached trust_context but did not compute the flags or validate keys.
+- docker-verify: failed in Verify.sh pip install -e with "Cannot update time stamp of directory 'avrone.egg-info'" (non-root user 10001 cannot write under /app owned by root).
+- test (3.11): cancelled.
+
+Minimal fixes pushed to same branch:
+- Commit 0a9cb68f: in avrone/greatscale.py, added TRUST_CONTEXT_KEYS and computed trust_gates_present / all_trust_gates_pass (empty context → False/False; partial → True/False; all True → True); raise ValueError on unknown keys. Geometry unchanged.
+- Commit d6a271f1: in Dockerfile, added `chown -R avrone:avrone /app` after pip install so the non-root user can perform editable installs.
+
+No force-push. No branch deletion. Existing files not overwritten beyond these additive edits.
+
+Verify.sh exists in the repo tree. docker-verify job is present in .github/workflows/ci.yml.
+
+If the next run on this branch is green, pause this automation.

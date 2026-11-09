@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from avrone import server
 from avrone.bridge import Bridge
-from avrone.fleet import FleetManager, sign
+from avrone.fleet import FleetManager, GatewayRefused, sign
 from avrone.trial_adapters import BridgeTrialAdapter, FleetTrialAdapter
 from avrone.trial_contract import make_trial
 
@@ -275,3 +275,44 @@ def test_fleet_api_rejects_invalid_utf8_and_nonfinite_json(tmp_path, monkeypatch
             assert response.status_code == 400
             assert response.json()["detail"] == "body must be strict JSON"
     asyncio.run(go())
+
+
+
+def test_public_fleet_egress_validates_target_payload_and_timeout():
+    class FakeFleet:
+        enabled = True
+        allow = {"node-b"}
+        node_id = "node-a"
+
+        def check_outbound(self, *args):
+            self.checked = args
+
+        def pick(self, target):
+            assert target == "node-b"
+            return {"url": "https://node-b.example"}
+
+        async def _post(self, base, path, payload, timeout):
+            self.sent = (base, path, payload, timeout)
+            return {"status": "stored"}
+
+    fleet = FakeFleet()
+    payload = {
+        "from": "node-a",
+        "hops": 1,
+        "capability": "trials:ingest",
+        "events": [{"record": record(), "bridge": None}],
+    }
+    result = asyncio.run(FleetManager.post_trial_batch(fleet, "node-b", payload, timeout=9999))
+    assert result["status"] == "stored"
+    assert fleet.checked == ("trial", "trials:ingest", 0, "node-b")
+    assert fleet.sent[1] == PATH
+    assert fleet.sent[3] == 60.0
+
+    fleet.allow = set()
+    with pytest.raises(GatewayRefused):
+        asyncio.run(FleetManager.post_trial_batch(fleet, "node-b", payload))
+    fleet.allow = {"node-b"}
+    bad = dict(payload)
+    bad["from"] = "spoofed-node"
+    with pytest.raises(ValueError, match="sender"):
+        asyncio.run(FleetManager.post_trial_batch(fleet, "node-b", bad))

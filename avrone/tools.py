@@ -132,6 +132,19 @@ def _storage_text(e: OSError, names: str) -> str:
             f"complete. Retrying will fail the same way until space is freed or the limit is raised.")
 
 
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def valid_text(text: str) -> str:
+    """text with each lone UTF-16 surrogate written as the escape \\udXXX, so it always encodes
+    as UTF-8. Text without one comes back as the same object."""
+    if not isinstance(text, str):
+        text = _safe_str(text)
+    if _SURROGATE.search(text) is None:
+        return text
+    return _SURROGATE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+
+
 def _as_text(out: Any) -> str:
     return out if isinstance(out, str) else _safe_str(out)
 
@@ -330,14 +343,20 @@ class ToolRegistry:
         reason is "unknown_tool" or "bad_args"; the tool is NOT run in either case."""
         tool = self.get(name)
         if tool is None:
-            return "unknown_tool", self.unknown_message(name)
+            return "unknown_tool", valid_text(self.unknown_message(name))
         problems = validate_args(tool.schema, args)
         if problems:
-            return "bad_args", (f"ARG ERROR ({name}): {'; '.join(problems)}; expected {tool.args_doc}. "
+            return "bad_args", valid_text(f"ARG ERROR ({name}): {'; '.join(problems)}; expected {tool.args_doc}. "
                                 "The tool did not run; resend the call with fixed args.")
         return None
 
     async def call(self, ctx: "AgentContext", name: str, args: dict[str, Any]) -> str:
+        # round 128: every answer leaves as valid text. Tools that echo their input ("no loop
+        # a\ud800b", "unknown tool 'shell\ud800'") handed a lone surrogate on to the transcript,
+        # codex, fleet replies and the next model request
+        return valid_text(await self._call(ctx, name, args))
+
+    async def _call(self, ctx: "AgentContext", name: str, args: dict[str, Any]) -> str:
         tool = self.get(name)
         if tool is None:
             return self.unknown_message(name)

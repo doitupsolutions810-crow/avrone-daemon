@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.121: Round 128: every tool answer is valid text. 5,929 tests + 19 integration
+
+- **Bug** (probes `surleak.py` with a UTF-8 encode check, and `nestfuzz.py` covering list args, surrogate dict keys, nested dicts and tool names): some answers echoed their input with a lone UTF-16 surrogate still in it:
+  - `evolve_status`, `evolve_cancel` and `evolve_start` (`resume_loop_id`) answered `ERROR: no loop a\ud800b`.
+  - Unknown tool names answered `ERROR: unknown tool 'shell\ud800'`.
+  - That text then reached the transcript, codex, fleet replies and the next model request, none of which can encode it as UTF-8.
+- **Fix:**
+  - `ToolRegistry.call` wraps the body (now `_call`) and returns `tools.valid_text(answer)`. `check()` messages are wrapped the same way.
+  - `valid_text` rewrites each lone surrogate as the escape `\udXXX`, so the character stays visible and nothing is dropped. Text without one comes back as the same object: a regex scan of 2 MB takes under 1 s.
+  - This covers builtins, plugins and MCP tools.
+- **Probed clean:** surrogates nested inside list args and dict keys never crashed a tool.
+- **Tests:** `tests/test_round128_valid_text.py` (9). All 9 fail on v0.120.
+
 ## v0.120: Round 127: lone surrogates in commands get a plain refusal. 5,920 tests + 19 integration
 
 - **Bug** (probe `surleak.py`: every str argument of every tool carried `"\ud800"`, which is valid JSON):

@@ -1732,9 +1732,18 @@ class FleetManager:
         body = json.dumps(payload).encode()
         if len(body) > MAX_BODY_BYTES:
             raise ValueError(f"trial batch exceeds {MAX_BODY_BYTES} bytes")
+        try:
+            requested_timeout = float(timeout)
+        except (TypeError, ValueError):
+            requested_timeout = 30.0
+        if not math.isfinite(requested_timeout):
+            requested_timeout = 30.0
+        bounded_timeout = max(1.0, min(60.0, requested_timeout))
         self.check_outbound("trial", "trials:ingest", 0, target)
         node = self.pick(target)
-        return await self._post(node["url"], "/api/fleet/trials", payload, timeout=timeout)
+        return await self._post(
+            node["url"], "/api/fleet/trials", payload, timeout=bounded_timeout,
+        )
 
     # ------------------------------------------------------------ memory sync
     async def push_memory(self, entries: list[dict[str, Any]], origin: str) -> dict[str, Any]:

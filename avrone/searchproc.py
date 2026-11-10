@@ -20,15 +20,49 @@ from pathlib import Path
 from .safeio import read_capped
 
 
+MAX_WALK_DIRS = 20_000
+MAX_WALK_ENTRIES_PER_DIR = 20_000
+MAX_PENDING_DIRS = 20_000
+
+
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
+    """Iterative bounded traversal; os.walk recursively descends and overflows on deep trees."""
     if root.is_file():
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
+    pending = [root]
+    visited_dirs = 0
+    while pending and visited_dirs < MAX_WALK_DIRS:
+        directory = pending.pop()
+        visited_dirs += 1
+        try:
+            with os.scandir(directory) as iterator:
+                entries = []
+                for entry in iterator:
+                    if len(entries) >= MAX_WALK_ENTRIES_PER_DIR:
+                        break
+                    entries.append(entry)
+        except OSError:
+            continue
+        entries.sort(key=lambda entry: entry.name)
+        child_dirs: list[Path] = []
+        files: list[Path] = []
+        for entry in entries:
+            if entry.name in skip_names:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.path not in skip_paths:
+                        child_dirs.append(Path(entry.path))
+                else:
+                    files.append(Path(entry.path))
+            except OSError:
+                continue
+        # Match os.walk's top-down order: files in this directory, then sorted child dirs.
+        for file_path in files:
+            yield file_path
+        room = max(0, MAX_PENDING_DIRS - len(pending))
+        pending.extend(reversed(child_dirs[:room]))
 
 
 def run(req: dict, out) -> None:

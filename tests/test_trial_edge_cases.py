@@ -262,3 +262,190 @@ def test_receipt_failure_during_conflict_rolls_back_quarantine_and_sender_block(
     assert reopened.pool_snapshot()["runs"] == 1
     duplicate = reopened.ingest_many([original], sender="peer-b", transport="fleet")
     assert duplicate["results"][0]["status"] == "duplicate"
+
+
+def test_trial_capacity_exhaustion_preserves_existing_evidence(tmp_path, monkeypatch):
+    import avrone.trial_receiver as receiver
+
+    monkeypatch.setattr(receiver, "MAX_TRIAL_RECORDS", 1)
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    first = sample("pass", "first")
+    second = sample("fail", "second")
+    store.ingest_many([first], sender="peer-a", transport="fleet")
+
+    with pytest.raises(TrialStoreError, match="capacity"):
+        store.ingest_many([second], sender="peer-b", transport="fleet")
+
+    duplicate = store.ingest_many([first], sender="peer-b", transport="fleet")
+    assert duplicate["results"][0]["status"] == "duplicate"
+    assert store.pool_snapshot()["runs"] == 1
+
+
+def test_partial_batch_commit_is_recoverable_by_resending_after_restart(tmp_path, monkeypatch):
+    path = tmp_path / "trials.sqlite3"
+    store = TrialStore(path)
+    envelopes = [sample("pass", "batch-a"), sample("fail", "batch-b")]
+    original_record_receipt = store._record_receipt
+    calls = 0
+
+    def fail_second_receipt(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("injected second-envelope receipt failure")
+        return original_record_receipt(*args, **kwargs)
+
+    monkeypatch.setattr(store, "_record_receipt", fail_second_receipt)
+    with pytest.raises(RuntimeError, match="second-envelope"):
+        store.ingest_many(envelopes, sender="peer-a", transport="fleet")
+
+    reopened = TrialStore(path)
+    db = reopened._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 1
+    finally:
+        db.close()
+
+    retry = reopened.ingest_many(envelopes, sender="peer-a", transport="fleet")
+    assert [item["status"] for item in retry["results"]] == ["duplicate", "accepted"]
+    assert reopened.pool_snapshot()["runs"] == 2
+
+
+def test_body_limit_rejects_oversized_chunked_request_without_reading_more(tmp_path):
+    import asyncio
+
+    from avrone.server import BodyLimit
+
+    chunks = [
+        {"type": "http.request", "body": b"a" * 200_000, "more_body": True},
+        {"type": "http.request", "body": b"b" * (56 * 1024 + 1), "more_body": True},
+        {"type": "http.request", "body": b"c", "more_body": False},
+    ]
+    reads = 0
+    sent = []
+
+    async def receive():
+        nonlocal reads
+        message = chunks[reads]
+        reads += 1
+        return message
+
+    async def send(message):
+        sent.append(message)
+
+    async def downstream(scope, limited_receive, downstream_send):
+        while True:
+            message = await limited_receive()
+            if not message.get("more_body", False):
+                break
+        await downstream_send({"type": "http.response.start", "status": 200, "headers": []})
+        await downstream_send({"type": "http.response.body", "body": b"ok"})
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/fleet/trials",
+        "headers": [],
+    }
+    asyncio.run(BodyLimit(downstream)(scope, receive, send))
+
+    assert reads == 2
+    assert sent[0]["status"] == 413
+
+
+@pytest.fixture
+def trial_api_client(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from avrone import server
+
+    monkeypatch.setattr(server.settings, "workspace", tmp_path / "workspace")
+    monkeypatch.setattr(server.settings, "data_dir", tmp_path / "data")
+    monkeypatch.setenv("AVRONE_FLEET_TOKEN", "t" * 32)
+    monkeypatch.setenv("AVRONE_FLEET_ALLOW", "peer-a")
+    monkeypatch.setenv("AVRONE_FLEET_REQUIRE_ALLOW", "true")
+    with TestClient(server.app) as client:
+        yield client
+
+
+def _signed_api_request(client, path, payload, *, sign_path=None, raw_override=None):
+    from avrone.fleet import sign
+
+    raw = raw_override
+    if raw is None:
+        raw = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+    signed_path = sign_path or path
+    headers = {
+        "content-type": "application/json",
+        **sign("t" * 32, "POST", signed_path, raw),
+    }
+    return client.post(path, content=raw, headers=headers)
+
+
+def test_http_replay_nonce_is_rejected_and_does_not_duplicate_receipt(trial_api_client, tmp_path):
+    from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
+
+    path = "/api/fleet/trials"
+    body = wrapper(FLEET_TRIAL_SCHEMA, [sample()])
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    from avrone.fleet import sign
+    headers = {"content-type": "application/json", **sign("t" * 32, "POST", path, raw)}
+
+    first = trial_api_client.post(path, content=raw, headers=headers)
+    replay = trial_api_client.post(path, content=raw, headers=headers)
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 401
+
+    store = TrialStore(tmp_path / "data" / "trials" / "trials.sqlite3")
+    db = store._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_http_body_tampering_after_signature_is_rejected_before_storage(trial_api_client, tmp_path):
+    from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
+
+    path = "/api/fleet/trials"
+    body = wrapper(FLEET_TRIAL_SCHEMA, [sample()])
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    tampered = raw.replace(b'"from":"peer-a"', b'"from":"peer-b"')
+    assert tampered != raw and len(tampered) == len(raw)
+
+    response = _signed_api_request(
+        trial_api_client, path, body, raw_override=tampered
+    )
+    assert response.status_code == 401
+    assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()
+
+
+def test_http_signature_is_bound_to_exact_bridge_route(trial_api_client, tmp_path):
+    from avrone.trial_adapters import BRIDGE_TRIAL_SCHEMA
+
+    fleet_path = "/api/fleet/trials"
+    bridge_path = "/api/fleet/bridge/trials"
+    body = wrapper(BRIDGE_TRIAL_SCHEMA, [sample()], run_id="bridge-1")
+    response = _signed_api_request(
+        trial_api_client, bridge_path, body, sign_path=fleet_path
+    )
+    assert response.status_code == 401
+    assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()
+
+
+def test_http_strict_json_rejects_overflowing_number_after_valid_hmac(trial_api_client, tmp_path):
+    from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
+
+    path = "/api/fleet/trials"
+    body = wrapper(FLEET_TRIAL_SCHEMA, [sample()])
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    raw = raw[:-1] + b',"overflow":1e999}'
+    response = _signed_api_request(trial_api_client, path, body, raw_override=raw)
+
+    assert response.status_code == 400
+    assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()

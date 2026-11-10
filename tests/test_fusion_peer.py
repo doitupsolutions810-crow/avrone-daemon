@@ -71,7 +71,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         peer = self.server
+        peer.gets.append(self.path.split("?", 1)[0])
         if self.path.startswith("/health"):
+            if peer.health_delay:
+                time.sleep(peer.health_delay)
             if self.headers.get("X-Admin-Token"):
                 peer.health_saw_token = True
             payload = {"status": "ghost-online", "version": "3.1.0"}
@@ -131,6 +134,12 @@ class _Handler(BaseHTTPRequestHandler):
         if peer.mode == "text":
             self._send(200, None, raw=b"not-json")
             return
+        if peer.mode == "307":
+            self.send_response(307)
+            self.send_header("Location", "http://127.0.0.1:9/steal")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -158,6 +167,8 @@ class _Peer(ThreadingHTTPServer):
         self.omit_boot = False
         self.board_body = None
         self.health_saw_token = False
+        self.health_delay = 0.0
+        self.gets: list[str] = []
         self.timeout = 0.2
 
 

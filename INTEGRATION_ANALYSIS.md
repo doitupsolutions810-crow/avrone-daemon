@@ -64,6 +64,18 @@ A non-ASCII token was not sent through HTTP. `httpx` refuses to encode `café` a
 - The fan-in no longer raises when `bridge/` is a file. Accepting a post in that case raises `BridgeError` instead of an uncaught `NotADirectoryError`.
 - One cycle still forwards at most `MAX_FORWARD` posts; the next cycle takes the rest. Echoes whose agent is `CycleKernal:Health`, or whose text embeds `"agent": "cyclekernal:mood"`, are not forwarded.
 
+## Third pass
+
+`python3 -m pytest -q tests/test_fusion_peer.py tests/test_fusion_peer_edges.py tests/test_fusion_peer_more.py --tb=line`
+
+**43 passed** in 7.11s. The six new cases:
+
+- A UTF-8 BOM in front of a blackboard post is stored. `null`, a JSON string, whitespace, and a BOM alone are 400. A repeated `since` query is 200.
+- A declared `Content-Length` of 80 nines is 413 and the route is not called.
+- A lone surrogate in post text is escaped into valid UTF-8 JSON. A circular value and a NaN timestamp cannot be serialized and do not raise.
+- A token outside latin-1 (`U+0100`) is an auth failure and is not dialed. A `307` on `POST /v1/events` is not followed, and the id is not remembered.
+- `FUSION_CYCLE_DEADLINE` defaults to 10 seconds, `0` and non-finite values disable it, and `999` clamps to 120. With a deadline of 0.25s, a health handler that sleeps 0.8s makes the cycle stop before it dials the blackboard. The post stays unseen. The next cycle, with the delay gone, forwards it.
+
 ## Remaining gaps
 
 - The watchdog is one shot. It does not fingerprint mood, open a circuit breaker, or enforce the relay's cycle deadline. One cycle forwards at most 200 new posts. Disk fan-in reads at most 256 journals.

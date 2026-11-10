@@ -315,8 +315,23 @@ def blackboard_accept(core: Any, post: dict[str, Any]) -> tuple[bool, str]:
         raise BridgeError("post rejected")
 
 
-def _dumps(body: Any) -> bytes:
-    return json.dumps(body, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+def _dumps(body: Any) -> bytes | None:
+    """UTF-8 JSON, or None when the value cannot be serialized.
+
+    Lone surrogates are escaped (``ensure_ascii``) so ``encode`` cannot raise.
+    NaN and circular references are refused instead of emitting non-JSON.
+    """
+    try:
+        text = json.dumps(body, separators=(",", ":"), ensure_ascii=False, allow_nan=False, default=str)
+        return text.encode("utf-8")
+    except UnicodeEncodeError:
+        try:
+            text = json.dumps(body, separators=(",", ":"), ensure_ascii=True, allow_nan=False, default=str)
+            return text.encode("ascii")
+        except (ValueError, TypeError, UnicodeEncodeError):
+            return None
+    except (ValueError, TypeError):
+        return None
 
 
 def encode_bounded(body: dict, limit: int = FUSION_MAX_BODY) -> bytes | None:
@@ -328,6 +343,8 @@ def encode_bounded(body: dict, limit: int = FUSION_MAX_BODY) -> bytes | None:
     if not isinstance(body, dict) or limit < 1:
         return None
     raw = _dumps(body)
+    if raw is None:
+        return None
     if len(raw) <= limit:
         return raw
     payload = body.get("payload")
@@ -349,7 +366,7 @@ def encode_bounded(body: dict, limit: int = FUSION_MAX_BODY) -> bytes | None:
         trial_payload["text"] = cut
         trial["payload"] = trial_payload
         raw = _dumps(trial)
-        if cut and len(raw) <= limit:
+        if raw is not None and cut and len(raw) <= limit:
             best = raw
             lo = mid + 1
         else:
@@ -456,9 +473,17 @@ def event_from_post(post: dict) -> dict[str, Any] | None:
 
 
 def _header_value(value: str) -> str:
-    """A header value, or empty when it would split the header or inject another one."""
+    """A header value, or empty when it cannot be sent as one.
+
+    HTTP headers are latin-1. A control character would split the header.
+    A character outside latin-1 used to raise while dialing and look like an outage.
+    """
     text = str(value or "")
-    if not text or any(char in text for char in "\r\n\x00"):
+    if not text or any(ord(char) < 32 or ord(char) == 127 for char in text):
+        return ""
+    try:
+        text.encode("latin-1")
+    except UnicodeEncodeError:
         return ""
     return text
 
@@ -483,6 +508,19 @@ def _status_error(code: int) -> str:
     if code >= 400:
         return "rejected"
     return "ok"
+
+
+def _call_timeout(deadline_at: float | None, timeout: float) -> float | None:
+    """Seconds for the next dial, or None when this cycle must not start one."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        timeout = 5.0
+    timeout = min(30.0, float(timeout))
+    if deadline_at is None:
+        return timeout
+    left = deadline_at - time.monotonic()
+    if left <= 0.05:
+        return None
+    return min(timeout, left)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -526,6 +564,8 @@ def _exchange(
             response = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:
             response = exc
+    except UnicodeEncodeError:
+        return {"ok": False, "status": None, "error": "auth", "body": None}
     except Exception as exc:  # noqa: BLE001 - a dead hop is a report, not a crash
         reason = getattr(exc, "reason", exc)
         error = "timeout" if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) else "down"
@@ -712,15 +752,34 @@ class FusionWatch:
         events_token: str = "",
         timeout: float = 5.0,
         max_read: int = 2_000_000,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
-        """Probe health and the blackboard, then forward new posts. Never raises."""
+        """Probe health and the blackboard, then forward new posts. Never raises.
+
+        ``deadline`` is seconds for the whole cycle. ``None``, ``0``, or a
+        non-finite value disables it. A call is not started with under 50 ms left,
+        so one slow hop cannot bill a full timeout for every queued post.
+        """
         global _last_watch
+        if deadline is not None and math.isfinite(deadline) and deadline > 0:
+            deadline_at: float | None = time.monotonic() + min(120.0, float(deadline))
+        else:
+            deadline_at = None
         with self._lock:
-            health = _exchange("GET", health_url, timeout=timeout, max_read=max_read)
+            health_timeout = _call_timeout(deadline_at, timeout)
+            if health_timeout is None:
+                health = {"ok": False, "status": None, "error": "timeout", "body": None}
+            else:
+                health = _exchange("GET", health_url, timeout=health_timeout, max_read=max_read)
             restart = False
             if health["ok"]:
                 restart = self.note_boot("cyclekernal", boot_value(health["body"])) or restart
-            board = _exchange("GET", board_url, token=board_token, timeout=timeout, max_read=max_read)
+            board_timeout = _call_timeout(deadline_at, timeout)
+            if board_timeout is None:
+                board = {"ok": False, "status": None, "error": "timeout", "body": None}
+            else:
+                board = _exchange(
+                    "GET", board_url, token=board_token, timeout=board_timeout, max_read=max_read)
             if board["ok"]:
                 restart = self.note_boot("avrone", boot_value(board["body"])) or restart
             forwarded = duplicates = skipped = errors = 0
@@ -741,17 +800,29 @@ class FusionWatch:
                         if sent >= MAX_FORWARD:
                             skipped += 1
                             continue
-                        event = None if is_echo(post) else event_from_post(post)
+                        call_timeout = _call_timeout(deadline_at, timeout)
+                        if call_timeout is None:
+                            skipped += 1
+                            continue
+                        try:
+                            event = None if is_echo(post) else event_from_post(post)
+                        except Exception:  # noqa: BLE001 - one bad row must not kill the cycle
+                            skipped += 1
+                            continue
                         if event is None:
                             skipped += 1
                             continue
                         if event["id"] in self.seen:
                             skipped += 1
                             continue
-                        result = self.submit(
-                            events_url, events_token, event, event["id"],
-                            timeout=timeout, max_read=max_read,
-                        )
+                        try:
+                            result = self.submit(
+                                events_url, events_token, event, event["id"],
+                                timeout=call_timeout, max_read=max_read,
+                            )
+                        except Exception:  # noqa: BLE001
+                            errors += 1
+                            break
                         if not result.get("skipped"):
                             sent += 1
                         if result.get("duplicate"):

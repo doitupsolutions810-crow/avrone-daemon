@@ -308,6 +308,21 @@ def _fusion_timeout() -> float:
     return min(30.0, max(0.05, value))
 
 
+def _fusion_deadline() -> float | None:
+    """Seconds one watch cycle may spend dialing. ``0`` and non-finite values disable it."""
+    import math
+    raw = (os.environ.get("FUSION_CYCLE_DEADLINE") or "").strip()
+    if not raw:
+        return 10.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 10.0
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return min(120.0, value)
+
+
 @app.get("/api/status")
 async def status():
     c = core()
@@ -348,7 +363,9 @@ async def blackboard_write(request: Request, x_admin_token: str | None = Header(
     previous = _previous_admin_token()
     if not (settings.admin_token and previous and token_eq(x_admin_token, previous)):
         require_admin(x_admin_token)
-    if not raw:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    if not raw or not raw.strip():
         raise HTTPException(400, "body must be JSON")
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -398,6 +415,7 @@ async def fusion_watch(x_admin_token: str | None = Header(default=None)):
         board_token=board_token,
         events_token=events_token,
         timeout=_fusion_timeout(),
+        deadline=_fusion_deadline(),
     )
 
 

@@ -38,6 +38,22 @@ def test_depth_upper_boundary_is_accepted_and_next_value_rejected():
         make(provenance_depth=MAX_PROVENANCE_DEPTH + 1, human_root="operator:ref")
 
 
+@pytest.mark.parametrize("separator", ["\\u2028", "\\u2029"])
+@pytest.mark.parametrize("field", ["source", "run_id", "check_id", "capability_id", "human_root", "refs"])
+def test_machine_identifiers_reject_unicode_line_and_paragraph_separators(field, separator):
+    value = f"prefix{separator}suffix"
+    kwargs = {field: [value] if field == "refs" else value}
+    if field == "human_root":
+        kwargs["provenance_depth"] = 1
+    with pytest.raises(EvidenceContractError):
+        make(**kwargs)
+
+
+def test_exact_maximum_human_root_length_is_accepted():
+    record = make(human_root="x" * 160, provenance_depth=1)
+    assert verify_evidence_event(record) == (True, "")
+
+
 @pytest.mark.parametrize("depth", [True, False, -1, 1.0, "2", None, 10**100])
 def test_invalid_provenance_depths_are_rejected(depth):
     with pytest.raises(EvidenceContractError):

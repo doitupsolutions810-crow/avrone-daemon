@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.135: Round 142: an unreadable checkpoint is not a free checkpoint. 6,675 tests + 19 integration
+
+- **Bug** (`checkpoint._read`, which returned None on any OSError):
+  - `check_compatible` read None as "no checkpoint". During a transient EMFILE, EIO or EACCES, a different task or owner passed the check, and its run then resumed the stored steps once the file was readable again.
+  - The fleet's `stamp_owner` read None as an empty checkpoint. It rewrote the file as `{"steps": {}}`, erasing every finished step.
+- **Fix:**
+  - `_read(strict=True)` raises `CheckpointUnreadable`, a subclass of `CheckpointConflict`, so the request gets a 409. The message says nothing was changed and to retry.
+  - A missing, torn, oversized or non-regular file still starts fresh. `_Store.load` sets it aside, as before.
+- **Tests:** `tests/test_round142_checkpoint_unreadable.py` (4). 2 fail on v0.134, and 2 guard the fresh-start and resume paths.
+
 ## v0.134: Round 141: ending an evolve loop abnormally never wipes a loop file it could not read. 6,671 tests + 19 integration
 
 - **Bug** (`evolve._finish_abnormally`, which runs on cancel, error and timeout):

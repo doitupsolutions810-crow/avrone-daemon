@@ -425,6 +425,12 @@ class CheckpointConflict(ValueError):
     """The id holds a different task/mode/owner, or is in use by a running job (-> HTTP 409)."""
 
 
+class CheckpointUnreadable(CheckpointConflict):
+    """Round 142: the checkpoint file exists but could not be read right now. check_compatible
+    treated that as a free id, so another task or owner could resume its steps, and stamp_owner
+    rewrote the file as {"steps": {}}, erasing every finished step. Maps to 409 like a conflict."""
+
+
 def sanitize_id(raw: Any) -> str:
     """A client checkpoint id: 1-64 chars of [A-Za-z0-9_-], else CheckpointError."""
     if not isinstance(raw, str) or not CKPT_ID_RE.match(raw):
@@ -461,15 +467,26 @@ def managed_path(data_dir: str | Path, key: str) -> Path:
     return managed_dir(data_dir) / f"{key}.json"
 
 
-def _read(path: Path) -> dict[str, Any] | None:
+def _read(path: Path, strict: bool = False) -> dict[str, Any] | None:
+    """The stored checkpoint dict, or None when it is missing or unusable (corrupt, wrong shape,
+    over the cap, not a regular file). With strict=True a read error (EMFILE, EIO, EACCES...)
+    raises CheckpointUnreadable instead of reading as "no checkpoint" (round 142)."""
+    from .safeio import FileTooBig, read_capped  # round 107: no is_file()/read_bytes() swap window
     try:
         p = Path(path)
-        from .safeio import read_capped  # round 107: no is_file()/read_bytes() swap window
         data = read_capped(p, max_bytes())
         if data is None:
             return None
         raw = json.loads(data.decode("utf-8"))
-    except (OSError, ValueError, RecursionError):
+    except FileTooBig:
+        return None  # _Store.load sets it aside as .toobig-<ts>
+    except OSError as e:
+        if strict:
+            raise CheckpointUnreadable(
+                f"checkpoint {Path(path).stem!r} could not be read ({e.strerror or type(e).__name__}); "
+                "nothing was changed, retry") from None
+        return None
+    except (ValueError, RecursionError):
         return None
     return raw if isinstance(raw, dict) and isinstance(raw.get("steps"), dict) else None
 
@@ -482,7 +499,7 @@ def check_compatible(path: str | Path, task: str, mode: str, owner: str | None =
     key = path.stem
     if is_busy(path):
         raise CheckpointConflict(f"checkpoint {key!r} is in use by a running job; wait for it or use another id")
-    data = _read(path)
+    data = _read(path, strict=True)
     if data is None:
         return None
     if data.get("owner") != owner:
@@ -502,7 +519,7 @@ def stamp_owner(path: str | Path, owner: str) -> None:
     """Record who owns a fleet checkpoint before its run starts writing it."""
     path = Path(path)
     with _file_lock(path):  # read-modify-write of the file: never interleave with a put()/save()
-        data = _read(path) or {"version": VERSION, "steps": {}}
+        data = _read(path, strict=True) or {"version": VERSION, "steps": {}}
         if data.get("owner") == owner:
             return
         store = _Store(path)

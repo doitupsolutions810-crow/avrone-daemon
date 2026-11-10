@@ -839,8 +839,16 @@ class FleetManager:
         aside = self.path.with_name(f"{self.path.name}.{kind}-{int(time.time())}")
         try:
             os.replace(self.path, aside)
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError:
+            # round 145: the rename failing used to be ignored, and the first save then overwrote
+            # the unreadable file, so nothing of it was kept. Saves now retry the set-aside first
+            # and refuse to write while it is still in place (_write_registry).
+            self.__dict__["_pending_aside"] = kind
+            log.warning("fleet.json is unreadable and could not be moved aside; it is kept and the "
+                        "registry is not saved until it can be")
+            return {}
         log.warning("fleet.json was unreadable; moved to %s and starting with an empty registry", aside.name)
         return {}
 
@@ -881,6 +889,19 @@ class FleetManager:
 
     def _write_registry(self, text: str) -> None:
         from .safeio import atomic_write
+        kind = self.__dict__.get("_pending_aside")
+        if kind:
+            try:
+                os.replace(self.path, self.path.with_name(f"{self.path.name}.{kind}-{int(time.time())}"))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # keep the registry in memory only: the node keeps working, the file is kept
+                self.__dict__["save_blocked"] = self.__dict__.get("save_blocked", 0) + 1
+                if self.save_blocked == 1:
+                    log.warning("fleet.json still cannot be set aside; registry kept in memory only")
+                return
+            self.__dict__.pop("_pending_aside", None)
         atomic_write(self.path, text)
 
     def flush(self) -> None:

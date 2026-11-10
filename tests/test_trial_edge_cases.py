@@ -452,7 +452,7 @@ def test_http_strict_json_rejects_overflowing_number_after_valid_hmac(trial_api_
 
 
 def test_strict_json_rejects_escaped_lone_surrogates_in_values_and_keys():
-    for raw in (b'{"value":"\\\\ud800"}', b'{"\\\\udfff":"value"}'):
+    for raw in (b'{"value":"\\ud800"}', b'{"\\udfff":"value"}'):
         with pytest.raises(ValueError, match="unambiguous"):
             strict_json_loads(raw)
 

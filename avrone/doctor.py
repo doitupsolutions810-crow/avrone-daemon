@@ -20,7 +20,6 @@ with strict=True a warning also makes it not ok.
 """
 from __future__ import annotations
 
-import ipaddress
 import os
 import re
 import shutil
@@ -76,10 +75,10 @@ def _is_loopback_host(host: str) -> bool:
     h = (host or "").strip().strip("[]").lower()
     if h in ("localhost", ""):
         return True
-    try:
-        return ipaddress.ip_address(h).is_loopback
-    except ValueError:
-        return False
+    # Unwrap ::ffff:127.0.0.1 before the loopback test. ipaddress reports that
+    # mapped form as not loopback even though the embedded address is.
+    from .fusion_loopback import is_any_loopback
+    return is_any_loopback(h)
 
 
 def _cleartext_remote(url: str) -> bool:

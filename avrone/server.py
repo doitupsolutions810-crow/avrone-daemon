@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from . import __version__
 from .bootstrap import build_core, run_cleanups
 from .config import settings
+from .fusion_loopback import is_access_loopback
 from .trinity import TrinityCore, clamp_deep_rounds
 
 log = logging.getLogger("avrone.server")
@@ -110,6 +111,20 @@ def require_admin(token: str | None) -> None:
         raise HTTPException(401, "Bad admin token")
 
 
+def require_blackboard_admin(token: str | None) -> None:
+    """Admin token for /api/blackboard, plus AVRONE_ADMIN_TOKEN_PREVIOUS.
+
+    The previous token is a rotation grace for this route only. Other admin
+    routes keep require_admin and ignore it. The route stays off when the
+    current token is unset, even if a previous token is set.
+    """
+    if not settings.admin_token:
+        raise HTTPException(403, "Admin access is off. Set AVRONE_ADMIN_TOKEN to enable it.")
+    previous = getattr(settings, "admin_token_previous", "")
+    if not (token_eq(token, settings.admin_token) or token_eq(token, previous)):
+        raise HTTPException(401, "Bad admin token")
+
+
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 ACCESS_POLICIES = ("loopback", "admin", "all")
 
@@ -131,7 +146,7 @@ def caller_allowed(host: str | None, token: str | None) -> bool:
         return True
     if settings.admin_token and token_eq(token, settings.admin_token):
         return True
-    return policy == "loopback" and (host or "") in LOOPBACK_HOSTS
+    return policy == "loopback" and is_access_loopback(host)
 
 
 def require_local(request: Request, token: str | None) -> None:
@@ -166,12 +181,31 @@ def max_message_chars() -> int:
 
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 HARD_MAX_BODY_BYTES = 512 * 1024 * 1024
+# Fusion blackboard only. The process-wide cap below stays AVRONE_MAX_BODY_BYTES.
+FUSION_BLACKBOARD_MAX_BODY = 4096
+FUSION_BLACKBOARD_PATH = "/api/blackboard"
+# One id for this process. The fusion relay treats a change as a restart and
+# resends what this process would have forgotten. Stable until import again.
+BOOT_ID = uuid.uuid4().hex
+
+
+def boot_id() -> str:
+    return BOOT_ID
+
+
+def body_too_large_detail(path: str, limit: int) -> str:
+    """Blackboard's 413 is the fusion sentence. Other routes name the env knob."""
+    if path == FUSION_BLACKBOARD_PATH:
+        return f"request body too large (max {limit} bytes)"
+    return f"request body too large (max {limit} bytes; AVRONE_MAX_BODY_BYTES)"
 
 
 def max_body_bytes(path: str = "") -> int:
     """Largest request body this server reads for ``path``. Never below what the message cap needs
     (message + first_answer, worst-case JSON escaping), and the agent-pack route also fits a
-    base64 bundle at the agent-fs quota."""
+    base64 bundle at the agent-fs quota. ``/api/blackboard`` is capped at 4096 bytes instead."""
+    if path == FUSION_BLACKBOARD_PATH:
+        return FUSION_BLACKBOARD_MAX_BODY
     n = max(_env_cap("AVRONE_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, HARD_MAX_BODY_BYTES),
             12 * max_message_chars() + 64 * 1024)
     if path == "/api/fleet/agentpack":
@@ -182,6 +216,25 @@ def max_body_bytes(path: str = "") -> int:
 
 class _BodyTooLarge(Exception):
     pass
+
+
+def _content_length_over(headers, limit: int) -> bool:
+    """True when any well-formed Content-Length is over the cap.
+
+    A second, smaller length must not hide a larger one. ``+10``, ``-1``, and
+    ``zz`` are not byte counts: they are ignored and the body is counted as it
+    streams, which is what a single bad header already did. Surrounding spaces
+    are stripped, so ``10`` and ``10 `` are the same size. No header means
+    chunked, which is counted as it streams.
+    """
+    over = False
+    for key, value in headers:
+        if key.lower() != b"content-length":
+            continue
+        text = value.decode("latin-1").strip()
+        if text.isdigit() and int(text) > limit:
+            over = True
+    return over
 
 
 class BodyLimit:
@@ -197,16 +250,10 @@ class BodyLimit:
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
-        limit = max_body_bytes(scope.get("path", ""))
-        declared = None
-        for k, v in scope.get("headers") or ():
-            if k.lower() == b"content-length":
-                try:
-                    declared = int(v)
-                except ValueError:
-                    declared = None
-        if declared is not None and declared > limit:
-            return await self._refuse(send, limit)
+        path = scope.get("path", "")
+        limit = max_body_bytes(path)
+        if _content_length_over(scope.get("headers") or (), limit):
+            return await self._refuse(send, limit, path)
         seen = 0
         started = False
 
@@ -229,12 +276,12 @@ class BodyLimit:
             await self.app(scope, limited_receive, tracking_send)
         except _BodyTooLarge:
             if not started:
-                await self._refuse(send, limit)
+                await self._refuse(send, limit, path)
 
     @staticmethod
-    async def _refuse(send, limit: int) -> None:
+    async def _refuse(send, limit: int, path: str = "") -> None:
         import json as _json
-        body = _json.dumps({"detail": f"request body too large (max {limit} bytes; AVRONE_MAX_BODY_BYTES)"}).encode()
+        body = _json.dumps({"detail": body_too_large_detail(path, limit)}).encode()
         await send({"type": "http.response.start", "status": 413,
                     "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
                                 (b"connection", b"close")]})
@@ -283,6 +330,7 @@ async def status():
         "admin_enabled": bool(settings.admin_token),
         "agents": c.active,
         "codex": c.codex.health() if hasattr(c.codex, "health") else None,
+        "boot": BOOT_ID,
     }
 
 
@@ -690,6 +738,39 @@ async def run_log(run_id: str, request: Request, x_admin_token: str | None = Hea
         events = events[-limit:]
         headers["X-Avrone-Truncated"] = f"newest {limit} events (AVRONE_REPLAY_MAX_EVENTS)"
     return SafeJSONResponse(events, headers=headers)
+
+
+@app.get(FUSION_BLACKBOARD_PATH)
+async def blackboard_get(since: str | None = None, x_admin_token: str | None = Header(default=None)):
+    """Fan-in of this node's bridge posts, oldest first. Admin token, not loopback."""
+    require_blackboard_admin(x_admin_token)
+    from .fusion_blackboard import blackboard_posts
+    posts = await asyncio.to_thread(blackboard_posts, core(), since)
+    return {"posts": posts, "count": len(posts), "boot": BOOT_ID}
+
+
+@app.post(FUSION_BLACKBOARD_PATH)
+async def blackboard_write(request: Request, x_admin_token: str | None = Header(default=None)):
+    """Accept one bridge post. The 4096-byte cap is enforced before this token check."""
+    raw = await request.body()
+    if len(raw) > FUSION_BLACKBOARD_MAX_BODY:
+        raise HTTPException(413, f"request body too large (max {FUSION_BLACKBOARD_MAX_BODY} bytes)")
+    require_blackboard_admin(x_admin_token)
+    if not raw:
+        raise HTTPException(400, "body must be JSON")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise HTTPException(400, "body must be JSON") from None
+    from .fusion_blackboard import BridgeError, blackboard_accept, normalize_blackboard_post
+    post, err = normalize_blackboard_post(data)
+    if err or post is None:
+        raise HTTPException(400, err or "body must be JSON")
+    try:
+        duplicate, pid = await asyncio.to_thread(blackboard_accept, core(), post)
+    except BridgeError as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"posted": True, "duplicate": duplicate, "id": pid}
 
 
 @app.get("/api/runs/{run_id}/bridge")

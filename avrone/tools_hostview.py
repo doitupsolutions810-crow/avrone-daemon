@@ -107,7 +107,7 @@ def _auth_class(fn: Any) -> str:
         return "unknown"
     if "_gateway(request" in src or "_verified(request" in src:
         return "fleet-signed"
-    if "require_admin(" in src:
+    if "require_blackboard_admin(" in src or "require_admin(" in src:
         return "admin"
     if "require_local(" in src or "caller_allowed(" in src:
         return "local"  # loopback or admin token, per AVRONE_PUBLIC_ACCESS
@@ -158,7 +158,8 @@ def _token_strength(v: str | None) -> str:
 def exposure() -> dict[str, Any]:
     """Who can reach what on this node right now, as a remote (non-loopback) caller with no token."""
     host = os.getenv("AVRONE_HOST") or "127.0.0.1"
-    exposed = host.strip("[]") not in ("127.0.0.1", "::1", "localhost")
+    from .fusion_loopback import is_access_loopback
+    exposed = not is_access_loopback(host)
     a = api_surface()
     policy, admin_on, fleet_on = a["access_policy"], a["admin_enabled"], a["fleet_enabled"]
     remote_open = [f"{','.join(r['methods'])} {r['path']}" for r in a["routes"]

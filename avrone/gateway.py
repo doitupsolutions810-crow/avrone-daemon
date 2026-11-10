@@ -40,19 +40,19 @@ class LLMError(RuntimeError):
 
 def is_loopback_url(url: str) -> bool:
     """True for http(s)://127.x / localhost / [::1] URLs: those must bypass any env proxy, or a
-    sandbox/corporate HTTP_PROXY swallows calls to the local model server (ConnectError / 404)."""
-    import ipaddress
+    sandbox/corporate HTTP_PROXY swallows calls to the local model server (ConnectError / 404).
+
+    ``::ffff:127.0.0.1`` is the same loopback. ``ipaddress`` does not flag the
+    mapped form itself; ``is_any_loopback`` unwraps it. ``::ffff:10.0.0.1`` stays remote.
+    """
     from urllib.parse import urlsplit
+
+    from .fusion_loopback import is_any_loopback
     try:
         host = (urlsplit(str(url or "")).hostname or "").lower().rstrip(".")
     except ValueError:
         return False
-    if host == "localhost" or host.endswith(".localhost"):
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+    return is_any_loopback(host)
 
 
 @dataclass

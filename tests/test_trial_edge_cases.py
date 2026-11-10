@@ -671,3 +671,41 @@ def test_invalid_later_batch_member_rejects_before_any_trial_or_receipt_is_writt
     finally:
         db.close()
     assert store.pool_snapshot()["runs"] == 0
+
+
+def test_acknowledgement_loss_after_commit_retries_as_duplicate(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    path = tmp_path / "trials.sqlite3"
+    TrialStore(path)
+    envelope = json.dumps(sample("pass", "ack-loss"), separators=(",", ":"))
+    root = Path(__file__).resolve().parents[1]
+    script = """
+import json, os, sys
+from avrone.trial_receiver import TrialStore
+store = TrialStore(sys.argv[1])
+result = store.ingest_many([json.loads(sys.argv[2])], sender="peer-a", transport="fleet")
+assert result["results"][0]["status"] == "accepted"
+os._exit(74)  # commit completed; transport acknowledgement is deliberately lost
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(path), envelope],
+        cwd=str(root), capture_output=True, text=True, timeout=15,
+    )
+    assert child.returncode == 74, child.stderr
+
+    recovered = TrialStore(path)
+    retry = recovered.ingest_many(
+        [json.loads(envelope)], sender="peer-a", transport="fleet"
+    )
+    assert retry["results"][0]["status"] == "duplicate"
+
+    db = recovered._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 2
+    finally:
+        db.close()
+    assert recovered.pool_snapshot()["runs"] == 1

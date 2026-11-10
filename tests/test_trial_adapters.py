@@ -62,6 +62,22 @@ def test_bridge_adapter_preserves_run_scope(tmp_path):
     assert row["first_transport"] == "bridge"
 
 
+def test_bridge_adapter_uses_existing_wave1_shared_run_semantics(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    adapter = BridgeTrialAdapter(store)
+    payload = wrapper(
+        BRIDGE_TRIAL_SCHEMA, [sample()], run_id="bridge-run-7-wave1"
+    )
+    result = adapter.receive(payload, "peer-a", 3)
+    assert result["accepted"] == 1
+    db = store._connect()
+    try:
+        row = db.execute("SELECT bridge_run_id FROM trials").fetchone()
+    finally:
+        db.close()
+    assert row["bridge_run_id"] == "bridge-run-7"
+
+
 def test_batch_and_hop_bounds_are_enforced(tmp_path):
     adapter = FleetTrialAdapter(TrialStore(tmp_path / "trials.sqlite3"))
     too_many = wrapper(FLEET_TRIAL_SCHEMA, [sample()] * 11)

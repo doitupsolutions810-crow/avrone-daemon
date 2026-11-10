@@ -81,6 +81,15 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.125: Round 132: junk lesson timestamps no longer break or skew lesson_recall. 5,983 tests + 19 integration
+
+- **Bug:** `lesson_recall`'s `age()` called `int()` on the timestamp. NaN raised `ValueError` and ±inf raised `OverflowError`, and the caller caught neither. So one lesson whose ts was `"inf"` failed the whole recall with `ERROR: OverflowError`. Such a ts comes from a hand-edited or old store, because memstore's merge already guards peer syncs.
+- **Bug:** a ts of `"inf"` sorted that lesson above every real one forever, and NaN made the order arbitrary.
+- **Bug:** a ts of `-1e300` printed a 300-digit age.
+- **Fix:** the new `_ts()` treats junk or non-finite ts as 0, which sorts it last and shows its age as `?`.
+- **Fix:** `age()` returns `?` for junk and caps the display at `>9999d`.
+- **Tests:** `tests/test_round132_lesson_ts.py` (17). 12 fail on v0.124.
+
 ## v0.124: Round 131: sqlite storage failures read as plain errors, and /api/fleet/jobs answers 503. 5,966 tests + 19 integration
 
 - **Bug** (probe `jqfull.py`): with the disk full, `queue_submit` answered `ERROR: OperationalError: disk I/O error`, which did not say whether a retry could help.

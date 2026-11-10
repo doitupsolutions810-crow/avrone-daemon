@@ -201,25 +201,48 @@ class _Store:
             return None
         return (st.st_ino, st.st_size, st.st_mtime_ns)
 
-    def _merge_disk(self) -> None:
+    def _merge_disk(self) -> bool:
+        """Fold the file's other keys in before a write. False = do not write (round 139).
+
+        Every failure used to return quietly, and the save then wrote only this store's keys. After
+        a load that also failed (EMFILE, EIO, EACCES), one transient read error erased every
+        finished step of the run, and a resume re-ran them. A file over the cap, or one that no
+        longer parses, was overwritten the same way. A read error now skips the write (the save
+        reports False). An unusable file is renamed aside, as load() does, before the write."""
         if not (self._dirty or self._dropped):
-            return
+            return True
         if self._sig is not None and self._stat_sig() == self._sig:
-            return  # unchanged since our own last write
+            return True  # unchanged since our own last write
+        import stat as _stat
+        from .safeio import FileTooBig, read_capped  # round 107: runs under the save lock; never a FIFO
         try:
             st = self.path.stat()
-            import stat as _stat
-            if not _stat.S_ISREG(st.st_mode) or st.st_size > max_bytes() or st.st_size == 0:
-                return
-            from .safeio import read_capped  # round 107: runs under the save lock; never a FIFO
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if not _stat.S_ISREG(st.st_mode) or st.st_size == 0:
+            return True
+        try:
+            if st.st_size > max_bytes():
+                raise FileTooBig(str(self.path))
             data = read_capped(self.path, max_bytes())
-            if data is None:
-                return
+        except FileNotFoundError:
+            return True
+        except FileTooBig:
+            self.set_aside = _set_aside(self.path, "toobig")
+            return self.set_aside is not None or not self.path.exists()
+        except OSError:
+            return False
+        if data is None:
+            return True
+        try:
             raw = json.loads(data.decode("utf-8"))
-        except (OSError, ValueError, RecursionError):
-            return
+        except (ValueError, RecursionError):
+            raw = None
         if not (isinstance(raw, dict) and isinstance(raw.get("steps"), dict) and raw.get("version") == VERSION):
-            return
+            self.set_aside = _set_aside(self.path, "corrupt")
+            return self.set_aside is not None or not self.path.exists()
         mine = self.data["steps"]
         steps = {k: v for k, v in raw["steps"].items() if k not in self._dropped}
         for k in self._dirty:
@@ -229,6 +252,7 @@ class _Store:
         for k, v in raw.items():  # e.g. an owner stamped by another process
             if k not in ("steps", "updated") and k not in self.data:
                 self.data[k] = v
+        return True
 
     def _save_locked(self) -> bool:
         fd = None
@@ -245,7 +269,11 @@ class _Store:
         except (OSError, ImportError):
             pass  # no data dir yet / no flock: the save below reports any real error
         try:
-            self._merge_disk()
+            if not self._merge_disk():
+                self.write_errors += 1
+                log.warning("checkpoint %s: could not re-read the file; save skipped so its steps are kept",
+                            self.path.name)
+                return False
             ok = self._write_locked()
             if ok:
                 self._dirty.clear()

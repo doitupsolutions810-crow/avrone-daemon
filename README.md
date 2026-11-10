@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.133: Round 140: a checkpoint save never overwrites steps it could not read. 6,668 tests + 19 integration
+
+- **Bug** (`checkpoint._Store._merge_disk`):
+  - Before each write, the save re-reads the file so it can keep other writers' steps. Every failure in that re-read returned quietly, and the save then wrote only this store's keys.
+  - With a load that had also failed (EIO, EMFILE, EACCES), one transient read error erased every finished step of the run, and a resume re-ran them.
+  - A file that grew past the cap, or one another writer left torn, was overwritten the same way.
+- **Fix:**
+  - `_merge_disk` returns a bool. A read error skips the write: `put` and `save` return False, `write_errors` goes up, and the file keeps its steps.
+  - A file over the cap or one that no longer parses is set aside as `.toobig-<ts>` or `.corrupt-<ts>`, as `load()` already did, before the write.
+- **Checked, safe:** bridge compaction replays under the file lock, and an OSError aborts it. `fleet._load_saved` moves an unreadable registry aside.
+- **Tests:** `tests/test_round140_checkpoint_merge.py` (3). All 3 fail on v0.132.
+
 ## v0.132: Round 139: one failed read of the agent index no longer erases every agent's record. 6,665 tests + 19 integration
 
 - **Bug** (`agentpack.record`, called by imports and `migrate_agent`):

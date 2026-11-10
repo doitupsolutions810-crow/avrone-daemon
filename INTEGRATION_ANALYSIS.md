@@ -49,6 +49,21 @@ The 18th failure was `tests/test_master_prompt.py::test_committed_prompt_is_curr
 
 A non-ASCII token was not sent through HTTP. `httpx` refuses to encode `café` as an ASCII header. `token_eq("café", ...)` returns false for the real token and true for itself, and does not raise. That is the compare the route uses.
 
+## Hardening pass
+
+`python3 -m pytest -q tests/test_fusion_peer.py tests/test_fusion_peer_edges.py tests/test_master_prompt.py --tb=line`
+
+**39 passed** in 6.82s. That is the original 23, 14 new edge tests, and the two prompt checks. The new cases, and the code changes they forced:
+
+- A symlink journal, a symlink order file, and a FIFO order file do not block the fan-in and are not replaced. A symlink, FIFO, over-cap, or foreign-version state file is not followed and not overwritten. A version-2 state file keeps `version`, `cursor`, and `seen`.
+- `408` and `429` are retried. A `404`, a non-JSON `200`, and a response larger than the read cap are not remembered. HTTP `413` still is.
+- A token or URL containing CR, LF, or NUL is not dialed. `file://` is not opened.
+- `NaN` timeout and non-finite `FUSION_TIMEOUT` fall back instead of hanging. Whitespace-only URLs count as unset. `GET /api/fusion` does not dial.
+- A 400-digit `ts`, `true`, and `1e999` do not 500. More than 20 refs are clipped. A `run_id` of `../../etc/passwd` stays under `data_dir/bridge`. A 2000-deep JSON array is 400. A chunked body over 4096 bytes is 413 before auth. Eight threads posting one id store one post.
+- An Avrone `boot` change drops `ck-*` ids and does not resend findings. A float, a bool, and a newline in `boot` are not a restart.
+- The fan-in no longer raises when `bridge/` is a file. Accepting a post in that case raises `BridgeError` instead of an uncaught `NotADirectoryError`.
+- One cycle still forwards at most `MAX_FORWARD` posts; the next cycle takes the rest. Echoes whose agent is `CycleKernal:Health`, or whose text embeds `"agent": "cyclekernal:mood"`, are not forwarded.
+
 ## Remaining gaps
 
 - The watchdog is one shot. It does not fingerprint mood, open a circuit breaker, or enforce the relay's cycle deadline. One cycle forwards at most 200 new posts. Disk fan-in reads at most 256 journals.
@@ -57,4 +72,4 @@ A non-ASCII token was not sent through HTTP. `httpx` refuses to encode `café` a
 - `POST /v1/events` was read from CycleKernal PR #14. It was not re-checked against that repo's default branch in this run.
 - Nothing here produces `source: "greatscale"` or `kind: "evidence"`.
 - The watchdog does not open `/ws/events` or `/ws/hud`.
-- A shared `FUSION_STATE_PATH` with the relay is intentionally not used. Pointing `AVRONE_FUSION_WATCH_PATH` at the relay's file would still be wrong: this writer speaks version 1.
+- The watch route does not read `FUSION_STATE_PATH`. If `AVRONE_FUSION_WATCH_PATH` points at a version-2 file, that file is updated in place and its `cursor` is kept. A version other than 1 or 2 is left untouched.

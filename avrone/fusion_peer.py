@@ -219,7 +219,7 @@ def _load_order(core: Any) -> "OrderedDict[str, None]":
     if path is not None:
         try:
             raw = read_capped(path, _STATE_CAP)
-        except FileTooBig:
+        except OSError:
             raw = None
         if raw:
             try:
@@ -243,6 +243,8 @@ def _save_order(core: Any, order: "OrderedDict[str, None]") -> None:
     if path is None:
         return
     try:
+        if path.is_symlink():
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, json.dumps({"ids": list(order)}))
     except OSError:
@@ -300,8 +302,11 @@ def blackboard_accept(core: Any, post: dict[str, Any]) -> tuple[bool, str]:
     with _guard(core):
         if _id_state(core, pid) is not None:
             return True, pid
-        dest = for_core(core, str(post.get("run_id") or "run"))
-        stats = dest.merge_remote([post], str(post.get("origin_node") or "local"))
+        try:
+            dest = for_core(core, str(post.get("run_id") or "run"))
+            stats = dest.merge_remote([post], str(post.get("origin_node") or "local"))
+        except OSError as exc:
+            raise BridgeError("post rejected") from exc
         if stats.get("merged") == 1:
             _sync_order(core, _posts_by_id(core))
             return False, pid
@@ -450,10 +455,16 @@ def event_from_post(post: dict) -> dict[str, Any] | None:
     }
 
 
-def _idempotency_key(value: str) -> str:
-    key = str(value or "").strip()
-    if not key or any(char in key for char in "\r\n\x00"):
+def _header_value(value: str) -> str:
+    """A header value, or empty when it would split the header or inject another one."""
+    text = str(value or "")
+    if not text or any(char in text for char in "\r\n\x00"):
         return ""
+    return text
+
+
+def _idempotency_key(value: str) -> str:
+    key = _header_value(str(value or "").strip())
     return key[:200]
 
 
@@ -462,8 +473,9 @@ def _status_error(code: int) -> str:
         return "auth"
     if code == 413:
         return "oversized"
-    if code in (404, 405):
-        return "missing"
+    if code in (404, 405, 408, 429):
+        # 408/429 are temporary. Remembering them would drop the post.
+        return "missing" if code in (404, 405) else "retry"
     if 300 <= code < 400:
         return "redirect"
     if code >= 500:
@@ -490,15 +502,23 @@ def _exchange(
     timeout: float = 5.0,
     max_read: int = 2_000_000,
 ) -> dict[str, Any]:
-    if not url.startswith(("http://", "https://")):
+    if not url.startswith(("http://", "https://")) or any(char in url for char in "\r\n\x00 \t"):
         return {"ok": False, "status": None, "error": "down", "body": None}
+    if token and not _header_value(token):
+        # Do not dial. A CR/LF in the token is header injection, not a wrong password.
+        return {"ok": False, "status": None, "error": "auth", "body": None}
+    if not math.isfinite(timeout) or timeout <= 0:
+        timeout = 5.0
+    timeout = min(30.0, max(0.05, float(timeout)))
     headers = {"Accept": "application/json"}
     if body is not None:
         headers["Content-Type"] = "application/json"
-    if token:
-        headers["X-Admin-Token"] = token
-    if idempotency_key:
-        headers["Idempotency-Key"] = idempotency_key
+    safe_token = _header_value(token)
+    if safe_token:
+        headers["X-Admin-Token"] = safe_token
+    safe_key = _header_value(idempotency_key)
+    if safe_key:
+        headers["Idempotency-Key"] = safe_key
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     opener = urllib.request.build_opener(_NoRedirect)
     try:
@@ -519,7 +539,9 @@ def _exchange(
         error = "timeout" if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) else "down"
         return {"ok": False, "status": None, "error": error, "body": None}
     if len(raw) > max_read:
-        return {"ok": False, "status": status, "error": "oversized", "body": None}
+        # The peer answered, but not with a body we will buffer. Retry later.
+        # HTTP 413 is a small JSON error and is handled below as permanent.
+        return {"ok": False, "status": status, "error": "truncated", "body": None}
     parsed: Any = None
     try:
         parsed = json.loads(raw.decode("utf-8")) if raw else None
@@ -548,6 +570,9 @@ class FusionWatch:
         self.seen: set[str] = set()
         self.boots: dict[str, str] = {}
         self.state_errors = 0
+        self._version = 1
+        self._cursor = ""
+        self._writable = True
         self._lock = threading.RLock()
         self._load()
 
@@ -557,25 +582,36 @@ class FusionWatch:
         try:
             raw = read_capped(self.path, _STATE_CAP)
         except FileTooBig:
+            # Leave the file in place. Replacing it would throw away ids we did not read.
             self.state_errors += 1
+            self._writable = False
             return
         if raw is None:
             if os.path.lexists(self.path):
+                # Symlink, FIFO, directory, or other non-regular file. Do not follow it
+                # and do not replace it.
                 self.state_errors += 1
+                self._writable = False
             return
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             self.state_errors += 1
             return
-        if not isinstance(data, dict) or data.get("version") != 1:
+        if not isinstance(data, dict) or data.get("version") not in (1, 2):
             self.state_errors += 1
+            self._writable = False
             return
         seen = data.get("seen")
         boots = data.get("boots")
         if not isinstance(seen, list) or not isinstance(boots, dict):
             self.state_errors += 1
+            self._writable = False
             return
+        self._version = data["version"]
+        cursor = data.get("cursor")
+        if isinstance(cursor, str) and not any(char in cursor for char in "\r\n\x00"):
+            self._cursor = cursor[:80]
         self.seen = {item for item in seen if isinstance(item, str) and _ID_RE.match(item)}
         for side in ("avrone", "cyclekernal"):
             value = boots.get(side)
@@ -585,14 +621,18 @@ class FusionWatch:
     def _save(self) -> bool:
         if not self.path:
             return True
-        payload = json.dumps({
-            "version": 1,
+        if not self._writable or os.path.islink(self.path):
+            return False
+        payload = {
+            "version": self._version if self._version in (1, 2) else 1,
             "seen": sorted(self.seen),
             "boots": {side: self.boots.get(side, "") for side in ("avrone", "cyclekernal")},
-        })
+        }
+        if payload["version"] == 2:
+            payload["cursor"] = self._cursor
         try:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(self.path, payload)
+            atomic_write(self.path, json.dumps(payload))
             return True
         except OSError:
             self.state_errors += 1
@@ -720,7 +760,7 @@ class FusionWatch:
                             forwarded += 1
                         else:
                             errors += 1
-                            if result.get("error") in ("down", "timeout", "auth", "upstream", "missing"):
+                            if result.get("error") in ("down", "timeout", "auth", "upstream", "missing", "retry", "truncated"):
                                 break
             if not self._save():
                 errors += 1

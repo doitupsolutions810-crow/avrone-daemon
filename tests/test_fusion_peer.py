@@ -122,6 +122,15 @@ class _Handler(BaseHTTPRequestHandler):
         if peer.mode == "400":
             self._send(400, {"detail": "bad"})
             return
+        if peer.mode == "404":
+            self._send(404, {"detail": "missing"})
+            return
+        if peer.mode == "429":
+            self._send(429, {"detail": "slow down"})
+            return
+        if peer.mode == "text":
+            self._send(200, None, raw=b"not-json")
+            return
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):

@@ -9,7 +9,7 @@ import re
 import unicodedata
 from typing import Any
 
-SCHEMA_VERSION = "avrone.trial/v1"
+SCHEMA_VERSION = "avrone.trial/v2"
 OUTCOMES = frozenset({"pass", "fail", "skipped", "cancelled", "timed_out", "inconclusive"})
 MAX_SOURCE_COMPONENT_CHARS = 63
 MAX_FIELD_CHARS = 256
@@ -170,7 +170,7 @@ def validate_trial_envelope(record: Any) -> bool:
 
 def canonical_trial_bytes(record: Any) -> bytes:
     if not validate_trial_envelope(record):
-        raise ValueError("invalid avrone.trial/v1 envelope")
+        raise ValueError("invalid avrone.trial/v2 envelope")
     raw = _canonical_bytes(record)
     if len(raw) > MAX_ENVELOPE_BYTES:
         raise ValueError(f"trial envelope exceeds {MAX_ENVELOPE_BYTES} bytes")
@@ -180,7 +180,7 @@ def canonical_trial_bytes(record: Any) -> bytes:
 def pool_record(record: dict[str, Any]) -> dict[str, Any]:
     """Project only completed pass/fail outcomes into the legacy evidence pool."""
     if not validate_trial_envelope(record):
-        raise ValueError("invalid avrone.trial/v1 envelope")
+        raise ValueError("invalid avrone.trial/v2 envelope")
     if record["outcome"] not in {"pass", "fail"}:
         raise ValueError("non-pass outcome is not eligible for the evidence pool")
     return {

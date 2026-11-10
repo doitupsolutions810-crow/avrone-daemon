@@ -71,7 +71,7 @@ def _validate_batch(
         raise ValueError(f"trials must contain 1..{MAX_BATCH} envelopes")
     for index, trial in enumerate(trials):
         if not validate_trial_envelope(trial):
-            raise ValueError(f"trial at index {index} is not a valid avrone.trial/v1 envelope")
+            raise ValueError(f"trial at index {index} is not a valid avrone.trial/v2 envelope")
         canonical_trial_bytes(trial)
     run_id = None
     if bridge:

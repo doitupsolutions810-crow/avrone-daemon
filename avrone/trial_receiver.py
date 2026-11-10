@@ -147,7 +147,7 @@ class TrialStore:
         prepared: list[tuple[dict[str, Any], bytes]] = []
         for envelope in envelopes:
             if not validate_trial_envelope(envelope):
-                raise ValueError("invalid avrone.trial/v1 envelope")
+                raise ValueError("invalid avrone.trial/v2 envelope")
             raw = canonical_trial_bytes(envelope)
             prepared.append((envelope, raw))
 
@@ -182,7 +182,7 @@ class TrialStore:
         bridge_run_id: str | None,
     ) -> dict[str, Any]:
         if not validate_trial_envelope(envelope):
-            raise ValueError("invalid avrone.trial/v1 envelope")
+            raise ValueError("invalid avrone.trial/v2 envelope")
         digest = hashlib.sha256(raw).hexdigest()
         now = time.time()
         trial_id = envelope["trial_id"]

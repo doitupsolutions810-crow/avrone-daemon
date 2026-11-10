@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.avrone.local/avrone.bridge-trial-ingest.v1.schema.json",
+  "title": "AVRONE Bridge Trial Ingest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "from", "hops", "capability", "run_id", "trials"],
+  "properties": {
+    "schema": { "const": "avrone.bridge-trial-ingest/v1" },
+    "from": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$" },
+    "hops": { "type": "integer", "minimum": 1, "maximum": 16 },
+    "capability": { "const": "evidence:trial:ingest" },
+    "run_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "trials": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "$ref": "avrone.trial.v1.schema.json" }
+    }
+  }
+}

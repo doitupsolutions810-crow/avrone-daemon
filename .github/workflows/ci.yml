@@ -16,8 +16,8 @@ jobs:
           # status line ("successfully downloaded text file (SHA: ...)") to
           # delivered text files. Line 1 must parse as TOML/JSON/py source, so
           # strip such a wrapper line when present (no-op on clean checkouts).
-          grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
-            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done
+          grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null > /tmp/avrone-wrapper-files || test "$?" -eq 1
+          while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done < /tmp/avrone-wrapper-files
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" 2>&1 | tee /tmp/pip.log || {
             tail -n 8 /tmp/pip.log | while IFS= read -r l; do
@@ -29,8 +29,8 @@ jobs:
       - name: Test avrone
         run: |
           set -o pipefail
-          grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
-            | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done
+          grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null > /tmp/avrone-wrapper-files || test "$?" -eq 1
+          while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done < /tmp/avrone-wrapper-files
           pytest -q 2>&1 | tee /tmp/pytest.log || {
             tail -n 10 /tmp/pytest.log | while IFS= read -r l; do
               l="${l//%/%25}"

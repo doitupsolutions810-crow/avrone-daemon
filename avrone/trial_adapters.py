@@ -50,10 +50,20 @@ def _check_json_bounds(value: Any) -> None:
             raise ValueError("request JSON exceeds maximum depth 32")
         if isinstance(item, dict):
             nodes += len(item)
-            stack.extend((child, depth + 1) for child in item.values())
+            for key, child in item.items():
+                try:
+                    key.encode("utf-8")
+                except UnicodeEncodeError as exc:
+                    raise ValueError("request JSON object key contains invalid Unicode") from exc
+                stack.append((child, depth + 1))
         elif isinstance(item, list):
             nodes += len(item)
             stack.extend((child, depth + 1) for child in item)
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("request JSON string contains invalid Unicode") from exc
         if nodes > 100_000:
             raise ValueError("request JSON exceeds 100000 values")
 

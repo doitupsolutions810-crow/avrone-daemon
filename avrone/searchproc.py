@@ -20,31 +20,19 @@ from pathlib import Path
 from .safeio import read_capped
 
 
-MAX_WALK_DIRS = 20_000
-MAX_WALK_ENTRIES_PER_DIR = 20_000
-MAX_PENDING_DIRS = 20_000
-
-
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
-    """Iterative bounded traversal; os.walk recursively descends and overflows on deep trees."""
+    """Iterative top-down traversal avoids os.walk's recursive descent on deep trees."""
     if root.is_file():
         yield root
         return
     pending = [root]
-    visited_dirs = 0
-    while pending and visited_dirs < MAX_WALK_DIRS:
+    while pending:
         directory = pending.pop()
-        visited_dirs += 1
         try:
             with os.scandir(directory) as iterator:
-                entries = []
-                for entry in iterator:
-                    if len(entries) >= MAX_WALK_ENTRIES_PER_DIR:
-                        break
-                    entries.append(entry)
+                entries = sorted(iterator, key=lambda entry: entry.name)
         except OSError:
             continue
-        entries.sort(key=lambda entry: entry.name)
         child_dirs: list[Path] = []
         files: list[Path] = []
         for entry in entries:
@@ -61,9 +49,7 @@ def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
         # Match os.walk's top-down order: files in this directory, then sorted child dirs.
         for file_path in files:
             yield file_path
-        room = max(0, MAX_PENDING_DIRS - len(pending))
-        pending.extend(reversed(child_dirs[:room]))
-
+        pending.extend(reversed(child_dirs))
 
 def run(req: dict, out) -> None:
     rx = re.compile(req["pattern"])

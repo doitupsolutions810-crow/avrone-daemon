@@ -285,8 +285,16 @@ def _payload_too_big(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _wire_bytes(event: dict[str, Any]) -> bytes:
-    return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+def _wire_bytes(event: dict[str, Any]) -> bytes | None:
+    """UTF-8 JSON, or None when the document cannot be encoded.
+
+    A lone surrogate is valid in a Python str and in JSON ``\\u`` escapes, and
+    it is not valid UTF-8. The peer would never see those bytes.
+    """
+    try:
+        return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except (UnicodeError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
 
 
 def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any] | None, str | None]:
@@ -330,7 +338,10 @@ def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any
         "payload": payload,
         "ts": ts,
     }
-    if len(_wire_bytes(event)) > max_body:
+    raw = _wire_bytes(event)
+    if raw is None:
+        return None, "request body is not valid UTF-8"
+    if len(raw) > max_body:
         return None, "request body too large (max 4096 bytes)"
     return event, None
 
@@ -620,8 +631,9 @@ class Ledger:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             from .safeio import atomic_write
-            atomic_write(self.path, json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        except OSError:
+            atomic_write(self.path, json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
+                         encoding="utf-8")
+        except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
             return
 
     def pump(self, transport: Transport, config: DeliverConfig | None = None, *, max_cycles: int = 8) -> dict[str, Any]:
@@ -708,6 +720,10 @@ class Ledger:
                 return "stopped", calls
             event = row["event"]
             body = _wire_bytes(event)
+            if body is None:
+                with self._lock:
+                    self._fail(row, 400, "request body is not valid UTF-8")
+                return "failed", calls
             if len(body) > config.max_body:
                 with self._lock:
                     self._fail(row, 413, "request body too large (max 4096 bytes)")

@@ -652,3 +652,22 @@ def test_http_trial_ingest_denies_empty_allowlist_even_with_valid_hmac(trial_api
     assert response.status_code == 403
     assert "non-empty" in response.text
     assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()
+
+
+def test_invalid_later_batch_member_rejects_before_any_trial_or_receipt_is_written(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    valid = sample("pass", "attempt-valid")
+    malformed = sample("fail", "attempt-invalid")
+    malformed["source"] = "forged:source"
+
+    with pytest.raises(ValueError, match="invalid avrone.trial"):
+        store.ingest_many([valid, malformed], sender="peer-a", transport="fleet")
+
+    db = store._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM trial_quarantine").fetchone()[0] == 0
+    finally:
+        db.close()
+    assert store.pool_snapshot()["runs"] == 0

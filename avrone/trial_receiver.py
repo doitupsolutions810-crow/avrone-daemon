@@ -30,6 +30,8 @@ class TrialStore:
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.path.parent.is_symlink():
+            raise TrialStoreError("trial data directory must not be a symlink")
         os.chmod(self.path.parent, 0o700)
         if self.path.is_symlink():
             raise TrialStoreError("trial database must not be a symlink")
@@ -38,6 +40,8 @@ class TrialStore:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
+        if self.path.parent.is_symlink():
+            raise TrialStoreError("trial data directory must not be a symlink")
         if self.path.is_symlink():
             raise TrialStoreError("trial database must not be a symlink")
         try:
@@ -53,7 +57,9 @@ class TrialStore:
     def _initialize(self) -> None:
         db = self._connect()
         try:
-            db.execute("PRAGMA journal_mode=WAL")
+            mode = db.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            if str(mode).lower() != "wal":
+                raise TrialStoreError("SQLite WAL mode is unavailable")
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS trials (

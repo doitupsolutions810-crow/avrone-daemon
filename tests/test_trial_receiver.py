@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from avrone.trial_contract import make_trial
-from avrone.trial_receiver import TrialStore
+from avrone.trial_receiver import TrialStore, TrialStoreError
 
 
 def sample(outcome="pass", attempt_id="attempt-1"):
@@ -132,3 +132,26 @@ def test_source_and_check_version_provenance_are_persisted(tmp_path):
     assert row["attempt_id"] == "attempt-1"
     assert row["first_sender"] == "peer-a"
     assert row["first_transport"] == "fleet"
+
+
+def test_store_requires_private_non_symlinked_wal_storage(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    linked_dir = tmp_path / "linked"
+    linked_dir.symlink_to(target, target_is_directory=True)
+    with pytest.raises(TrialStoreError, match="directory"):
+        TrialStore(linked_dir / "trials.sqlite3")
+
+    linked_file = tmp_path / "linked.sqlite3"
+    target_file = tmp_path / "target.sqlite3"
+    target_file.write_bytes(b"not a database")
+    linked_file.symlink_to(target_file)
+    with pytest.raises(TrialStoreError, match="database"):
+        TrialStore(linked_file)
+
+    store = TrialStore(tmp_path / "private" / "trials.sqlite3")
+    db = store._connect()
+    try:
+        assert db.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    finally:
+        db.close()

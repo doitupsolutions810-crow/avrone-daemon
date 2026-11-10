@@ -39,10 +39,25 @@ def test_depth_upper_boundary_is_accepted_and_next_value_rejected():
         make(provenance_depth=MAX_PROVENANCE_DEPTH + 1, human_root="operator:ref")
 
 
-@pytest.mark.parametrize("unsafe", [
-    "\\u2028", "\\u2029", "\\u202e", "\\u2066", "\\u200b",
-    "\\u200d", "\\ufeff", "\\x00", "\\x85", "\\ud800",
-])
+# Use actual Unicode code points, not strings containing the literal characters
+# backslash-u. Every value below is tested through every identifier channel.
+_UNSAFE_CODEPOINTS = (
+    *range(0x00, 0x20),                 # C0 controls
+    *range(0x7F, 0xA0),                 # DEL and C1 controls
+    0x061C, 0x200E, 0x200F,             # Arabic letter mark / LRM / RLM
+    0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embeddings, overrides, pop
+    0x2066, 0x2067, 0x2068, 0x2069,     # bidi isolates and PDI
+    0x200B, 0x200C, 0x200D,             # zero-width space, non-joiner, joiner
+    0xFEFF,                              # BOM / zero-width no-break space
+    0xD800, 0xDBFF, 0xDC00, 0xDFFF,     # high and low surrogate boundaries
+    0x2028, 0x2029,                     # Unicode line and paragraph separators
+)
+
+
+@pytest.mark.parametrize(
+    "unsafe",
+    [pytest.param(chr(codepoint), id=f"U+{codepoint:04X}") for codepoint in _UNSAFE_CODEPOINTS],
+)
 @pytest.mark.parametrize("field", ["source", "run_id", "check_id", "capability_id", "human_root", "refs"])
 def test_machine_identifiers_reject_controls_bidi_zero_width_and_separators(field, unsafe):
     value = f"prefix{unsafe}suffix"
@@ -137,7 +152,6 @@ def test_identity_mutation_without_digest_refresh_is_rejected(field, value):
     changed[field] = value
     assert changed["digest"] == original_digest
     assert verify_evidence_event(changed)[0] is False
-
 
 
 def test_canonical_digest_golden_vector_is_stable_across_implementations():

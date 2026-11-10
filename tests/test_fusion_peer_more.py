@@ -7,6 +7,7 @@ queued post.
 """
 import asyncio
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -104,7 +105,6 @@ def test_cycle_deadline_does_not_dial_the_board_after_a_slow_health():
         urls = _urls(base)
         urls["deadline"] = 0.25
         urls["timeout"] = 2.0
-        import time
         started = time.monotonic()
         report = watch.watch_once(**urls)
         elapsed = time.monotonic() - started
@@ -133,3 +133,78 @@ def test_deadline_env_and_zero_disables(monkeypatch):
     assert server._fusion_deadline() == 120.0
     monkeypatch.setenv("FUSION_CYCLE_DEADLINE", "0.4")
     assert server._fusion_deadline() == 0.4
+
+
+def test_non_string_ids_are_rejected(client):
+    for bad in (True, False, 12, 1.5, ["ok-id"], {"id": "ok-id"}):
+        refused = client.post("/api/blackboard", json={"id": bad, "text": "t"}, headers=AUTH)
+        assert refused.status_code == 400 and refused.json()["detail"] == "bad post id", bad
+    assigned = client.post("/api/blackboard", json={"id": None, "text": "from null"}, headers=AUTH)
+    assert assigned.status_code == 200 and len(assigned.json()["id"]) == 12
+    kept = client.post("/api/blackboard", json={"id": "ok.id", "text": "kept"}, headers=AUTH)
+    assert kept.status_code == 200 and kept.json()["duplicate"] is False
+    ids = [p["id"] for p in client.get("/api/blackboard", headers=AUTH).json()["posts"]]
+    assert "True" not in ids and "12" not in ids and "ok.id" in ids
+
+
+def test_userinfo_and_empty_host_are_not_dialed():
+    with _Running() as peer:
+        host, port = peer.server_address
+        before = list(peer.gets)
+        leaked = fp._exchange("GET", f"http://user:secret@{host}:{port}/health")
+        assert leaked["error"] == "down"
+        assert fp._exchange("GET", "http:///health")["error"] == "down"
+        assert peer.gets == before
+
+
+def test_breaker_opens_on_timeout_not_on_500_and_a_probe_recovers():
+    with _Running() as peer:
+        peer.health_delay = 0.45
+        peer.posts = [dict(POST)]
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        watch = fp.FusionWatch()
+        urls = _urls(base)
+        urls.update(timeout=0.15, breaker_threshold=1, breaker_cooldown=30.0)
+        first = watch.watch_once(**urls)
+        assert first["health"] == "timeout" and first["board"] == "circuit"
+        assert first["forwarded"] == 0 and "find0000001" not in watch.seen
+        assert peer.gets == ["/health"]
+        started = time.monotonic()
+        second = watch.watch_once(**urls)
+        assert time.monotonic() - started < 0.1
+        assert second["health"] == "circuit" and second["board"] == "circuit"
+        assert peer.gets == ["/health"]
+        for host in list(watch._open_until):
+            watch._open_until[host] = time.monotonic() - 1
+        watch._probing.clear()
+        peer.health_delay = 0
+        recovered = watch.watch_once(**urls)
+        assert recovered["forwarded"] == 1
+        assert any(path.startswith("/api/blackboard") for path in peer.gets)
+
+    with _Running() as peer:
+        peer.health_status = 500
+        peer.posts = [dict(POST, id="find0000002", text="after 500")]
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        watch = fp.FusionWatch()
+        urls = _urls(base)
+        urls.update(breaker_threshold=1, breaker_cooldown=30.0)
+        opened = watch.watch_once(**urls)
+        again = watch.watch_once(**urls)
+        assert opened["health"] == "upstream" and opened["forwarded"] == 1
+        assert again["health"] == "upstream" and again["board"] == "ok"
+        assert peer.gets.count("/health") == 2
+
+
+def test_breaker_env_defaults_and_clamps(monkeypatch):
+    monkeypatch.delenv("FUSION_BREAKER_THRESHOLD", raising=False)
+    monkeypatch.delenv("FUSION_BREAKER_COOLDOWN", raising=False)
+    assert server._fusion_breaker() == (1, 30.0)
+    monkeypatch.setenv("FUSION_BREAKER_THRESHOLD", "0")
+    assert server._fusion_breaker()[0] == 0
+    monkeypatch.setenv("FUSION_BREAKER_THRESHOLD", "junk")
+    monkeypatch.setenv("FUSION_BREAKER_COOLDOWN", "inf")
+    assert server._fusion_breaker() == (1, 30.0)
+    monkeypatch.setenv("FUSION_BREAKER_THRESHOLD", "-3")
+    monkeypatch.setenv("FUSION_BREAKER_COOLDOWN", "9999")
+    assert server._fusion_breaker() == (0, 600.0)

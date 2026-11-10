@@ -323,6 +323,27 @@ def _fusion_deadline() -> float | None:
     return min(120.0, value)
 
 
+def _fusion_breaker() -> tuple[int, float]:
+    """``(threshold, cooldown)``. Threshold 0 disables the breaker. Junk falls back."""
+    import math
+    raw = (os.environ.get("FUSION_BREAKER_THRESHOLD") or "").strip()
+    try:
+        threshold = int(raw) if raw else 1
+    except ValueError:
+        threshold = 1
+    if threshold < 0:
+        threshold = 0
+    threshold = min(100, threshold)
+    raw_cd = (os.environ.get("FUSION_BREAKER_COOLDOWN") or "").strip()
+    try:
+        cooldown = float(raw_cd) if raw_cd else 30.0
+    except ValueError:
+        cooldown = 30.0
+    if not math.isfinite(cooldown) or cooldown < 0:
+        cooldown = 30.0
+    return threshold, min(600.0, cooldown)
+
+
 @app.get("/api/status")
 async def status():
     c = core()
@@ -407,6 +428,7 @@ async def fusion_watch(x_admin_token: str | None = Header(default=None)):
     # it from here would drop the ids the relay has already delivered.
     state_path = (os.environ.get("AVRONE_FUSION_WATCH_PATH") or "").strip() or None
     watch = shared_watch(state_path)
+    threshold, cooldown = _fusion_breaker()
     return await asyncio.to_thread(
         watch.watch_once,
         board_url=board,
@@ -416,6 +438,8 @@ async def fusion_watch(x_admin_token: str | None = Header(default=None)):
         events_token=events_token,
         timeout=_fusion_timeout(),
         deadline=_fusion_deadline(),
+        breaker_threshold=threshold,
+        breaker_cooldown=cooldown,
     )
 
 

@@ -17,6 +17,7 @@ import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from collections import OrderedDict
@@ -71,12 +72,14 @@ def normalize_post(data: Any) -> tuple[dict[str, Any] | None, str | None]:
     if not text:
         return None, "text is required"
     raw_id = data.get("id")
-    if raw_id not in (None, ""):
-        pid = str(raw_id)
-        if not _ID_RE.match(pid):
-            return None, "bad post id"
-    else:
+    if raw_id in (None, ""):
         pid = uuid.uuid4().hex[:12]
+    elif not isinstance(raw_id, str) or not _ID_RE.match(raw_id):
+        # A JSON number or bool is not an id. str(True) is "True", which would
+        # collide with a real post and hide the type error.
+        return None, "bad post id"
+    else:
+        pid = raw_id
     run_id = str(data.get("run_id") or "run")[:80] or "run"
     return {
         "id": pid,
@@ -530,6 +533,23 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _url_closed(url: str) -> bool:
+    """True when the URL must not be dialed.
+
+    Userinfo would put a secret on the wire in a place the admin token does
+    not belong. An empty host is not a peer.
+    """
+    if not url.startswith(("http://", "https://")) or any(char in url for char in "\r\n\x00 \t"):
+        return True
+    parts = urllib.parse.urlsplit(url)
+    return bool(parts.username or parts.password or not parts.hostname)
+
+
+def _origin(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.lower()}"
+
+
 def _exchange(
     method: str,
     url: str,
@@ -540,7 +560,7 @@ def _exchange(
     timeout: float = 5.0,
     max_read: int = 2_000_000,
 ) -> dict[str, Any]:
-    if not url.startswith(("http://", "https://")) or any(char in url for char in "\r\n\x00 \t"):
+    if _url_closed(url):
         return {"ok": False, "status": None, "error": "down", "body": None}
     if token and not _header_value(token):
         # Do not dial. A CR/LF in the token is header injection, not a wrong password.
@@ -613,6 +633,11 @@ class FusionWatch:
         self._version = 1
         self._cursor = ""
         self._writable = True
+        self._breaker_threshold = 0
+        self._breaker_cooldown = 30.0
+        self._fail_counts: dict[str, int] = {}
+        self._open_until: dict[str, float] = {}
+        self._probing: dict[str, bool] = {}
         self._lock = threading.RLock()
         self._load()
 
@@ -678,6 +703,49 @@ class FusionWatch:
             self.state_errors += 1
             return False
 
+    def _circuit_blocked(self, url: str) -> bool:
+        """Skip a host that timed out or refused a connection.
+
+        Threshold 0 disables the breaker. A response, including a 500, does not
+        open it. After the cooldown one probe is allowed.
+        """
+        if self._breaker_threshold <= 0:
+            return False
+        host = _origin(url)
+        until = self._open_until.get(host)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            if self._probing.get(host):
+                return True
+            self._probing[host] = True
+            return False
+        return True
+
+    def _circuit_observe(self, url: str, error: str | None) -> None:
+        if self._breaker_threshold <= 0:
+            return
+        host = _origin(url)
+        if error is None:
+            self._fail_counts.pop(host, None)
+            self._open_until.pop(host, None)
+            self._probing.pop(host, None)
+            return
+        if error not in ("timeout", "down"):
+            return
+        self._probing[host] = False
+        count = self._fail_counts.get(host, 0) + 1
+        self._fail_counts[host] = count
+        if host in self._open_until or count >= self._breaker_threshold:
+            self._open_until[host] = time.monotonic() + max(0.0, self._breaker_cooldown)
+
+    def _dial(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        if self._circuit_blocked(url):
+            return {"ok": False, "status": None, "error": "circuit", "body": None}
+        hop = _exchange(method, url, **kwargs)
+        self._circuit_observe(url, None if hop["ok"] else hop["error"])
+        return hop
+
     def note_boot(self, side: str, boot: str) -> bool:
         """Remember ``boot``. Return True when a *changed* boot forgot delivered ids.
 
@@ -721,11 +789,15 @@ class FusionWatch:
                     self.seen.add(event_id)
                 return {"ok": False, "error": "oversized", "duplicate": False, "status": None,
                         "remembered": True, "skipped": False}
+            if self._circuit_blocked(url):
+                return {"ok": False, "error": "circuit", "duplicate": False, "status": None,
+                        "remembered": False, "skipped": False}
             hop = _exchange(
                 "POST", url, body=raw, token=token,
                 idempotency_key=_idempotency_key(event_id),
                 timeout=timeout, max_read=max_read,
             )
+            self._circuit_observe(url, None if hop["ok"] else hop["error"])
             duplicate = False
             remembered = False
             if hop["ok"]:
@@ -753,6 +825,8 @@ class FusionWatch:
         timeout: float = 5.0,
         max_read: int = 2_000_000,
         deadline: float | None = None,
+        breaker_threshold: int = 0,
+        breaker_cooldown: float = 30.0,
     ) -> dict[str, Any]:
         """Probe health and the blackboard, then forward new posts. Never raises.
 
@@ -765,12 +839,22 @@ class FusionWatch:
             deadline_at: float | None = time.monotonic() + min(120.0, float(deadline))
         else:
             deadline_at = None
+        try:
+            threshold = int(breaker_threshold)
+        except (TypeError, ValueError):
+            threshold = 0
+        self._breaker_threshold = 0 if threshold < 0 else min(100, threshold)
+        try:
+            cooldown = float(breaker_cooldown)
+        except (TypeError, ValueError):
+            cooldown = 30.0
+        self._breaker_cooldown = 30.0 if not math.isfinite(cooldown) else min(600.0, max(0.0, cooldown))
         with self._lock:
             health_timeout = _call_timeout(deadline_at, timeout)
             if health_timeout is None:
                 health = {"ok": False, "status": None, "error": "timeout", "body": None}
             else:
-                health = _exchange("GET", health_url, timeout=health_timeout, max_read=max_read)
+                health = self._dial("GET", health_url, timeout=health_timeout, max_read=max_read)
             restart = False
             if health["ok"]:
                 restart = self.note_boot("cyclekernal", boot_value(health["body"])) or restart
@@ -778,7 +862,7 @@ class FusionWatch:
             if board_timeout is None:
                 board = {"ok": False, "status": None, "error": "timeout", "body": None}
             else:
-                board = _exchange(
+                board = self._dial(
                     "GET", board_url, token=board_token, timeout=board_timeout, max_read=max_read)
             if board["ok"]:
                 restart = self.note_boot("avrone", boot_value(board["body"])) or restart
@@ -831,7 +915,8 @@ class FusionWatch:
                             forwarded += 1
                         else:
                             errors += 1
-                            if result.get("error") in ("down", "timeout", "auth", "upstream", "missing", "retry", "truncated"):
+                            if result.get("error") in (
+                                "down", "timeout", "auth", "upstream", "missing", "retry", "truncated", "circuit"):
                                 break
             if not self._save():
                 errors += 1

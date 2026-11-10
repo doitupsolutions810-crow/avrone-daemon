@@ -76,9 +76,22 @@ A non-ASCII token was not sent through HTTP. `httpx` refuses to encode `café` a
 - A token outside latin-1 (`U+0100`) is an auth failure and is not dialed. A `307` on `POST /v1/events` is not followed, and the id is not remembered.
 - `FUSION_CYCLE_DEADLINE` defaults to 10 seconds, `0` and non-finite values disable it, and `999` clamps to 120. With a deadline of 0.25s, a health handler that sleeps 0.8s makes the cycle stop before it dials the blackboard. The post stays unseen. The next cycle, with the delay gone, forwards it.
 
+## Fourth pass
+
+`python3 -m pytest -q tests/test_fusion_peer.py tests/test_fusion_peer_edges.py tests/test_fusion_peer_more.py --tb=line`
+
+**47 passed** in 7.86s. Four cases added on top of the 43:
+
+- A JSON bool, number, or object in `id` is 400 `bad post id`. `null` still lets the server assign an id. The string `"True"` is not stored as a stand-in for `true`.
+- A URL with userinfo (`http://user:secret@host/...`) and a URL with an empty host are not dialed.
+- `FUSION_BREAKER_THRESHOLD` defaults to 1 and `FUSION_BREAKER_COOLDOWN` to 30 seconds. `0` disables the breaker. `9999` clamps the cooldown to 600. Junk falls back to the defaults.
+- One health timeout opens the breaker. The blackboard on that same host is not dialed, and the next cycle returns immediately with `circuit` and does not open a second connection. Moving the cooldown into the past allows one probe, which then forwards the post. A health `500` does not open the breaker: both cycles still dial health, and the board post is forwarded.
+
+The library default threshold stays 0, so a caller that does not ask for the breaker is unchanged. The watch route turns it on.
+
 ## Remaining gaps
 
-- The watchdog is one shot. It does not fingerprint mood, open a circuit breaker, or enforce the relay's cycle deadline. One cycle forwards at most 200 new posts. Disk fan-in reads at most 256 journals.
+- The watchdog is still one shot. It does not fingerprint mood. The route's breaker and cycle deadline apply only when something calls `POST /api/fusion/watch`. One cycle forwards at most 200 new posts. Disk fan-in reads at most 256 journals.
 - It does not start with the process, and this repo's compose file does not start the relay. Both URLs have to be set by the operator.
 - `Idempotency-Key` is sent to CycleKernal. The blackboard dedupes on the post id and ignores the header, which is what the contract says PR #14 does.
 - `POST /v1/events` was read from CycleKernal PR #14. It was not re-checked against that repo's default branch in this run.

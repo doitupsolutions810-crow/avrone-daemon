@@ -110,6 +110,16 @@ def require_admin(token: str | None) -> None:
         raise HTTPException(401, "Bad admin token")
 
 
+def _previous_admin_token() -> str:
+    """Rotation grace for ``/api/blackboard`` only. Read per request; empty never matches.
+
+    Other admin routes keep ``require_admin`` and ignore this value. The blackboard
+    route stays off when the current token is unset, even if a previous token is set.
+    """
+    raw = os.environ.get("AVRONE_ADMIN_TOKEN_PREVIOUS", "")
+    return raw if isinstance(raw, str) else ""
+
+
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 ACCESS_POLICIES = ("loopback", "admin", "all")
 
@@ -166,12 +176,17 @@ def max_message_chars() -> int:
 
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 HARD_MAX_BODY_BYTES = 512 * 1024 * 1024
+# Fusion blackboard only. The process-wide cap below stays AVRONE_MAX_BODY_BYTES.
+FUSION_BLACKBOARD_MAX_BODY = 4096
+FUSION_BLACKBOARD_PATH = "/api/blackboard"
 
 
 def max_body_bytes(path: str = "") -> int:
     """Largest request body this server reads for ``path``. Never below what the message cap needs
     (message + first_answer, worst-case JSON escaping), and the agent-pack route also fits a
-    base64 bundle at the agent-fs quota."""
+    base64 bundle at the agent-fs quota. ``/api/blackboard`` is capped at 4096 bytes instead."""
+    if path == FUSION_BLACKBOARD_PATH:
+        return FUSION_BLACKBOARD_MAX_BODY
     n = max(_env_cap("AVRONE_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, HARD_MAX_BODY_BYTES),
             12 * max_message_chars() + 64 * 1024)
     if path == "/api/fleet/agentpack":
@@ -197,7 +212,8 @@ class BodyLimit:
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)
-        limit = max_body_bytes(scope.get("path", ""))
+        path = scope.get("path", "")
+        limit = max_body_bytes(path)
         declared = None
         for k, v in scope.get("headers") or ():
             if k.lower() == b"content-length":
@@ -206,7 +222,7 @@ class BodyLimit:
                 except ValueError:
                     declared = None
         if declared is not None and declared > limit:
-            return await self._refuse(send, limit)
+            return await self._refuse(send, limit, path)
         seen = 0
         started = False
 
@@ -229,12 +245,16 @@ class BodyLimit:
             await self.app(scope, limited_receive, tracking_send)
         except _BodyTooLarge:
             if not started:
-                await self._refuse(send, limit)
+                await self._refuse(send, limit, path)
 
     @staticmethod
-    async def _refuse(send, limit: int) -> None:
+    async def _refuse(send, limit: int, path: str = "") -> None:
         import json as _json
-        body = _json.dumps({"detail": f"request body too large (max {limit} bytes; AVRONE_MAX_BODY_BYTES)"}).encode()
+        if path == FUSION_BLACKBOARD_PATH:
+            detail = f"request body too large (max {FUSION_BLACKBOARD_MAX_BODY} bytes)"
+        else:
+            detail = f"request body too large (max {limit} bytes; AVRONE_MAX_BODY_BYTES)"
+        body = _json.dumps({"detail": detail}).encode()
         await send({"type": "http.response.start", "status": 413,
                     "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
                                 (b"connection", b"close")]})
@@ -267,6 +287,27 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
+# One id for this process. The fusion relay treats a change as a restart
+# that dropped in-memory dedup, and the same value as the same peer.
+BOOT_ID = uuid.uuid4().hex
+
+
+def boot_id() -> str:
+    return BOOT_ID
+
+
+def _fusion_timeout() -> float:
+    import math
+    raw = (os.environ.get("FUSION_TIMEOUT") or "").strip()
+    try:
+        value = float(raw) if raw else 5.0
+    except ValueError:
+        value = 5.0
+    if not math.isfinite(value):
+        return 5.0
+    return min(30.0, max(0.05, value))
+
+
 @app.get("/api/status")
 async def status():
     c = core()
@@ -283,7 +324,81 @@ async def status():
         "admin_enabled": bool(settings.admin_token),
         "agents": c.active,
         "codex": c.codex.health() if hasattr(c.codex, "health") else None,
+        "boot": BOOT_ID,
     }
+
+
+@app.get(FUSION_BLACKBOARD_PATH)
+async def blackboard_get(since: str | None = None, x_admin_token: str | None = Header(default=None)):
+    """Fan-in of this node's bridge posts for the fusion relay. Admin token, not loopback."""
+    previous = _previous_admin_token()
+    if not (settings.admin_token and previous and token_eq(x_admin_token, previous)):
+        require_admin(x_admin_token)
+    from .fusion_peer import blackboard_posts
+    posts = await asyncio.to_thread(blackboard_posts, core(), since)
+    return {"posts": posts, "count": len(posts), "boot": BOOT_ID}
+
+
+@app.post(FUSION_BLACKBOARD_PATH)
+async def blackboard_write(request: Request, x_admin_token: str | None = Header(default=None)):
+    """Accept one bridge post. The 4096-byte cap is enforced before this token check."""
+    raw = await request.body()
+    if len(raw) > FUSION_BLACKBOARD_MAX_BODY:
+        raise HTTPException(413, f"request body too large (max {FUSION_BLACKBOARD_MAX_BODY} bytes)")
+    previous = _previous_admin_token()
+    if not (settings.admin_token and previous and token_eq(x_admin_token, previous)):
+        require_admin(x_admin_token)
+    if not raw:
+        raise HTTPException(400, "body must be JSON")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        raise HTTPException(400, "body must be JSON") from None
+    from .fusion_peer import BridgeError, blackboard_accept, normalize_post
+    post, err = normalize_post(data)
+    if err or post is None:
+        raise HTTPException(400, err or "body must be JSON")
+    try:
+        duplicate, pid = await asyncio.to_thread(blackboard_accept, core(), post)
+    except BridgeError as exc:
+        raise HTTPException(400, str(exc)) from None
+    return {"posted": True, "duplicate": duplicate, "id": pid}
+
+
+@app.get("/api/fusion")
+async def fusion_status(x_admin_token: str | None = Header(default=None)):
+    """Last fusion supervision report plus this process's boot id. Does not dial out."""
+    require_admin(x_admin_token)
+    from .fusion_peer import last_watch
+    return {"boot": BOOT_ID, "blackboard": FUSION_BLACKBOARD_PATH, "watch": last_watch()}
+
+
+@app.post("/api/fusion/watch")
+async def fusion_watch(x_admin_token: str | None = Header(default=None)):
+    """One supervision cycle. Dials only when board, events, and health URLs are all set."""
+    require_admin(x_admin_token)
+    board = (os.environ.get("FUSION_BOARD_URL") or "").strip()
+    events = (os.environ.get("FUSION_EVENTS_URL") or "").strip()
+    health = (os.environ.get("FUSION_HEALTH_URL") or "").strip()
+    if not board or not events or not health:
+        return {"watched": False, "reason": "unset"}
+    from .fusion_peer import shared_watch
+    token = (os.environ.get("FUSION_TOKEN") or "").strip()
+    board_token = (os.environ.get("FUSION_BOARD_TOKEN") or token).strip()
+    events_token = (os.environ.get("FUSION_EVENTS_TOKEN") or os.environ.get("CK_FUSION_TOKEN") or token).strip()
+    # Not FUSION_STATE_PATH: that file belongs to the relay (version 2). Writing
+    # it from here would drop the ids the relay has already delivered.
+    state_path = (os.environ.get("AVRONE_FUSION_WATCH_PATH") or "").strip() or None
+    watch = shared_watch(state_path)
+    return await asyncio.to_thread(
+        watch.watch_once,
+        board_url=board,
+        events_url=events,
+        health_url=health,
+        board_token=board_token,
+        events_token=events_token,
+        timeout=_fusion_timeout(),
+    )
 
 
 def _open_checkpoint(cid_raw: str, task: str, mode: str):

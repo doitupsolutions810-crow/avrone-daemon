@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.134: Round 141: ending an evolve loop abnormally never wipes a loop file it could not read. 6,671 tests + 19 integration
+
+- **Bug** (`evolve._finish_abnormally`, which runs on cancel, error and timeout):
+  - On any read failure it replaced the loop file with `{"loop_id", "iterations": []}`.
+  - A transient EMFILE, EIO or EACCES therefore dropped every iteration and the resume checkpoint, and `evolve_resume` had nothing left to resume.
+  - A torn file was overwritten, and no copy was kept.
+- **Fix:**
+  - A read error now leaves the file alone. It still says `running`, so `reconcile_interrupted` marks it at the next listing or boot.
+  - A file that no longer parses, or that holds JSON of the wrong shape, is kept as `.corrupt-<ts>` before the new file is written.
+- **Checked, safe:** `memstore`. A failed read only leads to an append, never a rewrite.
+- **Flaky under load:** `test_round54 big_memory_store_does_not_stall_the_loop` failed once in the full run. It passed 3 of 3 times when run alone.
+- **Tests:** `tests/test_round141_evolve_finish.py` (3). 2 fail on v0.133. The third guards the normal finish.
+
 ## v0.133: Round 140: a checkpoint save never overwrites steps it could not read. 6,668 tests + 19 integration
 
 - **Bug** (`checkpoint._Store._merge_disk`):

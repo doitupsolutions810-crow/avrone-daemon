@@ -941,17 +941,33 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
 
 def _finish_abnormally(ctx: "AgentContext", loop_id: str, status: str, stopped: str) -> None:
     p = _loop_path(ctx, loop_id)
+    # round 141: any read failure used to replace the loop file with {"loop_id", "iterations": []},
+    # dropping every iteration and the resume checkpoint. A read error (EMFILE, EIO, EACCES) now
+    # leaves the file alone: it still says "running", so reconcile_interrupted marks it at the
+    # next listing or boot. A file that exists but no longer parses is kept as .corrupt-<ts> first.
+    write, unusable = True, False
     try:
         m = _load_json(p)
-    except (OSError, ValueError, RecursionError):
-        m = {"loop_id": loop_id, "iterations": []}
+        unusable = not isinstance(m, dict)  # valid JSON of the wrong shape: kept too
+    except FileNotFoundError:
+        m = None
+    except (ValueError, RecursionError):
+        m, unusable = None, True
+    except OSError:
+        m, write = None, False
+    if unusable:
+        try:
+            os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+        except OSError:
+            write = False
     if not isinstance(m, dict):
         m = {"loop_id": loop_id, "iterations": []}
     m.update(status=status, stopped=stopped)
-    try:
-        atomic_write(p, json.dumps(m))  # atomic: a crash here never leaves the loop file torn
-    except OSError:
-        pass
+    if write:
+        try:
+            atomic_write(p, json.dumps(m))  # atomic: a crash here never leaves the loop file torn
+        except OSError:
+            pass
     _cancel_path(ctx, loop_id).unlink(missing_ok=True)
     record_history(ctx, m)
 

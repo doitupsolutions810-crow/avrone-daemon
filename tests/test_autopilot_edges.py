@@ -766,7 +766,8 @@ def test_dirty_tree_fine_when_no_patch_needed(env):
 
 
 def test_git_missing(env, tmp_path):
-    r = env.run(PATH=f"{env.bin}:{path_without(tmp_path, 'git')}")
+    r = env.run(PATH=f"{env.bin}:{path_without(tmp_path, 'git')}",
+                AUTOPILOT_BREW_PREFIXES=str(tmp_path / "no-brew"))
     assert r.returncode == 1 and "git is required" in out(r)
 
 

@@ -33,18 +33,37 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _check_json_bounds(value: Any) -> None:
+    stack = [(value, 0)]
+    nodes = 0
+    while stack:
+        item, depth = stack.pop()
+        if depth > 32:
+            raise ValueError("request JSON exceeds maximum depth 32")
+        if isinstance(item, dict):
+            nodes += len(item)
+            stack.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            nodes += len(item)
+            stack.extend((child, depth + 1) for child in item)
+        if nodes > 100_000:
+            raise ValueError("request JSON exceeds 100000 values")
+
+
 def strict_json_loads(raw: bytes) -> Any:
-    """Parse UTF-8 JSON while rejecting duplicate keys, NaN/Infinity and deep parser failures."""
+    """Parse UTF-8 JSON while rejecting duplicate keys, non-finite values and deep payloads."""
     if not isinstance(raw, (bytes, bytearray)):
         raise ValueError("request body must be bytes")
     try:
-        return json.loads(
+        parsed = json.loads(
             bytes(raw).decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
+        _check_json_bounds(parsed)
+        return parsed
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as exc:
-        raise ValueError("request body must be unambiguous finite UTF-8 JSON") from exc
+        raise ValueError("request body must be unambiguous finite bounded UTF-8 JSON") from exc
 
 
 def _validate_batch(

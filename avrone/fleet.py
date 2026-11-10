@@ -99,6 +99,8 @@ import logging
 import math
 import os
 import re
+
+from . import textsafe as _textsafe
 import secrets
 import socket
 import threading
@@ -2216,7 +2218,7 @@ async def t_fleet_nodes(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 FLEET_NODES_MAX_CHARS = 200_000
 FLEET_NODES_CHILDREN_SHOWN = 16
-_CTRL1 = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]+")  # round 135: + C1 (U+0085 NEL is a line break)
+_CTRL1 = _textsafe.UNSAFE_RUN  # round 135: + C1 (U+0085 NEL is a line break)
 
 
 def _clip1(v: Any, n: int) -> str:

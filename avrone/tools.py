@@ -13,6 +13,8 @@ import functools
 import inspect
 import os
 import re
+
+from . import textsafe as _textsafe
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -167,7 +169,7 @@ def _storage_text(e: OSError, names: str) -> str:
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 # every character str.splitlines() breaks on, plus the rest of C0/C1 controls and DEL
-_LINE_BREAKS = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+_LINE_BREAKS = _textsafe.UNSAFE_RUN
 
 
 def one_line(v: Any) -> str:

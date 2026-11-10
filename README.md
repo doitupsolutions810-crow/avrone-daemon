@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.129: Round 136: one shared unsafe-character class, now covering bidi controls. 6,482 tests + 19 integration
+
+- **Refactor:** the new `avrone/textsafe.py` defines `UNSAFE_CLASS`, `UNSAFE_RUN` and `UNSAFE_ONE`. Ten modules used to keep their own copy of the one-line class, and round 135 had to fix all nine of the sanitizers. Those modules now import it:
+  - tools, fleet, presence, agentkit, tools_extra
+  - mempeek, agenthome, introspect, research_note, lesson_forget
+- **Bug:** no sanitizer removed Unicode bidi controls, so a peer's node name with U+202E could reverse the rest of its `fleet_nodes` or `fleet_agents` row on screen ("Trojan Source"). The class now also covers:
+  - U+200E, U+200F
+  - U+061C
+  - U+202A to U+202E
+  - U+2066 to U+2069
+
+  ZWJ and variation selectors are kept, so emoji are unchanged.
+- **Guard:** `test_no_private_copies` fails if a module adds its own `\x00-\x1f` class.
+- **Tests:** `tests/test_round136_textsafe.py` (106). 98 fail on v0.128.
+
 ## v0.128: Round 135: one-line sanitizers remove every line break, C1 controls included. 6,376 tests + 19 integration
 
 - **Bug:** a test ran every Python `str.splitlines()` break (10 characters) and all C1 controls through each sanitizer. U+0085 (NEL) and U+0080 to U+009F passed through all nine below, and some also let U+2028 and U+2029 through. A peer's node or agent name containing NEL could still split into a forged row.

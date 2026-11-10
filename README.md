@@ -81,6 +81,27 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.143: Round 150: text from outside in log arguments can't forge server log lines. 6,722 tests + 19 integration
+
+The `avrone.*` modules log outside text directly into their messages. That text includes:
+
+- an MCP server's name, its protocol version, its tool names and its stderr
+- a fleet peer's error
+- a plugin's exception
+- checkpoint and queue file names
+
+A `\n` in any of it wrote a fake log line, such as `WARNING avrone.fleet node trusted`. ESC, `\r` and U+202E reached the operator's terminal through the stderr handler.
+
+The new `avrone/logsafe.py` is installed when `avrone` is imported. It chains the existing log-record factory and, for `avrone.*` records only, escapes string and exception arguments with `textsafe.escape`. A message built with an f-string and no arguments is escaped whole. These are left alone:
+
+- message templates (so a template's own line breaks stay)
+- tracebacks from `exc_info`
+- loggers from other libraries
+
+The plugin `register()` failure now logs its traceback through `exc_info` instead of as a string argument.
+
+Tests: `tests/test_round150_log_injection.py` has 7 tests. Five fail on v0.142. The other two guard what must not change: tracebacks, and loggers from other libraries.
+
 ## v0.142: Round 149: the CLI never writes raw controls to the operator's terminal. 6,715 tests + 19 integration
 
 `avrone-cli`'s live event lines replaced only `\n`. A tool's output, a model's role name, or an error message could still put ESC sequences on stderr: clear screen, OSC 0 window title, OSC 52 clipboard writes. They could also carry `\r` line overwrites and U+202E. The same raw printing applied to three commands:

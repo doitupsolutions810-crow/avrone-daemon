@@ -19,7 +19,6 @@ import importlib.util
 import logging
 import os
 import sys
-import traceback
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Callable
@@ -42,7 +41,7 @@ def _run_register(name: str, source: str, register: Callable[..., Any],
         error = None
     except (Exception, SystemExit) as e:  # sys.exit() inside register() used to take the node down
         error = f"{type(e).__name__}: {e}"
-        log.warning("plugin %s register() failed: %s\n%s", name, error, traceback.format_exc())
+        log.warning("plugin %s register() failed: %s", name, error, exc_info=True)  # round 150: traceback via exc_info
     # A plugin may ADD tools, never silently REPLACE one that was already there (a builtin such as
     # shell/read_file, or another plugin's): the replacement kept source "builtin", so nothing in
     # /api/tools, capgate receipts or the codex showed that the tool now ran third-party code.

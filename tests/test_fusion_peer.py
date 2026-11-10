@@ -75,6 +75,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/health"):
             if peer.health_delay:
                 time.sleep(peer.health_delay)
+            if peer.health_status:
+                self._send(peer.health_status, {"detail": "upstream"})
+                return
             if self.headers.get("X-Admin-Token"):
                 peer.health_saw_token = True
             payload = {"status": "ghost-online", "version": "3.1.0"}
@@ -168,6 +171,7 @@ class _Peer(ThreadingHTTPServer):
         self.board_body = None
         self.health_saw_token = False
         self.health_delay = 0.0
+        self.health_status = 0
         self.gets: list[str] = []
         self.timeout = 0.2
 

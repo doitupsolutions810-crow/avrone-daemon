@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import sqlite3
 import time
 from pathlib import Path

@@ -856,3 +856,56 @@ print(json.dumps({"sender": sender, **result["results"][0]}, sort_keys=True))
         sender=loser["sender"], transport="fleet",
     )
     assert retry["results"][0]["status"] == "sender_quarantined"
+
+
+def test_batch_size_accepts_exact_limit_and_rejects_one_over_without_partial_write(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    maximum = [sample("pass", f"batch-limit-{index}") for index in range(10)]
+    accepted = store.ingest_many(maximum, sender="peer-a", transport="fleet")
+
+    assert accepted["status"] == "accepted"
+    assert accepted["accepted"] == 10
+    assert len(accepted["results"]) == 10
+
+    over_limit = [sample("pass", f"batch-over-{index}") for index in range(11)]
+    with pytest.raises(ValueError, match="1..10"):
+        store.ingest_many(over_limit, sender="peer-a", transport="fleet")
+
+    db = store._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 10
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 10
+    finally:
+        db.close()
+    assert store.pool_snapshot()["runs"] == 10
+
+
+def test_sqlite_busy_writer_fails_closed_then_recovers_after_lock_release(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    blocker = store._connect()
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(TrialStoreError, match="transaction failed"):
+            store.ingest_many(
+                [sample("pass", "busy-writer")],
+                sender="peer-a",
+                transport="fleet",
+            )
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    db = store._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 0
+    finally:
+        db.close()
+
+    recovered = store.ingest_many(
+        [sample("pass", "busy-writer")],
+        sender="peer-a",
+        transport="fleet",
+    )
+    assert recovered["results"][0]["status"] == "accepted"
+    assert store.pool_snapshot()["runs"] == 1

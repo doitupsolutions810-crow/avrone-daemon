@@ -616,3 +616,24 @@ def test_postgres_duplicate_replay_and_get_record_reject_metadata_tampering(colu
         store.accept(record, _provenance("metadata_tamper_retry"))
     with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
         store.get_record(record["trial_id"])
+
+
+def test_postgres_connection_errors_do_not_leak_dsn_through_exception_chain(monkeypatch):
+    import traceback
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    store = _store()
+    secret_dsn = "postgresql://private-user:private-password@db.internal:5432/secret_db"
+
+    def fail_connect(*args, **kwargs):
+        raise store._psycopg.OperationalError(secret_dsn)
+
+    monkeypatch.setattr(store._psycopg, "connect", fail_connect)
+    with pytest.raises(TrialStoreUnavailable) as raised:
+        store.counts()
+
+    rendered = "".join(traceback.format_exception(raised.type, raised.value, raised.tb))
+    assert "private-password" not in rendered
+    assert secret_dsn not in rendered
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__ is True

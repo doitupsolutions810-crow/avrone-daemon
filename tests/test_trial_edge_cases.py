@@ -951,23 +951,41 @@ def test_quarantined_sender_capacity_exhaustion_is_transactional(tmp_path, monke
 
 
 def test_sqlite_full_rolls_back_trial_and_receipt_as_one_transaction(tmp_path, monkeypatch):
+    import sqlite3
+
     path = tmp_path / "trials.sqlite3"
     store = TrialStore(path)
     original_connect = store._connect
 
-    probe = original_connect()
+    # Create a filler table, cap the database at its current size, then consume
+    # every remaining page with committed rows until SQLite reports SQLITE_FULL.
+    filler = original_connect()
     try:
-        page_count = probe.execute("PRAGMA page_count").fetchone()[0]
-    finally:
-        probe.close()
+        filler.execute("CREATE TABLE disk_fill (payload BLOB NOT NULL)")
+        current_pages = filler.execute("PRAGMA page_count").fetchone()[0]
+        limit = filler.execute(f"PRAGMA max_page_count={current_pages}").fetchone()[0]
+        assert limit == current_pages
 
-    def connect_at_current_page_limit():
+        filled_rows = 0
+        while True:
+            try:
+                filler.execute("INSERT INTO disk_fill(payload) VALUES (zeroblob(3000))")
+                filled_rows += 1
+            except sqlite3.OperationalError as exc:
+                assert "full" in str(exc).lower()
+                break
+        assert filled_rows >= 1
+        assert filler.execute("PRAGMA page_count").fetchone()[0] <= limit
+    finally:
+        filler.close()
+
+    def connect_at_full_page_limit():
         db = original_connect()
-        current = db.execute("PRAGMA page_count").fetchone()[0]
-        db.execute(f"PRAGMA max_page_count={current}")
+        page_count = db.execute("PRAGMA page_count").fetchone()[0]
+        db.execute(f"PRAGMA max_page_count={page_count}")
         return db
 
-    monkeypatch.setattr(store, "_connect", connect_at_current_page_limit)
+    monkeypatch.setattr(store, "_connect", connect_at_full_page_limit)
     large = make_trial(
         system="cyclekernel",
         node="node-a",
@@ -978,7 +996,6 @@ def test_sqlite_full_rolls_back_trial_and_receipt_as_one_transaction(tmp_path, m
         outcome="pass",
         check_config={"padding": "x" * 16_000},
     )
-    assert page_count > 0
 
     with pytest.raises(TrialStoreError, match="transaction failed"):
         store.ingest_many([large], sender="peer-a", transport="fleet")
@@ -988,6 +1005,7 @@ def test_sqlite_full_rolls_back_trial_and_receipt_as_one_transaction(tmp_path, m
     try:
         assert recovered.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 0
         assert recovered.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 0
+        assert recovered.execute("SELECT COUNT(*) FROM disk_fill").fetchone()[0] == filled_rows
     finally:
         recovered.close()
     assert store.pool_snapshot()["runs"] == 0

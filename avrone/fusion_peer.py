@@ -32,7 +32,10 @@ FUSION_MAX_BODY = 4096
 MAX_FORWARD = 200
 MAX_DISK_BRIDGES = 256
 _ORDER_NAME = "_fanin_order.json"
-_STATE_CAP = 1_000_000
+# Round 138: this was 1,000,000 bytes, but _save and _save_order write any size. Past about 66k
+# delivered ids, a restart hit FileTooBig. The watchdog then started with an empty `seen` set and
+# never saved again, and the order file fell back to ts order (the round 137 cursor bug).
+_STATE_CAP = 64 * 1024 * 1024
 _MIRROR_PREFIXES = ("ck-mood-", "ck-health-", "ck-evidence-")
 
 _GUARD_LOCK = threading.Lock()

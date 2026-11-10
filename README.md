@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.131: Round 138: fusion state files load back at any size they are written. 6,659 tests + 19 integration
+
+- **`fusion_deliver.Ledger`** (data loss):
+  - `save()` wrote any size, but `load()` read at most 2 MiB (`STATE_MAX_BYTES`).
+  - Pending rows carry their event, so about 1,300 pending events (2.39 MB) went past the cap.
+  - On restart, `load()` cleared the ledger, and the next `offer` overwrote the file (257 bytes). Every undelivered event was lost.
+  - Fix: the cap is now 64 MiB. A file that is still too big is kept: `save()` refuses to write over it, and `state_errors` counts it.
+- **`fusion_peer`** (`FusionWatch` state and the order file):
+  - Both loaders used `_STATE_CAP = 1,000,000` bytes, and both writers had no cap.
+  - Past about 66k delivered ids, a restart started with an empty `seen` set and never saved again (`_writable` False). The order file fell back to ts order, which is the round 137 cursor bug.
+  - Fix: the cap is now 64 MiB.
+- **Noted, not changed:** `Ledger.offer` rewrites the whole ledger on every offer. 1,200 offers took 5.5 s, so the cost grows quadratically. `fusion_peer` still carries its own unused copy of the blackboard order code, beside `fusion_blackboard`.
+- **Tests:** `tests/test_round138_fusion_state_cap.py` (5). All 5 fail on v0.130.
+
 ## v0.130: Round 137: the fusion blackboard keeps its delivery order across a restart at any size. 6,654 tests + 19 integration
 
 - **Bug** (`fusion_blackboard`, from #19; found with probe `bbprobe.py`):

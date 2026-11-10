@@ -44,7 +44,10 @@ SOURCES = ("avrone", "cyclekernal", "greatscale")
 KINDS = ("finding", "question", "answer", "correction", "conclusion", "mood", "evidence", "health")
 RESEND_ON_CK_BOOT = frozenset({"avrone", "greatscale"})
 MIRROR_ID_PREFIXES = ("ck-health-", "ck-mood-", "ck-evidence-")
-STATE_MAX_BYTES = 2 * 1024 * 1024
+# Round 138: this was 2 MiB. save() writes any size, and pending rows carry the event (up to
+# about 2 KB each), so about 1,300 pending events passed it. On restart, load() saw FileTooBig and
+# cleared the ledger, and the next offer overwrote the file. Every undelivered event was lost.
+STATE_MAX_BYTES = 64 * 1024 * 1024
 # A configured backoff of 0 must not tight-loop. 50 ms is the same floor the
 # relay uses before it will start another call inside a cycle.
 MIN_RETRY_DELAY = 0.05
@@ -403,6 +406,7 @@ class Ledger:
         self.suppressed = 0
         self._breakers: dict[str, Breaker] = {}
         self._lock = threading.RLock()
+        self._writable = True
         self.load()
 
     def accounts(self) -> dict[str, int]:
@@ -523,6 +527,8 @@ class Ledger:
         try:
             raw = read_capped(self.path, STATE_MAX_BYTES)
         except FileTooBig:
+            # Keep the file. Saving over it would erase every pending event it holds.
+            self._writable = False
             self._discard()
             return
         if raw is None:
@@ -608,7 +614,7 @@ class Ledger:
         self.state_errors += 1
 
     def save(self) -> None:
-        if self.path is None:
+        if self.path is None or not getattr(self, "_writable", True):
             return
         payload = {
             "version": 2,

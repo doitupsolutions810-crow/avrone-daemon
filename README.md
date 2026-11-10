@@ -81,6 +81,22 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.124: Round 131: sqlite storage failures read as plain errors, and /api/fleet/jobs answers 503. 5,966 tests + 19 integration
+
+- **Bug** (probe `jqfull.py`): with the disk full, `queue_submit` answered `ERROR: OperationalError: disk I/O error`, which did not say whether a retry could help.
+- **Bug:** `GET /api/fleet/jobs` returned a bare 500 in two cases:
+  - the queue never started (`AttributeError`);
+  - `jobs.db` was full or damaged (`OperationalError` or `DatabaseError`).
+- **Fix:** `tools.error_text` calls the new `tools.sqlite_storage_text`, which maps these sqlite errors to an `ERROR: database write or read failed: …` line:
+  - disk full;
+  - I/O error;
+  - read-only;
+  - busy or locked (this one says a retry may work);
+  - cannot open;
+  - damaged.
+- **Route:** `/api/fleet/jobs` returns 503 with that text. Other sqlite errors keep the old text.
+- **Tests:** `tests/test_round131_sqlite_errors.py` (9). 7 fail on v0.123.
+
 ## v0.123: Round 130: a model's non-finite "final" renders as valid text. 5,957 tests + 19 integration
 
 - **Bug** (probe `llmfuzz.py`, cases `final_num` and `final_nan`): a model reply of `{"final": 1e999}` answered `"Infinity"`, and `{"final": {"x": NaN}}` answered `{"x": NaN}`, which is not valid JSON.

@@ -562,12 +562,20 @@ async def fleet_tell(body: AgentMsgIn, x_admin_token: str | None = Header(defaul
 async def fleet_jobs(job_id: str | None = None, x_admin_token: str | None = Header(default=None)):
     require_admin(x_admin_token)
     f = _fleet()
-    if job_id:
-        j = await f.queue.get(job_id)
-        if not j:
-            raise HTTPException(404, "no such job")
-        return j
-    return await f.queue.stats()
+    if getattr(f, "queue", None) is None:  # round 131: AttributeError -> 500 when the queue never started
+        raise HTTPException(503, "job queue not running")
+    import sqlite3
+    from .tools import sqlite_storage_text
+    try:
+        if job_id:
+            j = await f.queue.get(job_id)
+            if not j:
+                raise HTTPException(404, "no such job")
+            return j
+        return await f.queue.stats()
+    except sqlite3.DatabaseError as e:  # round 131: a broken jobs.db answered a bare 500
+        raise HTTPException(503, (sqlite_storage_text(e) or f"ERROR: job queue database error: {e}")
+                            .removeprefix("ERROR: ")) from None
 
 
 @app.post("/api/fleet/memory")

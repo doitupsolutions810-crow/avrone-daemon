@@ -109,7 +109,39 @@ def error_text(e: BaseException, ctx: Any = None) -> str:
         return (f"ERROR: the text contains a lone UTF-16 surrogate (U+{ord(ch):04X} at position {e.start}), "
                 "which is not valid text and cannot be stored or run. Remove or replace that character "
                 "and try again.")
+    sq = sqlite_storage_text(e)
+    if sq:
+        return sq
     return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
+
+
+# round 131: a full or broken job-queue database answered "ERROR: OperationalError: disk I/O error"
+# (and the /api/fleet/jobs route a bare 500), with no word on whether a retry could help
+_SQLITE_HINTS = (
+    ("database or disk is full", "the disk is full", False),
+    ("disk i/o error", "the storage reported an I/O error", False),
+    ("readonly database", "the storage is read-only", False),
+    ("database is locked", "the database is busy (another process holds its lock)", True),
+    ("database table is locked", "the database is busy (another process holds its lock)", True),
+    ("unable to open database file", "the database file could not be opened", False),
+    ("file is not a database", "the database file is damaged", False),
+    ("database disk image is malformed", "the database file is damaged", False),
+)
+
+
+def sqlite_storage_text(e: BaseException) -> str | None:
+    """Plain ERROR line for a sqlite storage failure, or None when e is not one."""
+    import sqlite3
+    if not isinstance(e, sqlite3.DatabaseError):
+        return None
+    msg = _safe_str(e)
+    low = msg.lower()
+    for key, hint, retry in _SQLITE_HINTS:
+        if key in low:
+            after = ("It may work if retried in a moment." if retry else
+                     "Retrying will fail the same way until the storage problem is fixed.")
+            return f"ERROR: database write or read failed: {hint} (sqlite: {msg}). {after}"
+    return None
 
 
 import errno as _errno_mod  # noqa: E402

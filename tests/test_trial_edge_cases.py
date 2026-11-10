@@ -89,7 +89,7 @@ def test_strict_json_rejects_invalid_utf8_and_nonfinite_constants():
 def test_strict_json_depth_boundary_is_exact():
     at_limit = b"[" * 32 + b"0" + b"]" * 32
     over_limit = b"[" * 33 + b"0" + b"]" * 33
-    assert strict_json_loads(at_limit) == 0
+    assert isinstance(strict_json_loads(at_limit), list)
     with pytest.raises(ValueError, match="unambiguous"):
         strict_json_loads(over_limit)
 

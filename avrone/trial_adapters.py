@@ -169,8 +169,9 @@ class BridgeTrialAdapter:
             "run_id": run_id,
             "trials": trials,
         }
-        _validate_batch(
+        _, canonical_run_id = _validate_batch(
             payload, schema=BRIDGE_TRIAL_SCHEMA, sender=manager.node_id,
             max_hops=manager.max_hops, bridge=True,
         )
+        payload["run_id"] = canonical_run_id
         return await manager._post(node["url"], BRIDGE_TRIAL_PATH, payload, timeout=15)

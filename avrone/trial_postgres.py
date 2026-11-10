@@ -69,8 +69,10 @@ class PostgresTrialStore:
                     cur.execute("SET LOCAL lock_timeout = '5000ms'")
                     cur.execute("SET LOCAL idle_in_transaction_session_timeout = '15000ms'")
                     yield conn, cur
-        except self._psycopg.Error as exc:
-            raise TrialStoreUnavailable("shared trial storage unavailable") from exc
+        except self._psycopg.Error:
+            # Driver exceptions can embed connection details. Do not chain them
+            # into routine application tracebacks or error-reporting systems.
+            raise TrialStoreUnavailable("shared trial storage unavailable") from None
 
     def _initialize(self) -> None:
         # Inspect the schema version before creating or changing any data tables.

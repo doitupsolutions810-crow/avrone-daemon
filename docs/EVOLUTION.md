@@ -44,7 +44,7 @@ Most recent CI run (42642326487) completed with real runners assigned (runner_id
 
 Failures observed (real, post-checkout):
 - test (3.12): 7 failed, 5116 passed. Root cause: tests/test_xcv_trust_separation.py KeyError on missing 'trust_gates_present'/'all_trust_gates_pass' and DID NOT RAISE on unknown key. evidence_snapshot attached trust_context but did not compute the flags or validate keys.
-- docker-verify: failed in Verify.sh pip install -e with "Cannot update time stamp of directory 'avrone.egg-info'" (non-root user 10001 cannot write under /app owned by root).
+- docker-verify: failed with "[verify] AVRONE root: /tmp" and exit 2. Root cause: the `bash -c` command's nested escaping failed to sed-rewrite the ROOT= line in the copied Verify.sh, so BASH_SOURCE pointed at /tmp/Verify.sh and the required files (pyproject.toml, avrone/, avrone-a12lr/tests/) were not found there.
 - test (3.11): cancelled.
 
 Minimal fixes pushed to same branch:
@@ -230,3 +230,20 @@ Verify.sh exists in the repo tree (root). docker-verify job is present in .githu
 CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
 
 On main: most recent CI runs (e.g. 42848472627 and prior) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 889fd79e) — GREEN
+
+Most recent CI run (42861897389) completed with success. Real runners assigned (runner_id 1000008500/8501/8502 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42848472627) failed. Focus remains on the requested branch. No force-push, no branch deletion performed.

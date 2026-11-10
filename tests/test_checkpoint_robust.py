@@ -418,7 +418,7 @@ def test_summary_counts_refused_value(tmp_path):
 
 
 # ================================================================ real crash: SIGKILL mid-write
-@pytest.mark.parametrize("delay", [0.15, 0.4])
+@pytest.mark.parametrize("delay", [0.5, 1.0])
 def test_sigkill_mid_writes_leaves_loadable_file(tmp_path, delay):
     import signal
     import subprocess

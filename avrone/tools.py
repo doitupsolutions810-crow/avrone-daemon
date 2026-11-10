@@ -551,6 +551,7 @@ def _offset(raw: Any) -> int:
 DIR_LISTING_SCAN_MAX = 20_000
 
 def _dir_listing(p: Path, limit: int = 30) -> str:
+    from .textsafe import escape as _textsafe_escape
     import os as _os
     names, extra = [], False
     try:  # round 89: bounded scandir (iterdir + is_dir stat'ed every entry of a 1M-entry dir)
@@ -563,7 +564,7 @@ def _dir_listing(p: Path, limit: int = 30) -> str:
                     d = de.is_dir()
                 except OSError:
                     d = False
-                names.append(de.name + ("/" if d else ""))
+                names.append(_textsafe_escape(de.name) + ("/" if d else ""))  # round 146
     except OSError:
         return ""
     names.sort()

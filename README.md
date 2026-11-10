@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.139: Round 146: names in listings are shown escaped, so they can't forge rows. 6,689 tests + 19 integration
+
+A new probe (`forgeprobe.py`) plants files with hostile names and starts a child process with hostile arguments, then calls every read-only tool. On v0.138, four tools printed those names raw:
+
+- `list_files`
+- `search_files`, for both file names and matched lines
+- the "is a directory" hint from `read_file`
+- `proc_status`, for the process command line
+
+A file named `a\nFORGED` printed a line of its own that read as another entry. U+202E reversed the rest of its row (Trojan Source).
+
+`textsafe.escape` now writes each unsafe character as a visible escape (`\x0a`, `\u202e`). It escapes rather than blanks, so two names that differ only in a control character stay distinct. In `search_files` matches, tabs are kept. The cost is that an agent sees the escaped form, not the name it can type back.
+
+Tests: `tests/test_round146_listing_names.py` (5). Four of them fail on v0.138.
+
 ## v0.138: Round 145: a corrupt fleet.json that can't be set aside is never overwritten. 6,684 tests + 19 integration
 
 - **Bug** (`FleetManager._load_saved`):

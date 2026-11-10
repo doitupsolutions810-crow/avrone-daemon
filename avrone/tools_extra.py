@@ -271,10 +271,12 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not root.exists():
         return f"ERROR: {args.get('path')} not found"
     if root.is_file():
-        return f"{fsunify.display(ctx, root)} ({root.stat().st_size} bytes)"
+        from .textsafe import escape as _esc1
+        return f"{_esc1(fsunify.display(ctx, root))} ({root.stat().st_size} bytes)"
     depth = _int(args.get("depth"), 3, 1, 10)
     cap = 400
-    head = fsunify.display(ctx, root)
+    from .textsafe import escape as esc  # round 146: names are shown escaped, one per line
+    head = esc(fsunify.display(ctx, root))
     lines = [head if head.endswith("/") else head + "/"]
     count = 0
     truncated = False
@@ -301,7 +303,7 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
                 return
             count += 1
             if _is_dir(de, follow=False):
-                lines.append(f"{prefix}{de.name}/")
+                lines.append(f"{prefix}{esc(de.name)}/")
                 if level < depth:
                     walk(e, level + 1, prefix + "  ")
             else:
@@ -311,7 +313,7 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
                     link = stat.S_ISLNK(st.st_mode)
                 except OSError:
                     size, link = 0, False
-                lines.append(f"{prefix}{de.name} " + ("(symlink)" if link else f"({size}b)"))
+                lines.append(f"{prefix}{esc(de.name)} " + ("(symlink)" if link else f"({size}b)"))
 
     walk(root, 1, "  ")
     if truncated:
@@ -320,6 +322,7 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 SEARCH_TIMEOUT_S = 20.0
+from .textsafe import escape as _tsesc  # noqa: E402
 
 
 async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
@@ -362,7 +365,9 @@ async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
             except (ValueError, RecursionError):
                 continue
             if isinstance(m, dict) and "path" in m:
-                hits.append(f"{fsunify.display(ctx, Path(m['path']))}:{m.get('line')}: {m.get('text', '')}")
+                # round 146: a file name or a matched line holding "\n"/"\r"/U+202E forged hit rows
+                hits.append(f"{_tsesc(fsunify.display(ctx, Path(m['path'])))}:{m.get('line')}: "
+                            f"{_tsesc(str(m.get('text', '')), keep=chr(9))}")
     try:
         await asyncio.wait_for(collect(), SEARCH_TIMEOUT_S)
     except asyncio.TimeoutError:

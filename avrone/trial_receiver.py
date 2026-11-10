@@ -35,9 +35,7 @@ class TrialStore:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         os.chmod(self.path.parent, 0o700)
-        self._assert_no_symlink_components(self.path, "trial database")
-        if self.path.exists() and not self.path.is_file():
-            raise TrialStoreError("trial database must be a regular file")
+        self._assert_database_file()
         self._initialize()
 
     @staticmethod
@@ -52,9 +50,24 @@ class TrialStore:
             if linked:
                 raise TrialStoreError(f"{label} must not contain symlinked path components")
 
+    def _assert_database_file(self) -> None:
+        """Reject non-regular and multiply-linked database files before SQLite opens them."""
+        try:
+            info = self.path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise TrialStoreError("trial database path cannot be inspected") from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise TrialStoreError("trial database must not be a symlink")
+        if not stat.S_ISREG(info.st_mode):
+            raise TrialStoreError("trial database must be a regular file")
+        if info.st_nlink != 1:
+            raise TrialStoreError("trial database must not be a hard link")
+
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
-        self._assert_no_symlink_components(self.path, "trial database")
+        self._assert_database_file()
         try:
             db = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
             db.row_factory = sqlite3.Row

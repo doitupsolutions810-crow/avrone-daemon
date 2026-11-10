@@ -81,6 +81,7 @@ def test_config_rejects_oversize_depth_and_node_count():
     [
         ("system", ""), ("node", " "), ("run_id", 3), ("check_id", ""),
         ("check_version", "v" * 257), ("attempt_id", "bad\nvalue"),
+        ("system", "grok:bot"), ("node", "worker:1"),
         ("outcome", "unknown"), ("outcome", True),
     ],
 )

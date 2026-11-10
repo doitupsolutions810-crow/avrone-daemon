@@ -21,7 +21,7 @@ Trial-ingest bodies are hard-capped at 256 KiB; batches contain 1..10 envelopes;
 
 ## Identity and outcomes
 
-Identity includes schema version, source system, source node, run ID, check ID, check version, canonical configuration digest, and attempt ID. The source projection is system:node and is capped at 127 characters to remain compatible with the existing evidence pool's 128-character source limit.
+Identity includes schema version, source system, source node, run ID, check ID, check version, canonical configuration digest, and attempt ID. System and node identifiers cannot contain the colon delimiter used by the source projection. The source projection is system:node and is capped at 127 characters to remain compatible with the existing evidence pool's 128-character source limit.
 
 Outcomes are pass, fail, skipped, cancelled, timed_out, or inconclusive. Only pass/fail records are projected into pool_trials. Non-pass outcomes are durably stored and returned as non_pass_stored; they are never coerced to pass or fail.
 

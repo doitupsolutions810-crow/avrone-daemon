@@ -4,7 +4,7 @@ AVRONE is the canonical orchestration and state authority. External systems inte
 
 ## Producer requirements
 
-A producer emits one avrone.trial/v2 envelope per completed attempt. It must preserve source system, source node, run ID, check ID, check version, configuration digest, and attempt ID. The outcome is one of pass, fail, skipped, cancelled, timed_out, or inconclusive. A producer must not generate a new attempt ID merely to retry delivery.
+A producer emits one avrone.trial/v2 envelope per completed attempt. It must preserve source system, source node, run ID, check ID, check version, configuration digest, and attempt ID. System and node identifiers must not contain the colon delimiter reserved for the source projection. The outcome is one of pass, fail, skipped, cancelled, timed_out, or inconclusive. A producer must not generate a new attempt ID merely to retry delivery.
 
 ## Transport
 

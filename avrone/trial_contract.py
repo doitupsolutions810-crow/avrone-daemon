@@ -115,6 +115,8 @@ def make_trial(
     """Create an envelope. Outcome is excluded from identity so contradictions collide."""
     system = _identity(system, "system", MAX_SOURCE_COMPONENT_CHARS)
     node = _identity(node, "node", MAX_SOURCE_COMPONENT_CHARS)
+    if ":" in system or ":" in node:
+        raise ValueError("system and node must not contain the source delimiter ':'")
     run_id = _identity(run_id, "run_id")
     check_id = _identity(check_id, "check_id")
     check_version = _identity(check_version, "check_version")
@@ -155,6 +157,8 @@ def validate_trial_envelope(record: Any) -> bool:
     try:
         system = _identity(record["system"], "system", MAX_SOURCE_COMPONENT_CHARS)
         node = _identity(record["node"], "node", MAX_SOURCE_COMPONENT_CHARS)
+        if ":" in system or ":" in node:
+            return False
         run_id = _identity(record["run_id"], "run_id")
         check_id = _identity(record["check_id"], "check_id")
         check_version = _identity(record["check_version"], "check_version")

@@ -589,3 +589,30 @@ def test_postgres_pool_snapshot_detects_poolability_metadata_tampering():
             )
     with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
         store.pool_snapshot()
+
+
+@pytest.mark.parametrize("column,corrupt_value", [("poolable", 0), ("outcome", "tampered_outcome")])
+def test_postgres_duplicate_replay_and_get_record_reject_metadata_tampering(column, corrupt_value):
+    import psycopg
+    from avrone.trial_receiver import TrialStoreUnavailable
+
+    record = _record(failed=False)
+    store = _store()
+    accepted = store.accept(record, _provenance("metadata_tamper_original"))
+    assert accepted["status"] == "accepted"
+
+    # These column names and values are fixed by the parametrization above;
+    # no caller-controlled SQL fragments enter this statement.
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE trial_records SET {column}=%s WHERE trial_id=%s",
+                (corrupt_value, record["trial_id"]),
+            )
+
+    # A duplicate replay must not trust denormalized outcome/poolability fields
+    # merely because the canonical JSON and signed receipt remain intact.
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        store.accept(record, _provenance("metadata_tamper_retry"))
+    with pytest.raises(TrialStoreUnavailable, match="integrity verification"):
+        store.get_record(record["trial_id"])

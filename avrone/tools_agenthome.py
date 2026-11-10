@@ -42,7 +42,7 @@ def _clean(v: Any, n: int = 80) -> Any:
         return v
     if isinstance(v, (int, float)):
         return v if v == v else None
-    s = re.sub(r"[\x00-\x1f\x7f]", "?", str(v))
+    s = re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", str(v))
     return s if len(s) <= n else s[:n] + "..."
 
 

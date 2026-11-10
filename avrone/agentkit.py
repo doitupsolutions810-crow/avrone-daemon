@@ -656,7 +656,7 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
                      f"{' - ' + _one_line(t['note']) if t.get('note') else ''}" for t in board) or "board empty"
 
 
-_CTRL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]+")
+_CTRL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
 
 
 def _one_line(v: Any) -> str:

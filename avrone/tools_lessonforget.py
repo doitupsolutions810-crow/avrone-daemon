@@ -36,7 +36,7 @@ def _data_dir(ctx: "AgentContext") -> Any:
 @off_loop
 async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
     key = str(args.get("key") or "").strip()
-    reason = re.sub(r"[\x00-\x1f\x7f]", " ", str(args.get("reason") or "")).strip()
+    reason = re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", str(args.get("reason") or "")).strip()
     if not KEY_RE.match(key):
         return "ERROR: key must look like l-<16 hex> (see lesson_recall)"
     if not reason:

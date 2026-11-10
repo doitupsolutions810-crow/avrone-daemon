@@ -1124,7 +1124,7 @@ def _run_stem(f: Path) -> str:
 
 
 def _line1(v: Any, n: int) -> str:
-    return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", str(v))[:n]
+    return re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]+", " ", str(v))[:n]
 
 
 from .codex import log_chain  # noqa: E402

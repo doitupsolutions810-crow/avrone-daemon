@@ -130,7 +130,7 @@ def redact_value(name: str, value: Any) -> str:
         return "***redacted (token-shaped value)***"
     v = _URL_USERINFO_RE.sub(r"\1***@", v)
     v = _SECRET_QUERY_RE.sub(r"\1***", v)
-    v = re.sub(r"[\x00-\x1f\x7f]", "?", v)
+    v = re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", v)
     return v[:ENV_REPORT_MAX_VALUE] + ("..." if len(v) > ENV_REPORT_MAX_VALUE else "")
 
 

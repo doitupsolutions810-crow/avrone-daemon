@@ -64,7 +64,7 @@ def _iso(ts: Any) -> str:
 
 
 def _clean(s: str, n: int) -> str:
-    s = re.sub(r"[\x00-\x1f\x7f]", "?", s)
+    s = re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]", "?", s)
     return s if len(s) <= n else s[:n] + "..."
 
 

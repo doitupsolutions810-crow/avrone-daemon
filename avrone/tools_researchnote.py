@@ -112,7 +112,7 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if kind not in RESEARCH_NOTE_KINDS:
         return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
     topic = args.get("topic")
-    topic = "" if topic is None else re.sub(r"[\x00-\x1f\x7f]", " ", _no_surrogates(str(topic))).strip()
+    topic = "" if topic is None else re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", _no_surrogates(str(topic))).strip()
     if len(topic) > RESEARCH_NOTE_MAX_TOPIC:
         return f"ERROR: topic is longer than {RESEARCH_NOTE_MAX_TOPIC} chars"
     text = redact_text(raw.strip())

@@ -6,6 +6,7 @@ Contract:
 """
 from __future__ import annotations
 
+from .textsafe import escape as _tsesc  # round 148: echoed paths shown escaped
 import asyncio
 import logging
 import difflib
@@ -639,23 +640,23 @@ async def t_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: read_file needs a file path (use list_files to see what is there)"
     p = fsunify.resolve(ctx, raw_path, "read_file").path
     if not p.exists():
-        return f"ERROR: {raw_path} not found"
+        return f"ERROR: {_tsesc(raw_path)} not found"
     if p.is_dir():
-        return f"ERROR: {raw_path} is a directory, not a file. Entries: {_dir_listing(p)}"
+        return f"ERROR: {_tsesc(raw_path)} is a directory, not a file. Entries: {_dir_listing(p)}"
     if not p.is_file():
-        return f"ERROR: {raw_path} is not a regular file"
+        return f"ERROR: {_tsesc(raw_path)} is not a regular file"
     off = _offset(args.get("offset"))
     from .safeio import NotRegularFile, open_read
     try:  # round 87: a FIFO swapped in after is_file() parked a pool thread forever in open()
         fh = open_read(p, follow=True)
     except NotRegularFile:
-        return f"ERROR: {raw_path} is not a regular file"
+        return f"ERROR: {_tsesc(raw_path)} is not a regular file"
     import os as _os
     size = _os.fstat(fh.fileno()).st_size
     with fh:
         head = fh.read(8192)
         if b"\x00" in head:
-            return (f"ERROR: {raw_path} is a binary file ({size} bytes); inspect it with shell "
+            return (f"ERROR: {_tsesc(raw_path)} is a binary file ({size} bytes); inspect it with shell "
                     f"(e.g. `file {raw_path}` or `xxd {raw_path} | head`)")
         fh.seek(0)
         data = fh.read((off + READ_MAX_CHARS) * 4 + 4)
@@ -684,7 +685,7 @@ async def t_write(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = r.path
     content = write_content(args.get("content"))
     if not r.in_agent and p.is_dir():  # (agent dirs: quota_write refuses and audits it)
-        return f"ERROR: {raw_path} is a directory; give a file path inside it"
+        return f"ERROR: {_tsesc(raw_path)} is a directory; give a file path inside it"
     if r.in_agent:
         from .agentfs_tools import quota_write
         # quota_write walks the whole agent dir under a thread lock: never on the event loop

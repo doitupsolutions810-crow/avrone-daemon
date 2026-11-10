@@ -34,6 +34,7 @@ Resume: every loop checkpoints its progress to its loop file after each iteratio
 """
 from __future__ import annotations
 
+from .textsafe import escape as _tsesc  # round 148: echoed loop ids shown escaped
 import asyncio
 import json
 import uuid
@@ -875,7 +876,7 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
     """
     lp = evolve_status(ctx, loop_id) if loop_id else None
     if lp is None:
-        return {"error": f"ERROR: no loop {loop_id[:80]}. evolve_list to see them.", "loop_id": None}
+        return {"error": f"ERROR: no loop {_tsesc(loop_id[:80])}. evolve_list to see them.", "loop_id": None}
     status = lp.get("status")
     if status != "interrupted" or loop_id in _bg_running():
         return {"error": f"ERROR: loop {loop_id} is {status}; only an interrupted loop can be resumed",
@@ -1093,7 +1094,7 @@ def evolve_cancel(ctx: "AgentContext", loop_id: str) -> dict[str, Any]:
     the next one never starts, and the loop ends with status "cancelled"."""
     st = evolve_status(ctx, loop_id) if loop_id else None
     if st is None:
-        return {"error": f"ERROR: no loop {loop_id}. evolve_list to see them."}
+        return {"error": f"ERROR: no loop {_tsesc(loop_id[:80])}. evolve_list to see them."}
     if st["status"] != "running":
         return {"loop_id": loop_id, "status": st["status"], "note": "not running; nothing to cancel"}
     _cancel_path(ctx, loop_id).write_text(str(time.time()))
@@ -1341,7 +1342,7 @@ async def t_evolve_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if lid:
         loops = [lp for lp in loops if lp.get("loop_id") == lid]
         if not loops:
-            return f"ERROR: no loop {lid}. evolve_list to see them."
+            return f"ERROR: no loop {_tsesc(str(lid)[:80])}. evolve_list to see them."
     if not loops:
         n, b = loop_limits()
         return f"no evolve loops yet (limits: max_iters={n}, time_budget_s={b:.0f})"

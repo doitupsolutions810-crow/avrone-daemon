@@ -269,7 +269,7 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     r = fsunify.resolve(ctx, str(args.get("path", "") or "."), "list_files")
     root, skip = r.path, fsunify.skip_dirs(ctx, r)
     if not root.exists():
-        return f"ERROR: {args.get('path')} not found"
+        return f"ERROR: {_tsesc(args.get('path'))} not found"
     if root.is_file():
         from .textsafe import escape as _esc1
         return f"{_esc1(fsunify.display(ctx, root))} ({root.stat().st_size} bytes)"
@@ -341,7 +341,7 @@ async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     r = fsunify.resolve(ctx, str(args.get("path", "") or "."), "search_files")
     root = r.path
     if not root.exists():
-        return f"ERROR: {args.get('path')} not found"
+        return f"ERROR: {_tsesc(args.get('path'))} not found"
     cap = 200
     # The scan runs in a child process with a deadline (see avrone.searchproc): `re` cannot be
     # interrupted and holds the GIL, so (a+)+b on a long line of a's used to freeze the whole node.
@@ -386,7 +386,7 @@ async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
                 f"(nested quantifiers like (a+)+ take exponential time); simplify it]")
         return ("\n".join(hits[:cap]) + "\n" if hits else "") + note
     if not hits:
-        return f"No matches for /{pattern}/."
+        return f"No matches for /{_tsesc(pattern[:200])}/."  # round 148
     out = "\n".join(hits[:cap])
     if len(hits) >= cap:
         out += f"\n...[capped at {cap} matches]"
@@ -579,7 +579,7 @@ async def t_edit_file(ctx: "AgentContext", args: dict[str, Any]) -> str:
                     return _edit_file_once(ctx, args, raw_path, r)
                 except _EditRaced:
                     continue
-            return (f"ERROR: {raw_path} kept changing while edit_file ran ({EDIT_RETRIES} tries); "
+            return (f"ERROR: {_tsesc(raw_path)} kept changing while edit_file ran ({EDIT_RETRIES} tries); "
                     "nothing was written, read_file it and retry")
         finally:
             if dfd is not None:
@@ -607,9 +607,9 @@ def _edit_file_once(ctx: "AgentContext", args: dict[str, Any], raw_path: str, r:
     from .tools import atomic_write_bytes
     p = r.path
     if p.is_dir():
-        return f"ERROR: {raw_path} is a directory, not a file"
+        return f"ERROR: {_tsesc(raw_path)} is a directory, not a file"
     if not p.is_file():
-        return f"ERROR: {raw_path} not found"
+        return f"ERROR: {_tsesc(raw_path)} not found"
     old = args.get("old")
     new = args.get("new")
     old = "" if old is None else str(old)
@@ -622,20 +622,20 @@ def _edit_file_once(ctx: "AgentContext", args: dict[str, Any], raw_path: str, r:
     try:  # round 87: open first, then size the open file (a FIFO swapped in blocked read_bytes)
         fh = open_read(p, follow=True)
     except NotRegularFile:
-        return f"ERROR: {raw_path} is not a regular file"
+        return f"ERROR: {_tsesc(raw_path)} is not a regular file"
     with fh:
         st0 = os.fstat(fh.fileno())
         size = st0.st_size
         if size > EDIT_MAX_BYTES:
-            return (f"ERROR: {raw_path} is {size} bytes; edit_file handles up to {EDIT_MAX_BYTES} bytes, "
+            return (f"ERROR: {_tsesc(raw_path)} is {size} bytes; edit_file handles up to {EDIT_MAX_BYTES} bytes, "
                     "use shell (sed, python) for bigger files")
         data = fh.read(EDIT_MAX_BYTES + 1)
     if len(data) > EDIT_MAX_BYTES:
-        return (f"ERROR: {raw_path} grew past {EDIT_MAX_BYTES} bytes while being read; "
+        return (f"ERROR: {_tsesc(raw_path)} grew past {EDIT_MAX_BYTES} bytes while being read; "
                 "use shell (sed, python) for bigger files")
     name = fsunify.display(ctx, p)
     if b"\x00" in data[:8192]:
-        return f"ERROR: {name} is a binary file; edit it with shell instead"
+        return f"ERROR: {_tsesc(name)} is a binary file; edit it with shell instead"
     # surrogateescape: undecodable bytes round-trip exactly instead of becoming U+FFFD
     text = data.decode("utf-8", "surrogateescape")
     new = re.sub(r"[\ud800-\udfff]", "\ufffd", new)
@@ -1000,20 +1000,20 @@ def _read_text_for_diff(ctx: "AgentContext", raw: Any, label: str) -> tuple[str 
         return None, f"ERROR: {label} is required"
     p = fsunify.resolve(ctx, rel, "diff_files").path
     if not p.exists():
-        return None, f"ERROR: {rel} not found"
+        return None, f"ERROR: {_tsesc(rel)} not found"
     if not p.is_file():
-        return None, f"ERROR: {rel} is not a file"
+        return None, f"ERROR: {_tsesc(rel)} is not a file"
     from .safeio import NotRegularFile, open_read
     try:
         fh = open_read(p, follow=True)
     except NotRegularFile:
-        return None, f"ERROR: {rel} is not a regular file"
+        return None, f"ERROR: {_tsesc(rel)} is not a regular file"
     with fh:
         data = fh.read(DIFF_MAX_FILE_BYTES + 1)
     if len(data) > DIFF_MAX_FILE_BYTES:
-        return None, f"ERROR: {rel} is larger than {DIFF_MAX_FILE_BYTES} bytes"
+        return None, f"ERROR: {_tsesc(rel)} is larger than {DIFF_MAX_FILE_BYTES} bytes"
     if b"\0" in data[:8192]:
-        return None, f"ERROR: {rel} looks like a binary file"
+        return None, f"ERROR: {_tsesc(rel)} looks like a binary file"
     return data.decode(errors="replace"), fsunify.display(ctx, p)
 
 

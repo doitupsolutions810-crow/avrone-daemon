@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.141: Round 148: errors that echo an argument show it escaped. 6,705 tests + 19 integration
+
+A third probe (`forgeprobe3.py`) passes `"q\nFORGED x \u202eR"` as each string argument of every tool. On v0.140, 26 error lines echoed that argument raw:
+
+- the path in 23 lines like `ERROR: <path> not found`, in `read_file`, `list_files`, `search_files`, `edit_file`, `diff_files` and the `fs_*` tools
+- the regex in `search_files` "No matches for /…/"
+- the loop id in the `evolve_cancel` and `evolve_status` errors
+
+A bad argument could print a line of its own, and U+202E reversed the rest of the error line. All of these now use `textsafe.escape`. The probe comes back clean.
+
+Tests: `tests/test_round148_error_echo.py` (7). Six of them fail on v0.140.
+
 ## v0.140: Round 147: memory listings, artifact names and diffs can't forge rows or split lines. 6,698 tests + 19 integration
 
 A second probe (`forgeprobe2.py`) writes hostile text through the tools (memory, the task board, research notes, artifacts, git), then reads it back through 24 tool calls. On v0.139 it found these:

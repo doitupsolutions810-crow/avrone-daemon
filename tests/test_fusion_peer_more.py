@@ -154,7 +154,32 @@ def test_userinfo_and_empty_host_are_not_dialed():
         leaked = fp._exchange("GET", f"http://user:secret@{host}:{port}/health")
         assert leaked["error"] == "down"
         assert fp._exchange("GET", "http:///health")["error"] == "down"
+        # NEL and a line separator are line breaks even though NEL is latin-1.
+        for ugly in ("\u0085", "\u2028", "\u202e"):
+            assert fp._exchange("GET", f"http://{host}:{port}/health{ugly}")["error"] == "down"
+            hopped = fp._exchange("GET", f"http://{host}:{port}/health", token=f"secret{ugly}")
+            assert hopped["error"] == "auth"
         assert peer.gets == before
+
+
+def test_fusion_post_keeps_text_and_display_stays_one_line(client):
+    """main stores bridge text as written and flattens it only when printing.
+
+    A fusion post follows that same split: GET returns the characters, and
+    compact() does not let U+2028, NEL, or a bidi override become a second line.
+    """
+    from avrone.bridge import compact
+    text = "line\u2028next\u0085x\u202ehidden"
+    posted = client.post("/api/blackboard", json={
+        "id": "bidi00000001", "text": text, "agent": "scout\u202e", "origin_node": "node\u0085",
+    }, headers=AUTH)
+    assert posted.status_code == 200 and posted.json()["duplicate"] is False
+    found = next(p for p in client.get("/api/blackboard", headers=AUTH).json()["posts"]
+                 if p["id"] == "bidi00000001")
+    assert found["text"] == text
+    shown = compact([found])
+    assert "\u2028" not in shown and "\u0085" not in shown and "\u202e" not in shown
+    assert shown.count("\n") == 0
 
 
 def test_breaker_opens_on_timeout_not_on_500_and_a_probe_recovers():

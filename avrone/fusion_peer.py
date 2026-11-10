@@ -26,6 +26,7 @@ from typing import Any
 
 from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core
 from .safeio import FileTooBig, atomic_write, read_capped
+from .textsafe import UNSAFE_RUN
 
 FUSION_MAX_BODY = 4096
 MAX_FORWARD = 200
@@ -478,11 +479,13 @@ def event_from_post(post: dict) -> dict[str, Any] | None:
 def _header_value(value: str) -> str:
     """A header value, or empty when it cannot be sent as one.
 
-    HTTP headers are latin-1. A control character would split the header.
+    HTTP headers are latin-1. The same unsafe class ``textsafe`` uses for one-line
+    display (C0, C1, DEL, NEL, U+2028/2029, bidi controls) is rejected here too:
+    U+0085 is latin-1 and would otherwise be sent as a header line break.
     A character outside latin-1 used to raise while dialing and look like an outage.
     """
     text = str(value or "")
-    if not text or any(ord(char) < 32 or ord(char) == 127 for char in text):
+    if not text or UNSAFE_RUN.search(text):
         return ""
     try:
         text.encode("latin-1")
@@ -539,7 +542,7 @@ def _url_closed(url: str) -> bool:
     Userinfo would put a secret on the wire in a place the admin token does
     not belong. An empty host is not a peer.
     """
-    if not url.startswith(("http://", "https://")) or any(char in url for char in "\r\n\x00 \t"):
+    if not url.startswith(("http://", "https://")) or UNSAFE_RUN.search(url) or any(char in url for char in " \t"):
         return True
     parts = urllib.parse.urlsplit(url)
     return bool(parts.username or parts.password or not parts.hostname)

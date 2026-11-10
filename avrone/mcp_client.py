@@ -745,7 +745,7 @@ def args_doc_from_schema(schema: dict[str, Any] | None, limit: int = 300) -> str
             t = "|".join(json.dumps(v, default=str) for v in spec["enum"][:6])
         else:  # a dict/list "type" (unhashable) used to raise and drop the whole tool
             t = _TYPE_MAP.get(t, "any") if isinstance(t, str) and t else "any"
-        items.append(f'"{str(key)[:80]}"{"" if key in required else "?"}: {t}')
+        items.append(f'"{json.dumps(str(key), ensure_ascii=False)[1:-1][:80]}"{"" if key in required else "?"}: {t}')
         if sum(len(i) + 2 for i in items) > limit:
             break  # 100k properties used to be rendered in full before the doc was cut to `limit`
     doc = "{" + ", ".join(items) + "}"
@@ -841,7 +841,7 @@ class MCPManager:
             try:
                 registry.register(Tool(
                     name=tool_name,
-                    description=str(t.get("description") or t.get("title") or f"MCP tool {t['name']} on {name}").strip().replace("\n", " ")[:500],
+                    description=str(t.get("description") or t.get("title") or f"MCP tool {t['name']} on {name}").strip().replace("\n", " ")[:500],  # docs() one_line()s it
                     args_doc=args_doc_from_schema(t.get("inputSchema")),
                     fn=self._make_fn(client, t["name"]),
                     source=f"mcp:{name}",

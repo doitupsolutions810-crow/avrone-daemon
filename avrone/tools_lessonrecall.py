@@ -12,6 +12,7 @@ secret-shaped tokens masked. Output is bounded to LESSON_RECALL_MAX_CHARS.
 """
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +31,30 @@ LESSON_RECALL_MAX_CHARS = 6000
 LESSON_DIGEST = 300
 
 
+AGE_MAX_S = 9999 * 86400  # round 131/132: a ts of 1e300 printed a 300-digit day count
+
+
+def _ts(r: dict[str, Any]) -> float:
+    """A record's ts as a finite float, 0.0 for junk. Round 132: "inf"/NaN (a hand-edited or
+    peer-synced store) sorted to the top forever, and NaN made the order arbitrary."""
+    try:
+        v = float(r.get("ts", 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
+
+
 def age(seconds: float) -> str:
+    # round 132: NaN raised ValueError and +-inf OverflowError out of int(); one corrupt lesson ts
+    # failed the whole recall
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError, OverflowError):
+        return "?"
+    if not math.isfinite(seconds):
+        return "?"
+    if seconds >= AGE_MAX_S:
+        return f">{AGE_MAX_S // 86400}d"
     s = max(0, int(seconds))
     if s < 60:
         return f"{s}s"
@@ -44,11 +68,7 @@ def age(seconds: float) -> str:
 def rank(recs: list[dict[str, Any]], topic: str) -> tuple[list[dict[str, Any]], bool]:
     """(ranked records, matched_by_topic)."""
     want = bridgemod._words(topic or "")
-    def ts(r: dict[str, Any]) -> float:
-        try:
-            return float(r.get("ts", 0) or 0)
-        except (TypeError, ValueError):
-            return 0.0
+    ts = _ts
     if not want:
         return sorted(recs, key=lambda r: -ts(r)), False
     scored = [(len(want & bridgemod._words(str(r.get("value", "")))), r) for r in recs]
@@ -87,15 +107,14 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     used = len(head)
     shown = 0
     for r in ranked[:lim]:
-        try:
-            when = age(now - float(r.get("ts", now) or now))
-        except (TypeError, ValueError):
-            when = "?"
-        text = redact_text(str(r.get("value", "")).replace("\n", " "))
+        t = _ts(r)
+        when = age(now - t) if t else "?"
+        from .tools import one_line  # round 134: \r / U+2028 forged extra lesson lines
+        text = redact_text(one_line(r.get("value", "")))
         if len(text) > LESSON_DIGEST:
             text = text[:LESSON_DIGEST] + "..."
-        src = redact_text(str(r.get("task", "") or "").replace("\n", " "))[:80]
-        line = f"- [{when} ago] {r.get('key', '?')}" + (f" ({src})" if src else "") + f": {text}"
+        src = redact_text(one_line(r.get("task", "") or ""))[:80]
+        line = f"- [{when} ago] {one_line(r.get('key', '?'))}" + (f" ({src})" if src else "") + f": {text}"
         if used + len(line) + 1 > LESSON_RECALL_MAX_CHARS:
             lines.append(f"... {len(ranked[:lim]) - shown} more not shown (output cap)")
             break

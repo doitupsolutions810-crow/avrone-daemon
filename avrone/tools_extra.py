@@ -21,6 +21,8 @@ import html as _html
 import json
 import os
 import re
+
+from . import textsafe as _textsafe
 import threading
 import shlex
 import stat
@@ -1124,7 +1126,7 @@ def _run_stem(f: Path) -> str:
 
 
 def _line1(v: Any, n: int) -> str:
-    return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ", str(v))[:n]
+    return _textsafe.UNSAFE_RUN.sub(" ", str(v))[:n]
 
 
 from .codex import log_chain  # noqa: E402

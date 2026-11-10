@@ -11,6 +11,8 @@ import json
 import os
 import platform
 import re
+
+from . import textsafe as _textsafe
 import shutil
 import socket
 import subprocess
@@ -249,7 +251,7 @@ def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
     return pick[0]
 
 
-_CTRL = re.compile(r"[\x00-\x1f\x7f\u2028\u2029]+")
+_CTRL = _textsafe.UNSAFE_RUN  # round 135: + C1 (U+0085 NEL is a line break)
 
 
 def _one(v: Any, n: int = 120) -> str:

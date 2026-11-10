@@ -436,8 +436,9 @@ def compact(posts: list[dict[str, Any]], width: int = 300) -> str:
     for p in posts:
         refs = f" re {','.join(p['refs'])}" if p.get("refs") else ""
         org = "" if p.get("origin_node") in (None, "", "local") else f" @{p['origin_node']}"
-        t = p["text"].replace("\n", " ")
-        lines.append(f"[{p['id']}] {p['kind']} {p['agent']}{org}{refs}: {t[:width]}"
+        from .tools import one_line  # round 134: \r / U+2028 in a post (or a peer's agent name)
+        t = one_line(p["text"])      # printed lines that read as other posts
+        lines.append(one_line(f"[{p['id']}] {p['kind']} {p['agent']}{org}{refs}: ") + t[:width]
                      + ("..." if len(t) > width else ""))
     return "\n".join(lines)
 

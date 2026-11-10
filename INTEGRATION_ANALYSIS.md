@@ -89,6 +89,14 @@ A non-ASCII token was not sent through HTTP. `httpx` refuses to encode `café` a
 
 The library default threshold stays 0, so a caller that does not ask for the breaker is unchanged. The watch route turns it on.
 
+## Merge with main `0df6674` (v0.129.0)
+
+`git fetch origin main` then `git merge origin/main`. The only conflict was `MASTER_PROMPT.md`: both sides changed the generated test-file count (ours 300, main 303). That is a simple count, not two intents. Regenerating the file from the merged tree resolved it.
+
+`avrone/server.py` merged cleanly. main's rounds 134–136 flatten bridge *display* (`one_line` / `textsafe`) and do not change how post text is stored. Fusion posts follow that split: `GET /api/blackboard` returns the stored characters, and `compact()` still collapses U+2028, NEL (U+0085), and U+202E onto one line. Header and URL checks now use the same `textsafe` unsafe class, so a NEL inside a token is an auth failure and is not sent. No conflicting intent turned up.
+
+`python3 -m pytest -q tests/test_fusion_peer.py tests/test_fusion_peer_edges.py tests/test_fusion_peer_more.py tests/test_master_prompt.py tests/test_bridge.py` — **75 passed** in 8.73s after the merge.
+
 ## Remaining gaps
 
 - The watchdog is still one shot. It does not fingerprint mood. The route's breaker and cycle deadline apply only when something calls `POST /api/fusion/watch`. One cycle forwards at most 200 new posts. Disk fan-in reads at most 256 journals.

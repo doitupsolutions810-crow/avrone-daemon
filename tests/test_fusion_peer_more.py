@@ -225,6 +225,35 @@ def test_breaker_opens_on_timeout_not_on_500_and_a_probe_recovers():
         assert peer.gets.count("/health") == 2
 
 
+def test_loopback_spellings_share_a_breaker_and_a_proxy_is_ignored(monkeypatch):
+    with _Running() as peer:
+        host, port = peer.server_address
+        base = f"http://{host}:{port}"
+        watch = fp.FusionWatch()
+        urls = _urls(base)
+        urls.update(timeout=0.15, breaker_threshold=1, breaker_cooldown=30.0)
+        peer.health_delay = 0.4
+        opened = watch.watch_once(**urls)
+        assert opened["health"] == "timeout"
+        assert watch._circuit_blocked(f"http://[::1]:{port}/health") is True
+        assert watch._circuit_blocked(f"http://[::ffff:127.0.0.1]:{port}/health") is True
+        assert watch._circuit_blocked(f"http://127.0.0.2:{port}/health") is False
+        before = list(peer.gets)
+        skipped = watch._dial("GET", f"http://[::1]:{port}/health", timeout=0.2)
+        assert skipped["error"] == "circuit"
+        assert peer.gets == before
+
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    with _Running() as peer:
+        host, port = peer.server_address
+        hop = fp._exchange("GET", f"http://{host}:{port}/health", timeout=1.0)
+        assert hop["ok"] is True and hop["body"]["status"] == "ghost-online"
+        assert "/health" in peer.gets
+
+
 def test_breaker_env_defaults_and_clamps(monkeypatch):
     monkeypatch.delenv("FUSION_BREAKER_THRESHOLD", raising=False)
     monkeypatch.delenv("FUSION_BREAKER_COOLDOWN", raising=False)

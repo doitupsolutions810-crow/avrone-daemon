@@ -105,17 +105,59 @@ def load_index(data_dir: Path) -> dict[str, dict[str, Any]]:
         return {}
 
 
+def _load_index_for_write(data_dir: Path) -> dict[str, dict[str, Any]]:
+    """The index record() will rewrite. Round 139: record() used load_index, which returns {} on
+    any failure. One EMFILE, EIO or EACCES while reading, or a file over INDEX_MAX_BYTES, then
+    rewrote index.json with only the agent being recorded. Every other agent's home record was
+    erased, and their imports were refused later with "belongs to another agent".
+    A read error is now a PackError and nothing is written. Unparsable content is kept as
+    index.json.corrupt-<ts> before a fresh index starts, the same way the task board keeps it."""
+    from .safeio import FileTooBig, read_capped
+    p = _index_path(data_dir)
+    try:
+        raw = read_capped(p, INDEX_MAX_BYTES)
+    except FileNotFoundError:
+        return {}
+    except FileTooBig:
+        raw = b"\x00"  # unusable: kept aside below, never overwritten in place
+    except OSError as e:
+        raise PackError(f"agent index unreadable, not rewritten: {type(e).__name__}: {e.strerror or e}"[:300]) from None
+    if raw is None:
+        if not os.path.lexists(p):
+            return {}
+        raw = b"\x00"  # a symlink, FIFO or directory where index.json belongs
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        d = None
+    if isinstance(d, dict):
+        return d
+    try:
+        os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}-{secrets.token_hex(3)}"))
+    except OSError as e:
+        raise PackError(f"agent index unusable and could not be set aside: {type(e).__name__}"[:300]) from None
+    return {}
+
+
 def _save_index(data_dir: Path, idx: dict[str, Any]) -> None:
     p = _index_path(data_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f".index.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
-    tmp.write_text(json.dumps(idx, indent=2, sort_keys=True))
-    os.replace(tmp, p)
+    try:
+        tmp.write_text(json.dumps(idx, indent=2, sort_keys=True))
+        os.replace(tmp, p)
+    except BaseException:
+        # round 139: a full disk left a partial .index.*.tmp behind on every failed record()
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def record(data_dir: Path, agent_id: str, **kw: Any) -> None:
     with _INDEX_LOCK:
-        idx = load_index(data_dir)
+        idx = _load_index_for_write(data_dir)
         idx.setdefault(agent_id, {}).update(kw)
         _save_index(data_dir, idx)
 

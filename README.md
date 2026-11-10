@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.132: Round 139: one failed read of the agent index no longer erases every agent's record. 6,665 tests + 19 integration
+
+- **Bug** (`agentpack.record`, called by imports and `migrate_agent`):
+  - It read the index with `load_index()`, which returns `{}` on any failure.
+  - These failures all triggered it: one transient `OSError` (EMFILE under load, EIO, EACCES), an `index.json` over `INDEX_MAX_BYTES`, junk JSON, or a FIFO or symlink in its place.
+  - `record()` then rewrote the index with only the agent being recorded. Every other agent's home record was erased, and later imports of those agents were refused with "belongs to another agent".
+- **Fix:**
+  - `_load_index_for_write` raises `PackError` on a read error and writes nothing.
+  - An unusable file is moved aside as `index.json.corrupt-<ts>-<hex>` before a fresh index starts, the same way the task board handles it.
+  - `_save_index` removes its temp file when the write or rename fails, as it does on a full disk.
+- Found by matching every `read_capped` cap against its writer. Fleet, checkpoint, task board, statehealth and secrets were checked: they cap the writer as well, or do not wipe on a failed read.
+- **Tests:** `tests/test_round139_agentpack_index.py` (6). All 6 fail on v0.131.
+
 ## v0.131: Round 138: fusion state files load back at any size they are written. 6,659 tests + 19 integration
 
 - **`fusion_deliver.Ledger`** (data loss):

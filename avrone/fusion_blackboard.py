@@ -23,7 +23,11 @@ from typing import Any
 from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core
 
 _ORDER_NAME = "_fanin_order.json"
-_ORDER_MAX_BYTES = 1_048_576
+# Round 137: this was 1 MiB, but _save_order writes any size. After a restart, an order file over
+# the cap (about 12k long ids or 95k short ones) was ignored and rebuilt by ts. A post accepted late
+# with an older ts then sorted before the relay's `since` cursor and was never delivered. 64 MiB
+# holds millions of ids; the bridge rings evict long before that.
+_ORDER_MAX_BYTES = 64 * 1024 * 1024
 _GUARD = threading.Lock()
 
 

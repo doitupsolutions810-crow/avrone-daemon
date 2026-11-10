@@ -81,6 +81,20 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.130: Round 137: the fusion blackboard keeps its delivery order across a restart at any size. 6,654 tests + 19 integration
+
+- **Bug** (`fusion_blackboard`, from #19; found with probe `bbprobe.py`):
+  - `_save_order` wrote `_fanin_order.json` at any size, but `_load_order` refused a file over 1 MiB. That is about 12k ids of 80 characters or 95k short ones.
+  - After a restart, the order was rebuilt by timestamp. A post accepted late with an older `ts` then sorted before the relay's `since` cursor and was never delivered. That is the case the append order exists to prevent.
+- **Fix:** `_ORDER_MAX_BYTES` is now 64 MiB, which is millions of ids. The bridge rings evict posts long before that.
+- **Measured, not changed:** at 120k stored posts:
+  - A blackboard GET takes about 2 s, because every poll re-reads every bridge file.
+  - The response is 42 MB, and there is no `limit` parameter.
+  - A `since` cursor whose post was evicted replays everything.
+
+  These are relay-contract choices for Crow.
+- **Tests:** `tests/test_round137_blackboard_order.py` (2). Both fail on v0.129.
+
 ## v0.129: Round 136: one shared unsafe-character class, now covering bidi controls. 6,482 tests + 19 integration
 
 - **Refactor:** the new `avrone/textsafe.py` defines `UNSAFE_CLASS`, `UNSAFE_RUN` and `UNSAFE_ONE`. Ten modules used to keep their own copy of the one-line class, and round 135 had to fix all nine of the sanitizers. Those modules now import it:

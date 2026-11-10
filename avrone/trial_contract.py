@@ -36,12 +36,19 @@ def _identity(value: Any, field: str, max_chars: int = MAX_FIELD_CHARS) -> str:
 
 
 def _config_string(value: Any, field: str) -> str:
+    """NFC-normalize JSON strings without trimming meaningful whitespace."""
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
-    normalized = unicodedata.normalize("NFC", value).strip()
+    normalized = unicodedata.normalize("NFC", value)
     if len(normalized) > MAX_CONFIG_BYTES:
         raise ValueError(f"{field} exceeds {MAX_CONFIG_BYTES} characters")
-    return _identity(normalized, field, MAX_CONFIG_BYTES)
+    if any(unicodedata.category(ch) == "Cc" for ch in normalized):
+        raise ValueError(f"{field} must not contain control characters")
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field} must be valid Unicode") from exc
+    return normalized
 
 
 def _normalize_json(value: Any, depth: int, budget: list[int]) -> Any:

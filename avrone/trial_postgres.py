@@ -173,7 +173,7 @@ class PostgresTrialStore:
                 accepted = True
             else:
                 cur.execute(
-                    "SELECT record_digest, record_json, receipt_json FROM trial_records WHERE trial_id=%s FOR UPDATE",
+                    "SELECT record_digest, record_json, receipt_json, outcome, poolable FROM trial_records WHERE trial_id=%s FOR UPDATE",
                     (trial_id,),
                 )
                 row = cur.fetchone()
@@ -197,6 +197,8 @@ class PostgresTrialStore:
                     or receipt.get("trial_id") != trial_id
                     or receipt.get("record_digest") != accepted_digest
                     or receipt.get("outcome") != trial_record_outcome(stored_record)
+                    or row[3] != trial_record_outcome(stored_record)
+                    or int(row[4]) != int(trial_record_poolable(stored_record))
                 ):
                     raise TrialStoreUnavailable("stored trial record failed integrity verification")
                 if hmac.compare_digest(accepted_digest, digest):
@@ -310,7 +312,7 @@ class PostgresTrialStore:
     def get_record(self, trial_id: str) -> dict[str, Any] | None:
         with self._session() as (_, cur):
             cur.execute(
-                "SELECT record_digest, record_json, receipt_json FROM trial_records WHERE trial_id=%s",
+                "SELECT record_digest, record_json, receipt_json, outcome, poolable FROM trial_records WHERE trial_id=%s",
                 (trial_id,),
             )
             row = cur.fetchone()
@@ -330,6 +332,8 @@ class PostgresTrialStore:
             or receipt.get("trial_id") != trial_id
             or receipt.get("record_digest") != digest
             or receipt.get("outcome") != trial_record_outcome(record)
+            or row[3] != trial_record_outcome(record)
+            or int(row[4]) != int(trial_record_poolable(record))
         ):
             raise TrialStoreUnavailable("stored trial record failed integrity verification")
         return {"record": record, "receipt": receipt}

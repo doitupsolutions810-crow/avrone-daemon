@@ -28,22 +28,33 @@ class TrialStore:
     """SQLite WAL store. One transaction per envelope; conflicts never replace first-seen data."""
 
     def __init__(self, path: Path | str):
-        self.path = Path(path)
+        self.path = Path(os.path.abspath(os.fspath(path)))
+        # Check existing ancestors before mkdir: checking only the final parent misses
+        # symlinks such as data-link/trials/, which can escape the configured data root.
+        self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if self.path.parent.is_symlink():
-            raise TrialStoreError("trial data directory must not be a symlink")
+        self._assert_no_symlink_components(self.path.parent, "trial data directory")
         os.chmod(self.path.parent, 0o700)
-        if self.path.is_symlink():
-            raise TrialStoreError("trial database must not be a symlink")
+        self._assert_no_symlink_components(self.path, "trial database")
         if self.path.exists() and not self.path.is_file():
             raise TrialStoreError("trial database must be a regular file")
         self._initialize()
 
+    @staticmethod
+    def _assert_no_symlink_components(path: Path, label: str) -> None:
+        """Reject symlinks in every lexical component, not just the leaf directory."""
+        absolute = Path(os.path.abspath(os.fspath(path)))
+        for component in (absolute, *absolute.parents):
+            try:
+                linked = component.is_symlink()
+            except OSError as exc:
+                raise TrialStoreError(f"{label} path cannot be inspected") from exc
+            if linked:
+                raise TrialStoreError(f"{label} must not contain symlinked path components")
+
     def _connect(self) -> sqlite3.Connection:
-        if self.path.parent.is_symlink():
-            raise TrialStoreError("trial data directory must not be a symlink")
-        if self.path.is_symlink():
-            raise TrialStoreError("trial database must not be a symlink")
+        self._assert_no_symlink_components(self.path.parent, "trial data directory")
+        self._assert_no_symlink_components(self.path, "trial database")
         try:
             db = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
             db.row_factory = sqlite3.Row

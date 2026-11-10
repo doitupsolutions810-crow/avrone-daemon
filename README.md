@@ -81,6 +81,22 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.142: Round 149: the CLI never writes raw controls to the operator's terminal. 6,715 tests + 19 integration
+
+`avrone-cli`'s live event lines replaced only `\n`. A tool's output, a model's role name, or an error message could still put ESC sequences on stderr: clear screen, OSC 0 window title, OSC 52 clipboard writes. They could also carry `\r` line overwrites and U+202E. The same raw printing applied to three commands:
+
+- `runs` printed HTTP clients' prompts raw.
+- `tools` printed MCP servers' descriptions raw.
+- `evolve` printed model-written goals raw.
+
+All of these now go through `cli._one`, which turns any run of characters from the `textsafe` unsafe class into a space. The final answer is escaped only when stdout is a terminal, with line breaks and tabs kept. A pipe still gets the text unchanged.
+
+Web UI audit: every `innerHTML` value is escaped, except the HUD's agent status, which is a constant. The HUD's `agents` map was a plain `{}`, so an agent named `__proto__` or `constructor` landed on `Object.prototype`. It is now `Object.create(null)`.
+
+The every-argument probe (`forgeprobe3.py`) now also tries each enum value. It comes back clean.
+
+Tests: `tests/test_round149_cli_terminal.py` (10). All 10 fail on v0.141.
+
 ## v0.141: Round 148: errors that echo an argument show it escaped. 6,705 tests + 19 integration
 
 A third probe (`forgeprobe3.py`) passes `"q\nFORGED x \u202eR"` as each string argument of every tool. On v0.140, 26 error lines echoed that argument raw:

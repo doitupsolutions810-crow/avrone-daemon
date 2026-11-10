@@ -58,11 +58,6 @@ def test_exact_maximum_human_root_length_is_accepted():
     assert verify_evidence_event(record) == (True, "")
 
 
-def test_exact_maximum_human_root_length_is_accepted():
-    record = make(human_root="x" * 160, provenance_depth=1)
-    assert verify_evidence_event(record) == (True, "")
-
-
 @pytest.mark.parametrize("depth", [True, False, -1, 1.0, "2", None, 10**100])
 def test_invalid_provenance_depths_are_rejected(depth):
     with pytest.raises(EvidenceContractError):

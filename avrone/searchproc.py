@@ -21,15 +21,35 @@ from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
+    """Iterative top-down traversal avoids os.walk's recursive descent on deep trees."""
     if root.is_file():
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
-
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError:
+            continue
+        child_dirs: list[Path] = []
+        files: list[Path] = []
+        for entry in entries:
+            if entry.name in skip_names:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.path not in skip_paths:
+                        child_dirs.append(Path(entry.path))
+                else:
+                    files.append(Path(entry.path))
+            except OSError:
+                continue
+        # Match os.walk's top-down order: files in this directory, then sorted child dirs.
+        for file_path in files:
+            yield file_path
+        pending.extend(reversed(child_dirs))
 
 def run(req: dict, out) -> None:
     rx = re.compile(req["pattern"])

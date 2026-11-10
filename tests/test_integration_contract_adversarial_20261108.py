@@ -126,6 +126,29 @@ def test_validly_rehashed_unknown_nested_summary_field_is_still_rejected():
     assert verify_evidence_event(candidate)[0] is False
 
 
+def test_rehashed_nested_measurements_cannot_override_count_derived_snapshot():
+    import hashlib
+    from avrone.integration_contract import _canonical
+
+    original = event()
+    mutations = {
+        "failures": 0,
+        "runs": 18,
+        "p": 0.5,
+        "S": 0.25,
+        "orientation": "pass",
+        "runsFor95": 1,
+    }
+    for field, value in mutations.items():
+        candidate = copy.deepcopy(original)
+        candidate["evidence"][field] = value
+        body = {key: item for key, item in candidate.items() if key != "digest"}
+        candidate["digest"] = hashlib.sha256(_canonical(body)).hexdigest()
+        valid, reason = verify_evidence_event(candidate)
+        assert valid is False, field
+        assert reason
+
+
 def test_seeded_cross_field_mutation_sweep_never_accepts_stale_digest():
     rng = random.Random(20261108)
     fields = ("source", "run_id", "check_id", "refs", "capability_id", "human_root")

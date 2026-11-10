@@ -90,6 +90,8 @@ def test_trial_endpoint_has_a_hard_body_cap():
 
     assert max_body_bytes("/api/fleet/trials") == 256 * 1024
     assert max_body_bytes("/api/fleet/bridge/trials") == 256 * 1024
+    assert max_body_bytes("/avrone/api/fleet/trials") == 256 * 1024
+    assert max_body_bytes("/prefix/avrone/api/fleet/bridge/trials") == 256 * 1024
 
 
 def test_trial_endpoint_rejects_duplicate_json_keys(client):

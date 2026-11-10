@@ -73,6 +73,12 @@ def test_detection_count_handles_extreme_probabilities_without_cancellation():
         assert_minimal_detection_count(p, 0.05, count)
     assert runs_to_detect(1e-9, 0.05) == 2_995_732_273
 
+def test_detection_count_handles_subnormal_probability_and_confidence_together():
+    smallest = math.nextafter(0.0, 1.0)
+    count = runs_to_detect(smallest, smallest)
+    assert_minimal_detection_count(smallest, smallest, count)
+    assert count > 10**300
+
 
 def test_detection_count_is_monotone_in_failure_rate_and_confidence():
     probabilities = (1e-6, 1e-4, 0.01, 0.1, 0.5, 0.9, 0.999)

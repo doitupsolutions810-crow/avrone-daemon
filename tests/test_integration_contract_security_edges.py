@@ -9,6 +9,7 @@ import pytest
 from avrone.integration_contract import (
     EvidenceContractError,
     MAX_PROVENANCE_DEPTH,
+    MAX_REF,
     build_evidence_event,
     verify_evidence_event,
 )
@@ -38,15 +39,23 @@ def test_depth_upper_boundary_is_accepted_and_next_value_rejected():
         make(provenance_depth=MAX_PROVENANCE_DEPTH + 1, human_root="operator:ref")
 
 
-@pytest.mark.parametrize("separator", ["\\u2028", "\\u2029"])
+@pytest.mark.parametrize("unsafe", [
+    "\\u2028", "\\u2029", "\\u202e", "\\u2066", "\\u200b",
+    "\\u200d", "\\ufeff", "\\x00", "\\x85", "\\ud800",
+])
 @pytest.mark.parametrize("field", ["source", "run_id", "check_id", "capability_id", "human_root", "refs"])
-def test_machine_identifiers_reject_unicode_line_and_paragraph_separators(field, separator):
-    value = f"prefix{separator}suffix"
+def test_machine_identifiers_reject_controls_bidi_zero_width_and_separators(field, unsafe):
+    value = f"prefix{unsafe}suffix"
     kwargs = {field: [value] if field == "refs" else value}
     if field == "human_root":
         kwargs["provenance_depth"] = 1
     with pytest.raises(EvidenceContractError):
         make(**kwargs)
+
+
+def test_exact_maximum_human_root_length_is_accepted():
+    record = make(human_root="x" * MAX_REF, provenance_depth=1)
+    assert verify_evidence_event(record) == (True, "")
 
 
 def test_exact_maximum_human_root_length_is_accepted():

@@ -31,6 +31,10 @@ SQLite WAL storage is created under <data_dir>/trials/trials.sqlite3 with FULL s
 
 The store caps accepted trial rows at 100,000, receipts at 100,000, quarantine records at 1,000, and quarantined senders at 1,000. Capacity exhaustion fails closed. SQLite transaction rollback prevents a partially written envelope from becoming visible. The receiver does not delete or rewrite the existing Bridge journal.
 
+Storage hardening rejects symlinks anywhere in the database path's ancestor chain, non-regular database files, and pre-existing database files with multiple hard links. The database directory is restricted to mode 0700 and the database file to mode 0600. Strict request JSON rejects duplicate keys, non-finite and binary64-underflowing numbers, invalid UTF-8, unpaired surrogate values/keys, excessive nesting, and excessive node counts. The regression suite plants symlinks at SQLite's `-wal` and `-shm` sidecar paths and verifies that external sentinel targets remain unchanged.
+
+These are fail-closed checks against pre-existing path redirection. They do not eliminate every possible time-of-check/time-of-use race against a hostile local process that can mutate the receiver's private directory concurrently; keep that directory owner-private and isolate the service account.
+
 The signed from value is recorded separately from the envelope's source fields. It identifies a fleet sender assertion covered by the shared HMAC secret and sender allowlist; it is not a per-node public-key identity. Deployments that require stronger peer identity need a separate per-peer credential or mutually authenticated transport.
 
 ## Adapter boundaries

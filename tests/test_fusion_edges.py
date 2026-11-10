@@ -552,3 +552,130 @@ def test_mirror_spellings_are_suppressed(tmp_path):
     for case in cases:
         assert ledger.offer(case) == "suppressed"
     assert ledger.accounts()["A"] == 0 and ledger.accounts()["suppressed"] == 4
+
+
+def test_padded_and_leading_zero_content_lengths(client):
+    """4096 is in range. 0004097 is 4097 and is refused before the body is read."""
+
+    async def app(scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    mw = server.BodyLimit(app)
+
+    async def drive(length: bytes):
+        used = []
+
+        async def receive():
+            used.append(1)
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        sent = []
+
+        async def send(msg):
+            sent.append(msg)
+
+        scope = {"type": "http", "path": "/api/blackboard", "headers": [(b"content-length", length)]}
+        await mw(scope, receive, send)
+        return sent[0]["status"], used
+
+    assert asyncio.run(drive(b"0000000004096")) == (200, [1])
+    assert asyncio.run(drive(b"0004097")) == (413, [])
+    # The chat route uses the process cap. A second header over that cap still refuses.
+    chat_cap = server.max_body_bytes("/api/chat")
+
+    async def drive_chat():
+        used = []
+
+        async def receive():
+            used.append(1)
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        sent = []
+
+        async def send(msg):
+            sent.append(msg)
+
+        scope = {
+            "type": "http", "path": "/api/chat",
+            "headers": [(b"content-length", b"16"), (b"Content-Length", str(chat_cap + 1).encode())],
+        }
+        await mw(scope, receive, send)
+        return sent[0]["status"], used
+
+    assert asyncio.run(drive_chat()) == (413, [])
+
+
+def test_numeric_edges_and_a_bad_source_is_not_admitted(tmp_path):
+    raw = _event(eid="a.b:c-1", heat=0, cone_angle=-1, beta_t="")
+    raw["run_id"] = "R" * 100
+    kept, err = prepare_event(raw)
+    assert err is None
+    assert kept["payload"]["heat"] == 0
+    assert kept["payload"]["cone_angle"] == -1
+    assert kept["payload"]["beta_t"] == ""
+    assert len(kept["run_id"]) == 80
+    ledger = Ledger(tmp_path / "num.json", ManualClock())
+    assert ledger.offer(kept) == "accepted"
+    assert ledger.offer(_event(eid="bool-cone", cone_angle=True)) == "failed"
+    long_beta = "b" * 600
+    assert ledger.offer(_event(eid="long-beta", beta_t=long_beta)) == "failed"
+    blob = (tmp_path / "num.json").read_text(encoding="utf-8")
+    assert "b" * 100 not in blob
+    with pytest.raises(ValueError, match="bad source"):
+        ledger.offer(_event(eid="nope", source="AVRONE"))
+    # A bad kind on a valid id is an explicit failure, not a dropped offer.
+    assert ledger.offer({**_event(eid="kind"), "kind": "Finding"}) == "failed"
+    assert ledger.accounts()["A"] == 4
+    assert ledger.accounts()["F"] == 3 and ledger.accounts()["P"] == 1
+
+
+def test_409_is_permanent_and_204_is_delivered(tmp_path):
+    clock = ManualClock()
+
+    def transport(method, url, body, headers, timeout, status):
+        if method == "GET":
+            return HttpResult(200, {"boot": "b"}, None)
+        transport.posts += 1
+        transport.keys.append(headers.get("Idempotency-Key"))
+        return HttpResult(status, None, None)
+
+    transport.posts = 0
+    transport.keys = []
+    ledger = Ledger(tmp_path / "perm.json", clock)
+    ledger.offer(_event(eid="conflict"))
+    report = ledger.pump(lambda *a: transport(*a, 409), _cfg(), max_cycles=3)
+    assert report["F"] == 1 and report["P"] == 0 and transport.posts == 1
+    ledger.offer(_event(eid="empty-ok"))
+    report = ledger.pump(lambda *a: transport(*a, 204), _cfg(), max_cycles=1)
+    assert report["D"] == 1 and report["F"] == 1 and report["A"] == 2
+    assert transport.keys == ["conflict", "empty-ok"]
+
+
+def test_threshold_zero_does_not_open_and_a_short_deadline_leaves_the_second_pending(tmp_path):
+    clock = ManualClock()
+    tape = Tape(clock, ["timeout", "timeout", "200"])
+    ledger = Ledger(tmp_path / "thr.json", clock)
+    ledger.offer(_event(eid="open"))
+    report = ledger.pump(tape, _cfg(deadline=0, breaker_threshold=0, breaker_cooldown=30), max_cycles=3)
+    assert report["D"] == 1 and tape.posts == 3
+    assert ledger.breaker_for("http://127.0.0.1:8090").is_open(clock.t) is False
+
+    clock = ManualClock()
+    order = []
+
+    def transport(method, url, body, headers, timeout):
+        if method == "GET":
+            return HttpResult(200, {"boot": "b"}, None)
+        order.append(json.loads(body)["id"])
+        clock.sleep(0.2)
+        return HttpResult(200, {"accepted": True, "duplicate": False}, None)
+
+    ledger = Ledger(tmp_path / "two.json", clock)
+    ledger.offer(_event(eid="first"))
+    ledger.offer(_event(eid="second"))
+    report = ledger.pump(transport, _cfg(deadline=0.24, timeout=1), max_cycles=1)
+    assert order == ["first"]
+    assert report["D"] == 1 and report["P"] == 1 and report["F"] == 0
+    assert report["A"] == report["D"] + report["P"] + report["F"]

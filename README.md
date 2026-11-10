@@ -81,6 +81,12 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.124: Round 131: a checkpoint claim file cannot be a planted symlink. 5,966 tests + 19 integration
+
+- **Bug.** `checkpoint.claim` opened `<file>.claim` with `os.open(O_RDWR|O_CREAT)` and no `O_NOFOLLOW`. Round 102 had already closed that hole for `<file>.lock` and `fleet_nonces.json.lock`. `.claim` was still the old open. A symlink planted in the data directory (an agent's shell can write there) was followed: a dangling link created its target anywhere the daemon could write, and the flock landed on that file. A FIFO, socket or directory was swallowed as "no flock here", so the checkpoint was marked busy with no cross-process exclusion. Two processes could then resume the same squad checkpoint.
+- **Fix.** The claim file is opened through `safeio._open_regular` (`O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, then `fstat` must say regular, mode `0o600`). Anything else raises `CheckpointConflict` and does not mark the checkpoint busy, so the claim can be retried once the path is a normal file. A lock held by another live process is still an immediate conflict. A missing parent directory is still created. Other open errors stay best-effort and in-process only, as before.
+- **Tests.** `tests/test_round131_claim_file.py` (8). On v0.123 the dangling-symlink case creates the link target and returns a live claim. The others cover an existing target held with `LOCK_EX`, a FIFO, a directory, a Unix socket, retry after the bad name is removed, mode `0600` plus close-on-exec, a name swapped for a symlink after release, and eight concurrent claims with one winner.
+
 ## v0.123: Round 130: a model's non-finite "final" renders as valid text. 5,957 tests + 19 integration
 
 - **Bug** (probe `llmfuzz.py`, cases `final_num` and `final_nan`): a model reply of `{"final": 1e999}` answered `"Infinity"`, and `{"final": {"x": NaN}}` answered `{"x": NaN}`, which is not valid JSON.

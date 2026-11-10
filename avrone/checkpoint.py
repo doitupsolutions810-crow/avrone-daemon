@@ -495,14 +495,26 @@ def claim(path: str | Path) -> Any:
         # ...and not by a job in ANOTHER process on this data dir (the in-process set cannot see it).
         # A non-blocking flock on <ckpt>.claim: the kernel drops it if that process dies, so a crash
         # never leaves the checkpoint stuck "in use".
+        # Round 131: the same open used to follow a symlink (O_RDWR|O_CREAT created the link's
+        # target anywhere the daemon could write, then flock'ed that file) and treated a FIFO,
+        # socket or directory as "no flock here", so claim() succeeded with no cross-process
+        # exclusion. A non-regular claim file is a conflict, not a best-effort in-process claim.
         fd = None
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(str(path) + ".claim", os.O_RDWR | os.O_CREAT, 0o600)
+            from .safeio import NotRegularFile, _open_regular
+            try:
+                fd = _open_regular(str(path) + ".claim", os.O_RDWR | os.O_CREAT, 0o600)
+            except NotRegularFile as e:
+                raise CheckpointConflict(
+                    f"checkpoint {Path(path).stem!r} claim file is not a regular file") from e
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except CheckpointConflict:
+            raise
         except BlockingIOError:
             os.close(fd)
+            fd = None
             raise CheckpointConflict(f"checkpoint {Path(path).stem!r} is in use by a job in another process") from None
         except (OSError, ImportError):
             if fd is not None:

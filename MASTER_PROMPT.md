@@ -108,7 +108,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 320 test files, offline by default
+├── tests/                  # 324 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -117,14 +117,17 @@ Avrone/
 │   ├── calculator.py
 │   ├── datetime_tool.py
 │   ├── json_tool.py
+│   ├── platform_bridge.py
 ├── scripts/
 │   ├── AVRONE-HANDOFF.md
+│   ├── __pycache__
 │   ├── avrone-state
 │   ├── mac-avrone-autopilot.sh
 │   ├── mac-local-squad.sh
 │   ├── verify-grok-bridge.sh
 │   ├── verify_fusion_daemon.py
 │   ├── verify_fusion_daemon.sh
+│   ├── verify_runtime_bridge.py
 ├── deploy/
 │   ├── full.env
 │   ├── openclaw.json5

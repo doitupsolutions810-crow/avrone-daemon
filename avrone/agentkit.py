@@ -23,6 +23,8 @@ import hashlib
 import math
 import os
 import re
+
+from . import textsafe as _textsafe
 import time
 from collections import Counter
 from pathlib import Path
@@ -656,7 +658,7 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
                      f"{' - ' + _one_line(t['note']) if t.get('note') else ''}" for t in board) or "board empty"
 
 
-_CTRL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+_CTRL = _textsafe.UNSAFE_RUN
 
 
 def _one_line(v: Any) -> str:

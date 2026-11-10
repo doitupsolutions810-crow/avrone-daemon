@@ -23,6 +23,8 @@ run's bridge file and data_dir/memory.jsonl.
 from __future__ import annotations
 
 import re
+
+from . import textsafe as _textsafe
 from typing import TYPE_CHECKING, Any
 
 from . import bridge as bridgemod
@@ -112,7 +114,7 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if kind not in RESEARCH_NOTE_KINDS:
         return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
     topic = args.get("topic")
-    topic = "" if topic is None else re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", _no_surrogates(str(topic))).strip()
+    topic = "" if topic is None else _textsafe.UNSAFE_ONE.sub(" ", _no_surrogates(str(topic))).strip()
     if len(topic) > RESEARCH_NOTE_MAX_TOPIC:
         return f"ERROR: topic is longer than {RESEARCH_NOTE_MAX_TOPIC} chars"
     text = redact_text(raw.strip())

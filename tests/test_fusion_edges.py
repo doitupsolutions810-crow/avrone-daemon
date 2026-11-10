@@ -573,6 +573,23 @@ def test_duplicate_true_counts_as_delivered_once(tmp_path):
     assert ledger.pump(transport, _cfg(), max_cycles=1)["calls"] == 0
 
 
+def test_bidi_override_is_stored_on_the_board_and_rejected_in_beta_t(client, tmp_path):
+    """Round 136 strips U+202E from one-line displays. The blackboard keeps the
+    character in the stored post. beta_t rejects it because it is category Cf.
+    one_line, which the bridge uses when printing a post, collapses it."""
+    from avrone.tools import one_line
+    raw = '{"id":"bidi-1","text":"ok\\u202eevil","ts":4}'.encode()
+    r = client.post("/api/blackboard", content=raw, headers=AUTH)
+    assert r.status_code == 200, r.text
+    text = client.get("/api/blackboard", headers=AUTH).json()["posts"][0]["text"]
+    assert "\u202e" in text
+    assert "\u202e" not in one_line(text)
+    ledger = Ledger(tmp_path / "bidi.json", ManualClock())
+    assert ledger.offer(_event(eid="bidi", beta_t="ok\u202eevil")) == "failed"
+    assert "\u202e" not in (tmp_path / "bidi.json").read_text(encoding="utf-8")
+    assert ledger.accounts()["F"] == 1 and ledger.accounts()["P"] == 0
+
+
 def test_float_boot_does_not_look_like_a_restart(tmp_path):
     """A JSON number that is not an int is not a boot id. The same 1.5 twice
     must not resend, and must not flap against the string \"1.5\"."""

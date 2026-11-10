@@ -760,6 +760,10 @@ class Ledger:
                 "Idempotency-Key": event["id"],
             }
             if config.token:
+                if _header_unsafe(config.token):
+                    with self._lock:
+                        self.save()
+                    return "auth", calls
                 headers["X-Admin-Token"] = config.token
             timeout = self._call_timeout(config, start)
             result = transport("POST", _join(config.base, config.events_path), body, headers, timeout)
@@ -809,7 +813,14 @@ class Ledger:
         self.save()
 
 
+def _header_unsafe(value: str) -> bool:
+    """CR, LF, or NUL in a header value is not a token. It is not a dead peer."""
+    return any(ch in value for ch in "\r\n\x00")
+
+
 def _classify(result: HttpResult) -> str:
+    if result.error == "bad-header":
+        return "auth"
     if result.error in {"timeout", "refused"}:
         return "dial"
     if result.error:
@@ -842,6 +853,8 @@ def _join(base: str, path: str) -> str:
 def httpx_transport(method: str, url: str, body: bytes | None, headers: dict[str, str], timeout: float) -> HttpResult:
     """One real HTTP call. ``trust_env`` is off so an HTTP proxy cannot swallow loopback."""
     import httpx
+    if any(_header_unsafe(value) for value in headers.values()):
+        return HttpResult(0, None, "bad-header")
     try:
         with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
             response = client.request(method, url, content=body, headers=headers)

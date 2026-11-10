@@ -40,6 +40,10 @@ from .fusion_loopback import origin_key
 
 MAX_BODY = 4096
 FIELD_BUDGET = 512
+# Stay far under CPython's recursion limit. json.dumps on a deeper tree raises
+# RecursionError, and on 3.11 catching that error leaves the recursion counter
+# high enough that a later deep walk in the same process fails immediately.
+MAX_NESTING = 32
 SOURCES = ("avrone", "cyclekernal", "greatscale")
 KINDS = ("finding", "question", "answer", "correction", "conclusion", "mood", "evidence", "health")
 RESEND_ON_CK_BOOT = frozenset({"avrone", "greatscale"})
@@ -275,8 +279,31 @@ def _check_known_fields(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _nesting_too_deep(value: Any, limit: int = MAX_NESTING) -> bool:
+    """Iterative depth and cycle check. This function does not recurse."""
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    seen: set[int] = set()
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        if not isinstance(node, (dict, list, tuple)):
+            continue
+        mark = id(node)
+        if mark in seen:
+            return True
+        seen.add(mark)
+        children = node.values() if isinstance(node, dict) else node
+        for child in children:
+            if isinstance(child, (dict, list, tuple)):
+                stack.append((child, depth + 1))
+    return False
+
+
 def _payload_too_big(payload: dict[str, Any]) -> bool:
     for value in payload.values():
+        if _nesting_too_deep(value):
+            return True
         try:
             if len(_canonical(value)) > FIELD_BUDGET:
                 return True
@@ -285,8 +312,16 @@ def _payload_too_big(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _wire_bytes(event: dict[str, Any]) -> bytes:
-    return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+def _wire_bytes(event: dict[str, Any]) -> bytes | None:
+    """UTF-8 JSON, or None when the document cannot be encoded.
+
+    A lone surrogate is valid in a Python str and in JSON ``\\u`` escapes, and
+    it is not valid UTF-8. The peer would never see those bytes.
+    """
+    try:
+        return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except (UnicodeError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
 
 
 def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any] | None, str | None]:
@@ -330,7 +365,10 @@ def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any
         "payload": payload,
         "ts": ts,
     }
-    if len(_wire_bytes(event)) > max_body:
+    raw = _wire_bytes(event)
+    if raw is None:
+        return None, "request body is not valid UTF-8"
+    if len(raw) > max_body:
         return None, "request body too large (max 4096 bytes)"
     return event, None
 
@@ -620,8 +658,9 @@ class Ledger:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             from .safeio import atomic_write
-            atomic_write(self.path, json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        except OSError:
+            atomic_write(self.path, json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
+                         encoding="utf-8")
+        except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
             return
 
     def pump(self, transport: Transport, config: DeliverConfig | None = None, *, max_cycles: int = 8) -> dict[str, Any]:
@@ -708,6 +747,10 @@ class Ledger:
                 return "stopped", calls
             event = row["event"]
             body = _wire_bytes(event)
+            if body is None:
+                with self._lock:
+                    self._fail(row, 400, "request body is not valid UTF-8")
+                return "failed", calls
             if len(body) > config.max_body:
                 with self._lock:
                     self._fail(row, 413, "request body too large (max 4096 bytes)")
@@ -717,6 +760,10 @@ class Ledger:
                 "Idempotency-Key": event["id"],
             }
             if config.token:
+                if _header_unsafe(config.token):
+                    with self._lock:
+                        self.save()
+                    return "auth", calls
                 headers["X-Admin-Token"] = config.token
             timeout = self._call_timeout(config, start)
             result = transport("POST", _join(config.base, config.events_path), body, headers, timeout)
@@ -766,7 +813,14 @@ class Ledger:
         self.save()
 
 
+def _header_unsafe(value: str) -> bool:
+    """CR, LF, or NUL in a header value is not a token. It is not a dead peer."""
+    return any(ch in value for ch in "\r\n\x00")
+
+
 def _classify(result: HttpResult) -> str:
+    if result.error == "bad-header":
+        return "auth"
     if result.error in {"timeout", "refused"}:
         return "dial"
     if result.error:
@@ -784,6 +838,10 @@ def _classify(result: HttpResult) -> str:
         return "status5xx"
     if 400 <= status < 500:
         return "permanent"
+    if 300 <= status < 400:
+        # Not a 2xx ack and not a dead socket. Do not open the breaker, and do
+        # not follow the Location: the admin token must stay on this origin.
+        return "status3xx"
     return "dial"
 
 
@@ -795,8 +853,10 @@ def _join(base: str, path: str) -> str:
 def httpx_transport(method: str, url: str, body: bytes | None, headers: dict[str, str], timeout: float) -> HttpResult:
     """One real HTTP call. ``trust_env`` is off so an HTTP proxy cannot swallow loopback."""
     import httpx
+    if any(_header_unsafe(value) for value in headers.values()):
+        return HttpResult(0, None, "bad-header")
     try:
-        with httpx.Client(timeout=timeout, trust_env=False) as client:
+        with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
             response = client.request(method, url, content=body, headers=headers)
     except httpx.TimeoutException:
         return HttpResult(0, None, "timeout")

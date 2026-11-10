@@ -42,13 +42,21 @@ def normalize_blackboard_post(data: Any) -> tuple[dict[str, Any] | None, str | N
     if not text:
         return None, "text is required"
     raw_id = data.get("id")
-    if raw_id not in (None, ""):
-        pid = str(raw_id)
-        if not _ID_RE.match(pid):
-            return None, "bad post id"
-    else:
+    if raw_id in (None, ""):
         pid = uuid.uuid4().hex[:12]
-    run_id = str(data.get("run_id") or "run")[:80]
+    elif not isinstance(raw_id, str) or not _ID_RE.match(raw_id):
+        # A JSON number or bool is not an id. str(True) would be "True" and
+        # str(1.0) would be "1.0", both of which match the character pattern.
+        return None, "bad post id"
+    else:
+        pid = raw_id
+    raw_run = data.get("run_id", None)
+    if raw_run is None:
+        run_id = "run"
+    elif not isinstance(raw_run, str):
+        return None, "bad run id"
+    else:
+        run_id = raw_run[:80] or "run"
     return {
         "id": pid,
         "run_id": run_id or "run",
@@ -56,10 +64,22 @@ def normalize_blackboard_post(data: Any) -> tuple[dict[str, Any] | None, str | N
         "role": str(data.get("role") or "")[:60],
         "kind": kind,
         "text": text,
-        "refs": _refs(data.get("refs")),
+        "refs": _string_refs(data.get("refs")),
         "ts": _remote_ts(data.get("ts")),
         "origin_node": str(data.get("origin_node") or "local")[:80],
     }, None
+
+
+def _string_refs(refs: Any) -> list[str]:
+    """Refs the peer actually sent as strings. ``true`` and ``1`` are not ids.
+
+    ``_refs`` stringifies every entry, so a JSON bool would be stored as ``True``.
+    """
+    if isinstance(refs, str):
+        return _refs(refs)
+    if isinstance(refs, (list, tuple)):
+        return _refs([item for item in refs if isinstance(item, str)])
+    return []
 
 
 def _data_dir(core: Any) -> Path | None:

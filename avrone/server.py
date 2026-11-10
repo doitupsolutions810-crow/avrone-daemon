@@ -218,6 +218,25 @@ class _BodyTooLarge(Exception):
     pass
 
 
+def _content_length_over(headers, limit: int) -> bool:
+    """True when any well-formed Content-Length is over the cap.
+
+    A second, smaller length must not hide a larger one. ``+10``, ``-1``, and
+    ``zz`` are not byte counts: they are ignored and the body is counted as it
+    streams, which is what a single bad header already did. Surrounding spaces
+    are stripped, so ``10`` and ``10 `` are the same size. No header means
+    chunked, which is counted as it streams.
+    """
+    over = False
+    for key, value in headers:
+        if key.lower() != b"content-length":
+            continue
+        text = value.decode("latin-1").strip()
+        if text.isdigit() and int(text) > limit:
+            over = True
+    return over
+
+
 class BodyLimit:
     """ASGI guard: refuse an oversized request body with 413 before it is buffered. Routes read the
     whole body before auth (HMAC needs it; pydantic parses it), so without this an unauthenticated
@@ -233,14 +252,7 @@ class BodyLimit:
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         limit = max_body_bytes(path)
-        declared = None
-        for k, v in scope.get("headers") or ():
-            if k.lower() == b"content-length":
-                try:
-                    declared = int(v)
-                except ValueError:
-                    declared = None
-        if declared is not None and declared > limit:
+        if _content_length_over(scope.get("headers") or (), limit):
             return await self._refuse(send, limit, path)
         seen = 0
         started = False

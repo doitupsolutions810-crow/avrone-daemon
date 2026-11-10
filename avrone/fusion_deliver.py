@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -401,9 +402,14 @@ class Ledger:
         self.state_errors = 0
         self.suppressed = 0
         self._breakers: dict[str, Breaker] = {}
+        self._lock = threading.RLock()
         self.load()
 
     def accounts(self) -> dict[str, int]:
+        with self._lock:
+            return self._accounts()
+
+    def _accounts(self) -> dict[str, int]:
         states = [row["state"] for row in self.entries.values()]
         admitted = len(states)
         delivered = states.count("delivered")
@@ -426,6 +432,10 @@ class Ledger:
         Duplicate keeps the first payload. Failed is an explicit permanent
         failure (the body cannot fit) and is part of A and F, not a drop.
         """
+        with self._lock:
+            return self._offer(data)
+
+    def _offer(self, data: Any) -> str:
         if isinstance(data, dict) and is_mirror(data):
             self.suppressed += 1
             return "suppressed"
@@ -469,6 +479,10 @@ class Ledger:
         deliveries are requeued when CycleKernal restarts; explicit failures
         stay failed because the payload itself was refused.
         """
+        with self._lock:
+            return self._note_boot(peer, boot)
+
+    def _note_boot(self, peer: str, boot: Any) -> bool:
         if boot is None or boot == "":
             return False
         if isinstance(boot, bool) or not isinstance(boot, (str, int)):
@@ -564,10 +578,17 @@ class Ledger:
             return None
         if state == "pending" and not isinstance(event, dict):
             return None
-        try:
-            attempts = int(row.get("attempts") or 0)
-        except (TypeError, ValueError):
+        attempts_raw = row.get("attempts") or 0
+        if isinstance(attempts_raw, bool):
             attempts = 0
+        else:
+            try:
+                attempts = int(attempts_raw)
+            except (TypeError, ValueError):
+                attempts = 0
+        status = row.get("status")
+        if isinstance(status, bool) or not isinstance(status, int):
+            status = None
         return {
             "source": source,
             "id": eid,
@@ -575,7 +596,7 @@ class Ledger:
             "event": event,
             "detail": row.get("detail") if isinstance(row.get("detail"), str) else None,
             "attempts": max(0, attempts),
-            "status": row.get("status") if isinstance(row.get("status"), int) else None,
+            "status": status,
         }
 
     def _discard(self) -> None:
@@ -614,9 +635,12 @@ class Ledger:
             cycles += 1
             made, used = self._cycle(transport, config)
             calls += used
-            if self.accounts()["P"] == 0 or not made:
+            with self._lock:
+                idle = self._accounts()["P"] == 0
+            if idle or not made:
                 break
-        report = self.accounts()
+        with self._lock:
+            report = self._accounts()
         report["cycles"] = cycles
         report["calls"] = calls
         report["clock_s"] = self.clock.now() if isinstance(self.clock, ManualClock) else None
@@ -628,7 +652,9 @@ class Ledger:
         progressed = False
         self._probe_health(transport, config, start)
         breaker = self.breaker_for(config.base)
-        pending = [row for row in self.entries.values() if row["state"] == "pending" and isinstance(row.get("event"), dict)]
+        with self._lock:
+            pending = [row for row in self.entries.values()
+                       if row["state"] == "pending" and isinstance(row.get("event"), dict)]
         for row in pending:
             if row["state"] != "pending":
                 continue
@@ -681,7 +707,8 @@ class Ledger:
             event = row["event"]
             body = _wire_bytes(event)
             if len(body) > config.max_body:
-                self._fail(row, 413, "request body too large (max 4096 bytes)")
+                with self._lock:
+                    self._fail(row, 413, "request body too large (max 4096 bytes)")
                 return "failed", calls
             headers = {
                 "Content-Type": "application/json",
@@ -692,41 +719,40 @@ class Ledger:
             timeout = self._call_timeout(config, start)
             result = transport("POST", _join(config.base, config.events_path), body, headers, timeout)
             calls += 1
-            row["attempts"] = int(row["attempts"]) + 1
-            kind = _classify(result)
-            if kind == "delivered":
-                row["state"] = "delivered"
-                row["status"] = result.status
-                row["detail"] = None
-                self.cursor = event["id"]
-                breaker.record_success()
-                self.save()
-                return "delivered", calls
-            if kind == "permanent":
-                detail = ""
-                if isinstance(result.body, dict) and isinstance(result.body.get("detail"), str):
-                    detail = result.body["detail"]
-                self._fail(row, result.status, detail or "permanent")
-                return "failed", calls
-            if kind == "dial":
-                breaker.record_dial_failure(self.clock.now(), config.breaker_threshold, config.breaker_cooldown)
-                self.save()
-                return "retry", calls
-            if kind == "auth":
-                self.save()
-                return "auth", calls
-            # 429 and 500 share the exponential cap. Neither opens the breaker.
-            # 404/405 wait interval. A usable Retry-After replaces the schedule.
-            # The exponent follows this key's attempt count, across cycles.
-            if kind == "status429":
-                honored = parse_retry_after(result.retry_after)
-                delay = honored if honored is not None else retry_delay("status429", row["attempts"], config)
-            elif kind == "status5xx":
-                delay = retry_delay("status429", row["attempts"], config)
-            else:
-                delay = retry_delay(kind, row["attempts"], config)
+            with self._lock:
+                row["attempts"] = int(row["attempts"]) + 1
+                kind = _classify(result)
+                if kind == "delivered":
+                    row["state"] = "delivered"
+                    row["status"] = result.status
+                    row["detail"] = None
+                    self.cursor = event["id"]
+                    breaker.record_success()
+                    self.save()
+                    return "delivered", calls
+                if kind == "permanent":
+                    detail = ""
+                    if isinstance(result.body, dict) and isinstance(result.body.get("detail"), str):
+                        detail = result.body["detail"]
+                    self._fail(row, result.status, detail or "permanent")
+                    return "failed", calls
+                if kind == "dial":
+                    breaker.record_dial_failure(self.clock.now(), config.breaker_threshold, config.breaker_cooldown)
+                    self.save()
+                    return "retry", calls
+                if kind == "auth":
+                    self.save()
+                    return "auth", calls
+                if kind == "status429":
+                    honored = parse_retry_after(result.retry_after)
+                    delay = honored if honored is not None else retry_delay("status429", row["attempts"], config)
+                elif kind == "status5xx":
+                    delay = retry_delay("status429", row["attempts"], config)
+                else:
+                    delay = retry_delay(kind, row["attempts"], config)
             self.clock.sleep(delay)
-            self.save()
+            with self._lock:
+                self.save()
             if kind != "status429":
                 return "retry", calls
         return "stopped", calls

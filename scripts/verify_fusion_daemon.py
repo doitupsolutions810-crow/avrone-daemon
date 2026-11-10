@@ -22,6 +22,7 @@ TESTS = [
     "tests/test_fusion_blackboard.py",
     "tests/test_fusion_deliver.py",
     "tests/test_fusion_smoke.py",
+    "tests/test_fusion_edges.py",
 ]
 EVIDENCE = Path(os.environ.get("FUSION_EVIDENCE_PATH", "/tmp/fusion-daemon-evidence.json"))
 

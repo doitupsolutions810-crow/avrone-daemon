@@ -77,6 +77,8 @@ def test_strict_json_rejects_overflowing_exponent_and_nested_duplicate_keys():
     with pytest.raises(ValueError, match="unambiguous"):
         strict_json_loads(b'{"value":1e999}')
     with pytest.raises(ValueError, match="unambiguous"):
+        strict_json_loads(b'{"value":1e-999}')
+    with pytest.raises(ValueError, match="unambiguous"):
         strict_json_loads(b'{"outer":{"key":1,"key":2}}')
 
 
@@ -748,6 +750,7 @@ def test_store_rejects_hardlinked_existing_database_without_mutating_original(tm
 
 @pytest.mark.parametrize("sidecar", ["-wal", "-shm"])
 def test_sqlite_sidecar_symlink_never_modifies_external_target(tmp_path, sidecar):
+    from pathlib import Path
     path = tmp_path / "trials.sqlite3"
     TrialStore(path)
     target = tmp_path / "external-sentinel.bin"

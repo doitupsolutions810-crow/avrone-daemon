@@ -219,6 +219,8 @@ class Settings:
 
     # --- Access control ---
     admin_token: str = field(default_factory=_env("AVRONE_ADMIN_TOKEN"))
+    # Rotation grace for /api/blackboard only. Kept verbatim: os.getenv does not strip.
+    admin_token_previous: str = field(default_factory=_env("AVRONE_ADMIN_TOKEN_PREVIOUS"))
     agents_can_shell: bool = field(default_factory=_bool("AVRONE_AGENTS_CAN_SHELL", True))
 
     # --- Eternal CodeX (persistent logs and memory) ---

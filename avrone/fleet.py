@@ -526,6 +526,7 @@ def kind_capabilities(kind: str) -> set[str]:
 
 
 
+FLEET_JSON_READ_TRIES = 3  # round 143: transient read errors at boot
 FLEET_JSON_MAX_BYTES = 64 * 1024 * 1024
 NONCE_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
 
@@ -809,18 +810,33 @@ class FleetManager:
         node from booting: it is moved aside as fleet.json.corrupt-<ts> and the node starts fresh."""
         if not self.path.exists():
             return {}
-        from .safeio import read_capped
-        try:  # round 85: a FIFO here blocked FleetManager() (node boot) forever in read_text()
-            raw = read_capped(self.path, FLEET_JSON_MAX_BYTES)
-            if raw is None:  # a symlink or special file: never read, never renamed
-                log.warning("fleet.json is not a regular file; starting with an empty registry")
-                return {}
-            saved = _jloads(raw.decode("utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
-            saved = None
+        from .safeio import FileTooBig, read_capped
+        kind = "corrupt"
+        for attempt in range(FLEET_JSON_READ_TRIES):
+            try:  # round 85: a FIFO here blocked FleetManager() (node boot) forever in read_text()
+                raw = read_capped(self.path, FLEET_JSON_MAX_BYTES)
+                if raw is None:  # a symlink or special file: never read, never renamed
+                    log.warning("fleet.json is not a regular file; starting with an empty registry")
+                    return {}
+                saved = _jloads(raw.decode("utf-8"))
+            except FileTooBig:
+                saved, kind = None, "toobig"
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                saved = None
+            except OSError as e:
+                # Round 143: a transient read error (EMFILE, EIO, EACCES) used to count as corrupt:
+                # the file was moved aside and the node booted with a new random node_id and no
+                # peers. The id is the node's identity (fleet checkpoints are keyed by it), so retry,
+                # then refuse to boot rather than become a different node.
+                if attempt + 1 < FLEET_JSON_READ_TRIES:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"fleet.json could not be read ({e.strerror or type(e).__name__}); "
+                                   "not starting with a new node identity. Fix the data dir and restart") from None
+            break
         if isinstance(saved, dict):
             return saved
-        aside = self.path.with_name(f"{self.path.name}.corrupt-{int(time.time())}")
+        aside = self.path.with_name(f"{self.path.name}.{kind}-{int(time.time())}")
         try:
             os.replace(self.path, aside)
         except OSError:

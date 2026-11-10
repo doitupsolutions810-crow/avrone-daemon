@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.136: Round 143: a transient fleet.json read error never gives a node a new identity. 6,679 tests + 19 integration
+
+- **Bug** (`FleetManager._load_saved`):
+  - Any OSError at boot (EMFILE, EIO, EACCES) was treated like a corrupt file.
+  - `fleet.json` was moved aside, and the node came up with a new random `node_id` and no peers. Fleet checkpoints and peer records are keyed by that id.
+- **Fix:**
+  - A read error is retried up to `FLEET_JSON_READ_TRIES` (3) times, with short backoff.
+  - If it still fails, the node raises `RuntimeError` and refuses to boot, leaving the file untouched.
+  - An oversized file is now set aside as `.toobig-<ts>`, not `.corrupt-<ts>`. `test_round85` was updated to accept either name.
+- **Tests:** `tests/test_round143_fleet_identity.py` (4). 3 fail on v0.135.
+
 ## v0.135: Round 142: an unreadable checkpoint is not a free checkpoint. 6,675 tests + 19 integration
 
 - **Bug** (`checkpoint._read`, which returned None on any OSError):

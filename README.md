@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.126: Round 133: task_board edge cases. 5,999 tests + 19 integration
+
+- **Ids:** `op=update` now goes through `_board_id`. Before:
+  - `id: 1e999` raised `OverflowError`.
+  - `1.7` and `true` silently updated task 1.
+  - `"²"` crashed `int()`.
+
+  Now it accepts an int, a whole-number float or an ASCII digit string, and rejects anything else with `ERROR: op=update needs an integer id`.
+- **Board entries:** entries without a plain int id (`"id": "9"`, `true`, or non-dicts from a hand-edited or older board) used to be deleted from the file on the next write. They are now kept as they are, but left out of the listing and the id space.
+- **Listing:** a newline (or other control or line-separator character) in a title, note, owner or status printed lines that read as other tasks. Every field now shows on one line.
+- **Owner:** `owner: null` used to save as `"None"`. It now defaults to the caller, and is capped at 200 characters.
+- **Tests:** `tests/test_round133_task_board_edges.py` (16). 6 fail on v0.125.
+
 ## v0.125: Round 132: junk lesson timestamps no longer break or skew lesson_recall. 5,983 tests + 19 integration
 
 - **Bug:** `lesson_recall`'s `age()` called `int()` on the timestamp. NaN raised `ValueError` and ±inf raised `OverflowError`, and the caller caught neither. So one lesson whose ts was `"inf"` failed the whole recall with `ERROR: OverflowError`. Such a ts comes from a hand-edited or old store, because memstore's merge already guards peer syncs.

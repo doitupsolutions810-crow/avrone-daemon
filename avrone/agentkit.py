@@ -611,7 +611,11 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
         board, bad = [], True
     if not isinstance(board, list):
         board, bad = [], True
-    board = [t for t in board if isinstance(t, dict) and isinstance(t.get("id"), int)]
+    # round 133: entries without a plain int id (a hand-edited or older board: "id": "3", true,
+    # a non-dict) were dropped from the file on the next write; they are now kept as they were
+    # and only left out of the listing and the id space
+    keep = [t for t in board if not _board_task(t)]
+    board = [t for t in board if _board_task(t)]
     op = str(args.get("op", "list"))
     if op == "add":
         title = str(args.get("title") or "").strip()
@@ -620,12 +624,12 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
         if len(board) >= MAX_BOARD_TASKS:  # every op rewrites and lists the whole board
             return f"ERROR: the board is full ({MAX_BOARD_TASKS} tasks); update existing ones instead"
         item = {"id": max((t["id"] for t in board), default=0) + 1, "title": title[:200], "status": "todo",
-                "owner": str(args.get("owner", ctx.name)), "note": "", "by": ctx.name}
+                "owner": str(ctx.name if args.get("owner") is None else args["owner"])[:200],
+                "note": "", "by": ctx.name}
         board.append(item)
     elif op == "update":
-        try:
-            tid = int(args.get("id"))
-        except (TypeError, ValueError):
+        tid = _board_id(args.get("id"))
+        if tid is None:  # round 133: 1e999 raised OverflowError, 1.7 updated task 1, true task 1
             return "ERROR: op=update needs an integer id"
         item = next((t for t in board if t["id"] == tid), None)
         if not item:
@@ -642,11 +646,38 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
             except OSError:
                 pass
         from .safeio import atomic_write  # random temp name: a planted .board.<pid>.tmp link is never followed
-        atomic_write(p, json.dumps(board, indent=1))  # atomic: a crash never leaves a half-written board
+        atomic_write(p, json.dumps(board + keep, indent=1))  # atomic: a crash never leaves a half-written board
     if op != "list":
         _emit(ctx, "task.board", op=op, board=board[-10:])
-    return "\n".join(f"#{t['id']} [{t.get('status', '?')}] {t.get('title', '')} (owner {t.get('owner', '?')})"
-                     f"{' - ' + str(t['note']) if t.get('note') else ''}" for t in board) or "board empty"
+    # round 133: a newline in a title/note/owner/status printed lines that read as other tasks
+    # ("x\n#7 [done] deploy (owner Lead)"); fields are now shown on one line
+    return "\n".join(f"#{t['id']} [{_one_line(t.get('status', '?'))}] {_one_line(t.get('title', ''))} "
+                     f"(owner {_one_line(t.get('owner', '?'))})"
+                     f"{' - ' + _one_line(t['note']) if t.get('note') else ''}" for t in board) or "board empty"
+
+
+_CTRL = re.compile(r"[\x00-\x1f\x7f\u0085\u2028\u2029]+")
+
+
+def _one_line(v: Any) -> str:
+    return _CTRL.sub(" ", str(v))
+
+
+def _board_task(t: Any) -> bool:
+    return isinstance(t, dict) and type(t.get("id")) is int
+
+
+def _board_id(v: Any) -> int | None:
+    """A task id from tool args: an int, an integral finite float, or a digit string; else None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return int(v) if v.is_integer() else None  # is_integer() is False for inf and NaN
+    if isinstance(v, str) and re.fullmatch(r"-?[0-9]{1,18}", v.strip()):  # "²".isdigit() is True
+        return int(v.strip())
+    return None
 
 
 KIT_TOOLS = [

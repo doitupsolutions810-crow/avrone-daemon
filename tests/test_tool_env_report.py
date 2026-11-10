@@ -69,7 +69,8 @@ def test_json_and_prefix(env):
     assert d["settings"]["llm_api_key"] == "***set***"
     assert SECRET not in json.dumps(d)
     d2 = json.loads(call(env, format="json", prefix="AVRONE_ADMIN"))
-    assert d2["env"] == {"AVRONE_ADMIN_TOKEN": "***set***"} and d2["settings"] == {"admin_token": "***set***"}
+    assert d2["env"] == {"AVRONE_ADMIN_TOKEN": "***set***"}
+    assert d2["settings"] == {"admin_token": "***set***", "admin_token_previous": "unset"}
 
 
 @pytest.mark.parametrize("bad", ["../x", "a b", "AVRONE-*", "X" * 100, "$HOME"])

@@ -145,6 +145,10 @@ def test_non_string_ids_are_rejected(client):
     assert kept.status_code == 200 and kept.json()["duplicate"] is False
     ids = [p["id"] for p in client.get("/api/blackboard", headers=AUTH).json()["posts"]]
     assert "True" not in ids and "12" not in ids and "ok.id" in ids
+    # main's blackboard rejects a non-string run id instead of storing "7" or "True".
+    for bad_run in (7, True, ["run"]):
+        refused = client.post("/api/blackboard", json={"text": "n", "run_id": bad_run}, headers=AUTH)
+        assert refused.status_code == 400 and refused.json()["detail"] == "bad run id", bad_run
 
 
 def test_userinfo_and_empty_host_are_not_dialed():

@@ -89,6 +89,26 @@ A non-ASCII token was not sent through HTTP. `httpx` refuses to encode `café` a
 
 The library default threshold stays 0, so a caller that does not ask for the breaker is unchanged. The watch route turns it on.
 
+## Merge with main `253573d` (fusion contracts, PR #19)
+
+`git fetch origin main` then `git merge origin/main`. Two conflicted files.
+
+`MASTER_PROMPT.md` is simple. Both sides regenerated the module list and the test-file count. The merged tree has this branch's `fusion_peer.py` and main's `fusion_blackboard.py`, `fusion_deliver.py`, `fusion_loopback.py`, and `fusion_plane.py`. Regenerating the prompt lists all of them.
+
+`avrone/server.py` had four hunks. Three are simple and were resolved in favor of the stricter main text where it is a superset:
+
+- Duplicate `Content-Length` headers: any well-formed length over the cap is 413. `+10`, `-1`, and `zz` are not sizes.
+- The 413 sentence for `/api/blackboard` stays `request body too large (max 4096 bytes)`.
+- One `boot` id.
+
+The fourth hunk is the same grace token with two homes. Main reads `settings.admin_token_previous`. This branch reads the live environment. `require_blackboard_admin` accepts either. Empty still never matches, and other admin routes still ignore it.
+
+The complicated part is not a marker. Both sides registered `GET`/`POST /api/blackboard`. Main's `fusion_blackboard` rejects a non-string `run_id` and does not stringify bools into refs. This branch's `fusion_peer` coerced those. The HTTP route now calls `fusion_blackboard`, which is what main's tests require. `fusion_peer` still holds the watchdog (`/api/fusion`, `/api/fusion/watch`). Main's `fusion_deliver.Ledger.pump` is a separate outbound ledger with `(source, id)` dedup, Retry-After, and heat-field checks. Both outbound paths remain. They are not wired to each other. Running both would rely on CycleKernal's id dedup.
+
+A UTF-8 BOM is still stripped before JSON parse on the surviving route. main did not test that case.
+
+`python3 -m pytest -q tests/test_fusion_peer.py tests/test_fusion_peer_edges.py tests/test_fusion_peer_more.py tests/test_fusion_blackboard.py tests/test_fusion_edges.py tests/test_fusion_deliver.py tests/test_fusion_loopback.py tests/test_fusion_plane.py tests/test_master_prompt.py` — **170 passed** in 20.12s.
+
 ## Merge with main `0df6674` (v0.129.0)
 
 `git fetch origin main` then `git merge origin/main`. The only conflict was `MASTER_PROMPT.md`: both sides changed the generated test-file count (ours 300, main 303). That is a simple count, not two intents. Regenerating the file from the merged tree resolved it.

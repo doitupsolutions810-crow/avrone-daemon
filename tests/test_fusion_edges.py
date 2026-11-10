@@ -799,9 +799,13 @@ def test_surrogate_circular_and_deep_payloads_are_failures_not_crashes(tmp_path)
     raw = _event(eid="circle")
     raw["payload"] = {"text": "x", "loop": circle}
     assert ledger.offer(raw) == "failed"
+    # Deeper than MAX_NESTING (32) and far below CPython's recursion limit.
+    # A 2000-deep tree makes json.dumps raise RecursionError; on 3.11 that
+    # leaves the recursion counter high and the next deep walk in the process
+    # fails (test_round114_deep_paths).
     node: dict = {"n": 0}
     cursor = node
-    for _ in range(2000):
+    for _ in range(40):
         cursor["down"] = {}
         cursor = cursor["down"]
     deep = _event(eid="deep")

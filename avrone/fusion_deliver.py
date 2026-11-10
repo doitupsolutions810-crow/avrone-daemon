@@ -40,6 +40,10 @@ from .fusion_loopback import origin_key
 
 MAX_BODY = 4096
 FIELD_BUDGET = 512
+# Stay far under CPython's recursion limit. json.dumps on a deeper tree raises
+# RecursionError, and on 3.11 catching that error leaves the recursion counter
+# high enough that a later deep walk in the same process fails immediately.
+MAX_NESTING = 32
 SOURCES = ("avrone", "cyclekernal", "greatscale")
 KINDS = ("finding", "question", "answer", "correction", "conclusion", "mood", "evidence", "health")
 RESEND_ON_CK_BOOT = frozenset({"avrone", "greatscale"})
@@ -275,8 +279,31 @@ def _check_known_fields(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _nesting_too_deep(value: Any, limit: int = MAX_NESTING) -> bool:
+    """Iterative depth and cycle check. This function does not recurse."""
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    seen: set[int] = set()
+    while stack:
+        node, depth = stack.pop()
+        if depth > limit:
+            return True
+        if not isinstance(node, (dict, list, tuple)):
+            continue
+        mark = id(node)
+        if mark in seen:
+            return True
+        seen.add(mark)
+        children = node.values() if isinstance(node, dict) else node
+        for child in children:
+            if isinstance(child, (dict, list, tuple)):
+                stack.append((child, depth + 1))
+    return False
+
+
 def _payload_too_big(payload: dict[str, Any]) -> bool:
     for value in payload.values():
+        if _nesting_too_deep(value):
+            return True
         try:
             if len(_canonical(value)) > FIELD_BUDGET:
                 return True

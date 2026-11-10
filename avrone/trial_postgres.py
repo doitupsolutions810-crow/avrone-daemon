@@ -1,0 +1,341 @@
+"""Shared PostgreSQL-backed store for multi-host trial acceptance."""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import time
+import uuid
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+from .evidence_pool import pool_trials
+from .trial_contract import validate_trial_record, trial_record_outcome, trial_record_poolable
+from .trial_receiver import (
+    MAX_BATCH_EVENTS, MAX_EVENT_BYTES, TrialStoreConfigError, TrialStoreUnavailable,
+    _validate_bridge, _validate_provenance, canonical_json, verify_trial_receipt,
+)
+
+
+class PostgresTrialStore:
+    """Same receiver API as TrialStore, backed by one shared PostgreSQL primary.
+
+    The primary-key constraint on trial_records.trial_id arbitrates deliveries
+    from independent processes and hosts. This is not multi-primary consensus.
+    """
+
+    SCHEMA_VERSION = 1
+    MIGRATION_LOCK = 0x4156524F4E455631
+
+    def __init__(self, dsn: str, receipt_secret: str):
+        if not isinstance(dsn, str) or not dsn.strip():
+            raise TrialStoreConfigError("AVRONE_TRIAL_DATABASE_URL is required for PostgreSQL")
+        if not dsn.startswith(("postgresql://", "postgres://")):
+            raise TrialStoreConfigError("AVRONE_TRIAL_DATABASE_URL must be a PostgreSQL DSN")
+        if not isinstance(receipt_secret, str) or len(receipt_secret) < 32:
+            raise TrialStoreConfigError("AVRONE_TRIAL_RECEIPT_SECRET must be at least 32 characters")
+        try:
+            import psycopg
+        except ImportError:
+            raise TrialStoreConfigError(
+                "PostgreSQL trial storage requires the optional avrone[postgres] dependency"
+            ) from None
+        self.dsn = dsn
+        self.receipt_secret = receipt_secret
+        self._psycopg = psycopg
+        self._initialize()
+
+    @classmethod
+    def from_env(cls, fleet_token: str = "") -> "PostgresTrialStore":
+        dsn = os.environ.get("AVRONE_TRIAL_DATABASE_URL", "").strip()
+        secret = os.environ.get("AVRONE_TRIAL_RECEIPT_SECRET", "")
+        if not dsn:
+            raise TrialStoreConfigError("AVRONE_TRIAL_DATABASE_URL is required for PostgreSQL")
+        if len(secret) < 32:
+            raise TrialStoreConfigError("AVRONE_TRIAL_RECEIPT_SECRET must be at least 32 characters")
+        if fleet_token and hmac.compare_digest(secret, fleet_token):
+            raise TrialStoreConfigError("receipt secret must be separate from the Fleet token")
+        return cls(dsn, secret)
+
+    @contextmanager
+    def _session(self) -> Iterator[tuple[Any, Any]]:
+        """Open one bounded transaction; connection strings are never included in errors."""
+        try:
+            with self._psycopg.connect(self.dsn, connect_timeout=5) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+                    cur.execute("SET LOCAL statement_timeout = '10000ms'")
+                    cur.execute("SET LOCAL lock_timeout = '5000ms'")
+                    cur.execute("SET LOCAL idle_in_transaction_session_timeout = '15000ms'")
+                    yield conn, cur
+        except self._psycopg.Error:
+            # Driver exceptions can embed connection details. Do not chain them
+            # into routine application tracebacks or error-reporting systems.
+            raise TrialStoreUnavailable("shared trial storage unavailable") from None
+
+    def _initialize(self) -> None:
+        # Inspect the schema version before creating or changing any data tables.
+        # A newer/unknown schema must be a read-only rejection, not a partial migration.
+        with self._session() as (_, cur):
+            cur.execute(
+                """CREATE TABLE IF NOT EXISTS avrone_trial_schema (
+                    version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL
+                )"""
+            )
+            cur.execute("SELECT MAX(version) FROM avrone_trial_schema")
+            existing = cur.fetchone()
+            existing_version = existing[0] if existing else None
+            if existing_version is not None and existing_version != self.SCHEMA_VERSION:
+                raise TrialStoreConfigError("unsupported PostgreSQL trial-store schema version")
+
+        statements = (
+            """CREATE TABLE IF NOT EXISTS trial_records (
+                trial_id TEXT PRIMARY KEY, record_digest TEXT NOT NULL, record_json BYTEA NOT NULL,
+                outcome TEXT NOT NULL, poolable SMALLINT NOT NULL CHECK (poolable IN (0, 1)),
+                source TEXT NOT NULL, system TEXT NOT NULL, node TEXT NOT NULL, run_id TEXT NOT NULL,
+                check_id TEXT NOT NULL, check_version TEXT NOT NULL, check_config_sha256 TEXT NOT NULL,
+                attempt_id TEXT NOT NULL, receipt_json BYTEA NOT NULL, accepted_at BIGINT NOT NULL,
+                first_sender TEXT NOT NULL, first_auth_method TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS trial_deliveries (
+                id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                trial_id TEXT NOT NULL, record_digest TEXT NOT NULL, provenance_json BYTEA NOT NULL,
+                status TEXT NOT NULL, received_at BIGINT NOT NULL
+            )""",
+            """CREATE INDEX IF NOT EXISTS idx_trial_deliveries_trial
+                ON trial_deliveries(trial_id, received_at)""",
+            """CREATE TABLE IF NOT EXISTS trial_quarantine (
+                id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                trial_id TEXT NOT NULL, accepted_digest TEXT NOT NULL, conflicting_digest TEXT NOT NULL,
+                conflicting_record_json BYTEA NOT NULL, provenance_json BYTEA NOT NULL,
+                reason TEXT NOT NULL, received_at BIGINT NOT NULL,
+                UNIQUE(trial_id, conflicting_digest)
+            )""",
+        )
+        with self._session() as (_, cur):
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (self.MIGRATION_LOCK,))
+            for statement in statements:
+                cur.execute(statement)
+            cur.execute(
+                """INSERT INTO avrone_trial_schema(version, applied_at)
+                   VALUES (%s, %s) ON CONFLICT (version) DO NOTHING""",
+                (self.SCHEMA_VERSION, int(time.time())),
+            )
+
+    def _receipt(self, trial_id: str, digest: str, outcome: str, accepted_at: int) -> dict[str, Any]:
+        unsigned = {
+            "receipt_id": str(uuid.uuid4()), "trial_id": trial_id,
+            "record_digest": digest, "outcome": outcome, "accepted_at": accepted_at,
+        }
+        signature = hmac.new(
+            self.receipt_secret.encode("utf-8"), canonical_json(unsigned), hashlib.sha256,
+        ).hexdigest()
+        return {**unsigned, "signature": signature}
+
+    def accept(
+        self, record: dict[str, Any], provenance: dict[str, Any], now: int | None = None,
+    ) -> dict[str, Any]:
+        if not validate_trial_record(record):
+            raise ValueError("trial record contract rejected")
+        provenance = _validate_provenance(provenance, record)
+        record_blob = canonical_json(record)
+        if len(record_blob) > MAX_EVENT_BYTES:
+            raise ValueError(f"trial record exceeds {MAX_EVENT_BYTES} bytes")
+        provenance_blob = canonical_json(provenance)
+        digest = hashlib.sha256(record_blob).hexdigest()
+        outcome = trial_record_outcome(record)
+        poolable = trial_record_poolable(record)
+        received_at = int(time.time()) if now is None else int(now)
+        trial_id = record["trial_id"]
+        candidate_receipt = self._receipt(trial_id, digest, outcome, received_at)
+
+        with self._session() as (_, cur):
+            cur.execute(
+                """INSERT INTO trial_records(
+                    trial_id, record_digest, record_json, outcome, poolable, source, system, node,
+                    run_id, check_id, check_version, check_config_sha256, attempt_id, receipt_json,
+                    accepted_at, first_sender, first_auth_method
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (trial_id) DO NOTHING RETURNING trial_id""",
+                (
+                    trial_id, digest, record_blob, outcome, int(poolable), record["source"],
+                    record["system"], record["node"], record["run_id"], record["check_id"],
+                    record["check_version"], record["check_config_sha256"], record["attempt_id"],
+                    canonical_json(candidate_receipt), received_at,
+                    provenance["authenticated_sender"], provenance["auth_method"],
+                ),
+            )
+            inserted = cur.fetchone() is not None
+            quarantine_id = None
+            if inserted:
+                receipt = candidate_receipt
+                status = "accepted" if poolable else "operational_outcome_stored"
+                duplicate = False
+                accepted = True
+            else:
+                cur.execute(
+                    "SELECT record_digest, record_json, receipt_json, outcome, poolable FROM trial_records WHERE trial_id=%s FOR UPDATE",
+                    (trial_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise TrialStoreUnavailable("trial identity winner disappeared after conflict")
+                accepted_digest = str(row[0])
+                try:
+                    stored_record = json.loads(bytes(row[1]).decode("utf-8"))
+                    receipt = json.loads(bytes(row[2]).decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                    raise TrialStoreUnavailable("stored trial record failed integrity verification") from None
+                stored_digest = (
+                    hashlib.sha256(canonical_json(stored_record)).hexdigest()
+                    if isinstance(stored_record, dict) else ""
+                )
+                if (
+                    not isinstance(stored_record, dict)
+                    or not hmac.compare_digest(accepted_digest, stored_digest)
+                    or stored_record.get("trial_id") != trial_id
+                    or not verify_trial_receipt(self.receipt_secret, receipt)
+                    or receipt.get("trial_id") != trial_id
+                    or receipt.get("record_digest") != accepted_digest
+                    or receipt.get("outcome") != trial_record_outcome(stored_record)
+                    or row[3] != trial_record_outcome(stored_record)
+                    or int(row[4]) != int(trial_record_poolable(stored_record))
+                ):
+                    raise TrialStoreUnavailable("stored trial record failed integrity verification")
+                if hmac.compare_digest(accepted_digest, digest):
+                    status = "duplicate" if poolable else "operational_outcome_duplicate"
+                    duplicate = True
+                    accepted = True
+                else:
+                    cur.execute(
+                        """INSERT INTO trial_quarantine(
+                            trial_id, accepted_digest, conflicting_digest, conflicting_record_json,
+                            provenance_json, reason, received_at
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT (trial_id, conflicting_digest) DO NOTHING RETURNING id""",
+                        (
+                            trial_id, accepted_digest, digest, record_blob, provenance_blob,
+                            "same trial_id received with different canonical payload or outcome",
+                            received_at,
+                        ),
+                    )
+                    qrow = cur.fetchone()
+                    if qrow is None:
+                        cur.execute(
+                            "SELECT id FROM trial_quarantine WHERE trial_id=%s AND conflicting_digest=%s",
+                            (trial_id, digest),
+                        )
+                        qrow = cur.fetchone()
+                    quarantine_id = int(qrow[0]) if qrow else None
+                    status = "conflict_quarantined"
+                    duplicate = False
+                    accepted = False
+
+            cur.execute(
+                """INSERT INTO trial_deliveries(
+                    trial_id, record_digest, provenance_json, status, received_at
+                ) VALUES (%s,%s,%s,%s,%s)""",
+                (trial_id, digest, provenance_blob, status, received_at),
+            )
+
+        return {
+            "trial_id": trial_id, "status": status, "accepted": accepted,
+            "duplicate": duplicate, "poolable": poolable if accepted else False,
+            "receipt": receipt, "quarantine_id": quarantine_id,
+        }
+
+    def ingest_batch(self, events: Any, transport: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(events, list) or not 1 <= len(events) <= MAX_BATCH_EVENTS:
+            raise ValueError(f"events must be a list containing 1..{MAX_BATCH_EVENTS} items")
+        prepared: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        for item in events:
+            if not isinstance(item, dict) or set(item) != {"record", "bridge"}:
+                raise ValueError("each event must contain exactly record and bridge")
+            record = item["record"]
+            if not validate_trial_record(record):
+                raise ValueError("trial record contract rejected")
+            if len(canonical_json(record)) > MAX_EVENT_BYTES:
+                raise ValueError(f"trial record exceeds {MAX_EVENT_BYTES} bytes")
+            provenance = {**transport, "bridge": _validate_bridge(item["bridge"], record)}
+            prepared.append((record, _validate_provenance(provenance, record)))
+        return [self.accept(record, provenance) for record, provenance in prepared]
+
+    def pool_snapshot(self) -> dict[str, Any]:
+        with self._session() as (_, cur):
+            cur.execute(
+                """SELECT trial_id, record_digest, record_json, receipt_json, poolable, outcome
+                   FROM trial_records ORDER BY trial_id"""
+            )
+            rows = cur.fetchall()
+        trials = []
+        for trial_id, stored_digest, record_blob, receipt_blob, stored_poolable, stored_outcome in rows:
+            try:
+                record = json.loads(bytes(record_blob).decode("utf-8"))
+                receipt = json.loads(bytes(receipt_blob).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                raise TrialStoreUnavailable("stored trial record failed integrity verification") from None
+            digest = (
+                hashlib.sha256(canonical_json(record)).hexdigest()
+                if isinstance(record, dict) else ""
+            )
+            if (
+                not isinstance(record, dict)
+                or not hmac.compare_digest(str(stored_digest), digest)
+                or record.get("trial_id") != trial_id
+                or int(stored_poolable) != int(trial_record_poolable(record))
+                or stored_outcome != trial_record_outcome(record)
+                or not verify_trial_receipt(self.receipt_secret, receipt)
+                or receipt.get("trial_id") != trial_id
+                or receipt.get("record_digest") != digest
+                or receipt.get("outcome") != trial_record_outcome(record)
+            ):
+                raise TrialStoreUnavailable("stored trial record failed integrity verification")
+            if trial_record_poolable(record):
+                trials.append({
+                    "source": record["source"], "trial_id": trial_id, "failed": record["failed"],
+                })
+        return pool_trials(trials)
+
+    def counts(self) -> dict[str, int]:
+        with self._session() as (_, cur):
+            cur.execute(
+                """SELECT (SELECT COUNT(*) FROM trial_records),
+                          (SELECT COUNT(*) FROM trial_deliveries),
+                          (SELECT COUNT(*) FROM trial_quarantine),
+                          (SELECT COUNT(*) FROM trial_records WHERE poolable=1)"""
+            )
+            row = cur.fetchone()
+        return {
+            "records": int(row[0]), "deliveries": int(row[1]),
+            "quarantine": int(row[2]), "poolable": int(row[3]),
+        }
+
+    def get_record(self, trial_id: str) -> dict[str, Any] | None:
+        with self._session() as (_, cur):
+            cur.execute(
+                "SELECT record_digest, record_json, receipt_json, outcome, poolable FROM trial_records WHERE trial_id=%s",
+                (trial_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        try:
+            record = json.loads(bytes(row[1]).decode("utf-8"))
+            receipt = json.loads(bytes(row[2]).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+            raise TrialStoreUnavailable("stored trial record failed integrity verification") from None
+        digest = hashlib.sha256(canonical_json(record)).hexdigest() if isinstance(record, dict) else ""
+        if (
+            not isinstance(record, dict)
+            or not hmac.compare_digest(str(row[0]), digest)
+            or record.get("trial_id") != trial_id
+            or not verify_trial_receipt(self.receipt_secret, receipt)
+            or receipt.get("trial_id") != trial_id
+            or receipt.get("record_digest") != digest
+            or receipt.get("outcome") != trial_record_outcome(record)
+            or row[3] != trial_record_outcome(record)
+            or int(row[4]) != int(trial_record_poolable(record))
+        ):
+            raise TrialStoreUnavailable("stored trial record failed integrity verification")
+        return {"record": record, "receipt": receipt}

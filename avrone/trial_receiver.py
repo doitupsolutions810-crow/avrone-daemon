@@ -406,3 +406,18 @@ class TrialStore:
             "record": json.loads(bytes(row["record_json"]).decode("utf-8")),
             "receipt": json.loads(bytes(row["receipt_json"]).decode("utf-8")),
         }
+
+
+class TrialStoreUnavailable(RuntimeError):
+    """A configured durable trial store cannot currently be reached."""
+
+
+def trial_store_from_env(fleet_token: str = ""):
+    """Select an explicit backend; never silently downgrade PostgreSQL to SQLite."""
+    backend = os.environ.get("AVRONE_TRIAL_STORE", "sqlite").strip().lower()
+    if backend == "sqlite":
+        return TrialStore.from_env(fleet_token=fleet_token)
+    if backend in {"postgres", "postgresql"}:
+        from .trial_postgres import PostgresTrialStore
+        return PostgresTrialStore.from_env(fleet_token=fleet_token)
+    raise TrialStoreConfigError("AVRONE_TRIAL_STORE must be sqlite or postgres")

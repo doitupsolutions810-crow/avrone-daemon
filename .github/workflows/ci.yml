@@ -2,7 +2,21 @@ name: CI
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: ubuntu-24.04    # pinned: ubuntu-latest migrated to Ubuntu 26 on 2026-10-19 (actions/runner-images#14748)
+    runs-on: ubuntu-24.04    # pinned runner image; see actions/runner-images migration note
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: avrone_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d avrone_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     strategy:
       matrix: { python: ["3.11", "3.12"] }
     steps:
@@ -19,7 +33,7 @@ jobs:
           grep -rlI --exclude-dir=.git '^successfully downloaded text file' . 2>/dev/null \
             | while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done || true
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]" 2>&1 | tee /tmp/pip.log || {
+          python -m pip install -e ".[dev,postgres]" 2>&1 | tee /tmp/pip.log || {
             tail -n 8 /tmp/pip.log | while IFS= read -r l; do
               l="${l//%/%25}"
               echo "::error::${l:0:220}"
@@ -29,6 +43,10 @@ jobs:
       - name: Focused trial receiver tests
         run: pytest -q tests/test_trial_contract.py tests/test_trial_receiver.py tests/test_trial_adapters.py
         env: { AVRONE_LLM_MODE: mock, AVRONE_RUNNER: local }
+      - name: PostgreSQL shared-store adversarial tests
+        run: pytest -q tests/test_trial_postgres.py
+        env:
+          AVRONE_TEST_POSTGRES_DSN: postgresql://postgres:postgres@127.0.0.1:5432/avrone_test
       - name: Test avrone
         run: |
           set -o pipefail

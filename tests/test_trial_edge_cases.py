@@ -909,3 +909,85 @@ def test_sqlite_busy_writer_fails_closed_then_recovers_after_lock_release(tmp_pa
     )
     assert recovered["results"][0]["status"] == "accepted"
     assert store.pool_snapshot()["runs"] == 1
+
+
+def test_quarantined_sender_capacity_exhaustion_is_transactional(tmp_path, monkeypatch):
+    import avrone.trial_receiver as receiver
+
+    monkeypatch.setattr(receiver, "MAX_QUARANTINED_SENDERS", 1)
+    store = TrialStore(tmp_path / "trials.sqlite3")
+
+    first = sample("pass", "sender-cap-a")
+    store.ingest_many([first], sender="peer-a", transport="fleet")
+    store.ingest_many([sample("fail", "sender-cap-a")], sender="peer-b", transport="fleet")
+    assert store.quarantine_records()[0]["sender"] == "peer-b"
+
+    second = sample("pass", "sender-cap-b")
+    store.ingest_many([second], sender="peer-a", transport="fleet")
+    with pytest.raises(TrialStoreError, match="quarantine capacity"):
+        store.ingest_many(
+            [sample("fail", "sender-cap-b")],
+            sender="peer-c",
+            transport="fleet",
+        )
+
+    # Capacity failure must not persist either the conflict or a sender-block row.
+    assert len(store.quarantine_records()) == 1
+    db = store._connect()
+    try:
+        blocked = {
+            row[0] for row in db.execute(
+                "SELECT sender FROM trial_quarantined_senders"
+            ).fetchall()
+        }
+        trials = db.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
+    finally:
+        db.close()
+    assert blocked == {"peer-b"}
+    assert trials == 2
+
+    duplicate = store.ingest_many([second], sender="peer-c", transport="fleet")
+    assert duplicate["results"][0]["status"] == "duplicate"
+
+
+def test_sqlite_full_rolls_back_trial_and_receipt_as_one_transaction(tmp_path, monkeypatch):
+    path = tmp_path / "trials.sqlite3"
+    store = TrialStore(path)
+    original_connect = store._connect
+
+    probe = original_connect()
+    try:
+        page_count = probe.execute("PRAGMA page_count").fetchone()[0]
+    finally:
+        probe.close()
+
+    def connect_at_current_page_limit():
+        db = original_connect()
+        current = db.execute("PRAGMA page_count").fetchone()[0]
+        db.execute(f"PRAGMA max_page_count={current}")
+        return db
+
+    monkeypatch.setattr(store, "_connect", connect_at_current_page_limit)
+    large = make_trial(
+        system="cyclekernel",
+        node="node-a",
+        run_id="run-disk-full",
+        check_id="verify",
+        check_version="10.2",
+        attempt_id="large-config",
+        outcome="pass",
+        check_config={"padding": "x" * 16_000},
+    )
+    assert page_count > 0
+
+    with pytest.raises(TrialStoreError, match="transaction failed"):
+        store.ingest_many([large], sender="peer-a", transport="fleet")
+
+    monkeypatch.setattr(store, "_connect", original_connect)
+    recovered = original_connect()
+    try:
+        assert recovered.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 0
+        assert recovered.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 0
+    finally:
+        recovered.close()
+    assert store.pool_snapshot()["runs"] == 0

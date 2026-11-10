@@ -709,3 +709,146 @@ os._exit(74)  # commit completed; transport acknowledgement is deliberately lost
     finally:
         db.close()
     assert recovered.pool_snapshot()["runs"] == 1
+
+
+def test_store_rejects_hardlinked_existing_database_without_mutating_original(tmp_path):
+    import sqlite3
+
+    original = tmp_path / "sensitive.sqlite3"
+    connection = sqlite3.connect(original)
+    try:
+        connection.execute("CREATE TABLE protected (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO protected(value) VALUES ('do-not-modify')")
+        connection.commit()
+    finally:
+        connection.close()
+
+    linked_dir = tmp_path / "receiver"
+    linked_dir.mkdir(mode=0o700)
+    linked = linked_dir / "trials.sqlite3"
+    os.link(original, linked)
+    before = original.read_bytes()
+
+    assert original.stat().st_ino == linked.stat().st_ino
+    assert original.stat().st_nlink == 2
+    with pytest.raises(TrialStoreError, match="hard link"):
+        TrialStore(linked)
+
+    assert original.read_bytes() == before
+    connection = sqlite3.connect(original)
+    try:
+        assert connection.execute("SELECT value FROM protected").fetchone()[0] == "do-not-modify"
+        names = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        assert "trials" not in names
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("sidecar", ["-wal", "-shm"])
+def test_sqlite_sidecar_symlink_never_modifies_external_target(tmp_path, sidecar):
+    path = tmp_path / "trials.sqlite3"
+    TrialStore(path)
+    target = tmp_path / "external-sentinel.bin"
+    sentinel = b"external data must remain unchanged"
+    target.write_bytes(sentinel)
+    link = Path(str(path) + sidecar)
+    link.symlink_to(target)
+
+    try:
+        store = TrialStore(path)
+        store.ingest_many([sample("pass", "sidecar-check")], sender="peer-a", transport="fleet")
+    except TrialStoreError:
+        # Refusal is safe; the key invariant is never following the planted sidecar link.
+        pass
+
+    assert target.read_bytes() == sentinel
+
+
+def test_cross_process_conflicting_outcomes_quarantine_only_losing_sender(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    path = tmp_path / "trials.sqlite3"
+    TrialStore(path)
+    gate = tmp_path / "go"
+    payloads = [
+        ("peer-a", sample("pass", "cross-process-conflict")),
+        ("peer-b", sample("fail", "cross-process-conflict")),
+    ]
+    root = Path(__file__).resolve().parents[1]
+    worker = """
+import json, pathlib, sys, time
+from avrone.trial_receiver import TrialStore
+database, sender, ready, gate, raw = sys.argv[1:]
+store = TrialStore(database)
+pathlib.Path(ready).touch()
+deadline = time.monotonic() + 12
+while not pathlib.Path(gate).exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit(3)
+    time.sleep(0.005)
+result = store.ingest_many([json.loads(raw)], sender=sender, transport="fleet")
+print(json.dumps({"sender": sender, **result["results"][0]}, sort_keys=True))
+"""
+    processes = []
+    ready_files = [tmp_path / "ready-peer-a", tmp_path / "ready-peer-b"]
+    outputs = []
+    try:
+        for (sender, envelope), ready in zip(payloads, ready_files):
+            raw = json.dumps(envelope, separators=(",", ":"), ensure_ascii=False)
+            processes.append(subprocess.Popen(
+                [sys.executable, "-c", worker, str(path), sender, str(ready), str(gate), raw],
+                cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ))
+        deadline = time.monotonic() + 15
+        while not all(ready.exists() for ready in ready_files):
+            if time.monotonic() >= deadline:
+                raise AssertionError("conflicting workers did not become ready")
+            if any(proc.poll() is not None for proc in processes):
+                raise AssertionError("a conflicting worker exited before the start gate")
+            time.sleep(0.01)
+        gate.touch()
+        outputs = [proc.communicate(timeout=20) for proc in processes]
+    finally:
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+
+    assert all(proc.returncode == 0 for proc in processes), outputs
+    results = [json.loads(stdout) for stdout, _ in outputs]
+    accepted = [item for item in results if item["status"] == "accepted"]
+    quarantined = [item for item in results if item["status"] == "conflict_quarantined"]
+    assert len(accepted) == len(quarantined) == 1
+
+    winner = accepted[0]
+    loser = quarantined[0]
+    store = TrialStore(path)
+    db = store._connect()
+    try:
+        row = db.execute(
+            "SELECT outcome,first_sender FROM trials"
+        ).fetchone()
+        q = db.execute(
+            "SELECT sender,incoming_json FROM trial_quarantine"
+        ).fetchone()
+        sender_blocks = db.execute(
+            "SELECT sender FROM trial_quarantined_senders"
+        ).fetchall()
+    finally:
+        db.close()
+
+    assert row["outcome"] == winner["outcome"]
+    assert row["first_sender"] == winner["sender"]
+    assert q["sender"] == loser["sender"]
+    assert json.loads(bytes(q["incoming_json"]))["outcome"] == loser["outcome"]
+    assert {item["sender"] for item in sender_blocks} == {loser["sender"]}
+    retry = store.ingest_many(
+        [sample("pass" if loser["outcome"] == "fail" else "fail", "fresh-attempt")],
+        sender=loser["sender"], transport="fleet",
+    )
+    assert retry["results"][0]["status"] == "sender_quarantined"

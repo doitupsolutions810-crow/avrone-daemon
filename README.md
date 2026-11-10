@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.144: Round 151: secret_scan fix keeps run logs valid; xAI keys redacted
+
+- **xAI keys:** `xai-` keys (Grok) matched no redaction pattern, so they were neither masked when events were emitted nor flagged by `secret_scan`. They now share the `sk-`/`pk-`/`rk-` rule and its gate.
+- **`secret_scan fix=true`:** it used to redact each flagged line as raw text. A private key with no END marker (for example, tool output cut at a cap) was masked to the end of the line. That removed the line's closing quotes and braces, and readers then skipped the event. Flagged JSON lines are now redacted value by value and dumped again. Lines that are not JSON are still redacted as text.
+- **Bytes kept:** the log is decoded with `surrogateescape`, so bytes that are not UTF-8 in other lines are kept exactly. `newline=""` keeps CRLF. The temp file is fsynced before the swap.
+- Tests: `tests/test_round151_secret_fix.py` (4). 3 fail on v0.143. The CRLF test is a guard.
+
 ## v0.143: Round 150: text from outside in log arguments can't forge server log lines. 6,722 tests + 19 integration
 
 The `avrone.*` modules log outside text directly into their messages. That text includes:

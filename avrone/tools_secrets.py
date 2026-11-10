@@ -113,9 +113,52 @@ def is_run_log(name: str) -> bool:
 FIX_MAX_BYTES = 256 * 1024 * 1024  # a run log bigger than this is not rewritten in memory
 
 
-def _redact_text(text: str) -> str:
+def _redact_value(v: Any) -> Any:
     from .ctxspawn import redact
-    return "\n".join(redact(ln) if _kinds(ln) else ln for ln in text.split("\n"))
+    if isinstance(v, str):
+        return redact(v) if _kinds(v) else v
+    if isinstance(v, list):
+        return [_redact_value(x) for x in v]
+    if isinstance(v, dict):
+        return {(_redact_value(k) if isinstance(k, str) else k): _redact_value(x) for k, x in v.items()}
+    return v
+
+
+def _redact_line(ln: str) -> str:
+    """Round 151: a flagged JSON event line is redacted value by value and dumped again. Redacting
+    the raw line broke it: a private key without its END marker (tool output cut at a cap) is
+    masked to the end of the text, which took the line's closing quotes and braces, so every run
+    log reader skipped the event. A secret JSON-escaped in the line (an env value holding a quote
+    or backslash) was also never matched. Lines that are not JSON are redacted as text."""
+    from .ctxspawn import redact
+    s = ln.rstrip("\r")
+    if s[:1] in ("{", "["):
+        from .safeio import json_loads
+        try:
+            obj = json_loads(s)
+        except ValueError:
+            obj = None
+        if isinstance(obj, (dict, list)):
+            new = _redact_value(obj)
+            if new != obj:
+                return json.dumps(new) + ln[len(s):]
+    return redact(ln)
+
+
+def _redact_text(text: str) -> str:
+    return "\n".join(_redact_line(ln) if _kinds(ln) or _line_hides_secret(ln) else ln for ln in text.split("\n"))
+
+
+def _line_hides_secret(ln: str) -> bool:
+    """A JSON line whose decoded strings hold a secret the raw text hides (escaped quotes etc.)."""
+    if not ln.startswith("{") or "\\" not in ln:
+        return False
+    from .safeio import json_loads
+    try:
+        obj = json_loads(ln.rstrip("\r"))
+    except ValueError:
+        return False
+    return _redact_value(obj) != obj
 
 
 def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
@@ -136,14 +179,16 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
             data = read_capped(p, FIX_MAX_BYTES)
             if data is None:
                 continue
-            text = data.decode("utf-8", errors="replace")
+            # round 151: surrogateescape keeps bytes that are not UTF-8 (a torn write) exactly as
+            # they were; "replace" turned them into U+FFFD in lines that held no secret at all
+            text = data.decode("utf-8", errors="surrogateescape")
             new = _redact_text(text)
             if new == text:
                 continue
             from .safeio import mkstemp_beside
             fd, tmp = mkstemp_beside(p)  # round 116: long names; round 121: errors name p
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
                     f.write(new)
                     with (lock if lock is not None else contextlib.nullcontext()):
                         try:
@@ -159,8 +204,9 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
                                     raise _Moved()
                                 src.seek(len(data))
                                 tail = src.read(st1.st_size - len(data))
-                            f.write(_redact_text(tail.decode("utf-8", errors="replace")))
+                            f.write(_redact_text(tail.decode("utf-8", errors="surrogateescape")))
                         f.flush()
+                        os.fsync(f.fileno())  # round 151: a crash after the swap left an empty log
                         os.chmod(tmp, st1.st_mode & 0o777)
                         os.replace(tmp, p)
             except _Moved:

@@ -81,7 +81,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
      lambda m: f"{m.group(1)}{m.group(2)}{(m.group(3) + ' ') if m.group(3) else ''}{REDACTED}"),  # type: ignore[list-item]
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), f"Bearer {REDACTED}"),
     (None, None),  # key = value with a secret-ish key: _KVRule, filled in below (linear, no regex)
-    (re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"), REDACTED),
+    (re.compile(r"\b(?:sk|pk|rk|xai)-[A-Za-z0-9_-]{16,}"), REDACTED),  # round 151: + xAI keys
     (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"), REDACTED),
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), REDACTED),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), REDACTED),
@@ -208,7 +208,7 @@ def _fold(s: str) -> str:
 
 
 _ANY_GATES: dict[int, tuple[str, ...]] = {
-    4: ("sk-", "pk-", "rk-"),
+    4: ("sk-", "pk-", "rk-", "xai-"),
     5: ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
 }
 _KV_WORDS = ("token", "secret", "passw", "api", "private", "access", "_key", "credential")
@@ -217,7 +217,7 @@ _GATES: list[tuple[tuple[str, ...], tuple[str, ...]] | None] = [
     ((), ("authorization", "x-api-key", "x-admin-token")),
     ((), ("bearer",)),
     ((), _KV_WORDS),  # _redact_kv: the key must hold a secret word (and is followed by : or =)
-    None,  # sk-/pk-/rk-: any-of, case-sensitive: checked in _any_gate
+    None,  # sk-/pk-/rk-/xai-: any-of, case-sensitive: checked in _any_gate
     None,  # gh?_ / github_pat_: same
     (("xox",), ()),
     (("AKIA",), ()),

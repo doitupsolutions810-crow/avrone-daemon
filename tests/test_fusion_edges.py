@@ -105,6 +105,8 @@ class Tape:
             return HttpResult(401, {"detail": "Bad admin token"}, None)
         if mode == "timeout":
             return HttpResult(0, None, "timeout")
+        if mode == "302":
+            return HttpResult(302, {"detail": "moved"}, None)
         if mode == "200":
             return HttpResult(200, {"accepted": True, "duplicate": self.posts > 1, "id": "x"}, None)
         raise AssertionError(mode)
@@ -882,6 +884,118 @@ def test_order_directory_does_not_hang_and_junk_pending_rows_are_dropped(client,
     loaded = Ledger(path, ManualClock())
     assert loaded.accounts()["A"] == 1 and loaded.accounts()["P"] == 1
     assert "ghost" not in {row["id"] for row in loaded.entries.values()}
+
+
+def test_redirect_does_not_open_the_breaker_or_leave_the_origin(tmp_path):
+    """A 302 is not a dead peer. The token stays on the first origin."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    hit = {"first": 0, "second": 0, "tokens": []}
+
+    class First(BaseHTTPRequestHandler):
+        def do_POST(self):
+            hit["first"] += 1
+            hit["tokens"].append(self.headers.get("X-Admin-Token"))
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{second.server_address[1]}/stolen")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_GET(self):
+            body = b'{"boot":"r"}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):
+            return
+
+    class Second(BaseHTTPRequestHandler):
+        def do_POST(self):
+            hit["second"] += 1
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, fmt, *args):
+            return
+
+    from avrone.fusion_deliver import httpx_transport
+    second = ThreadingHTTPServer(("127.0.0.1", 0), Second)
+    first = ThreadingHTTPServer(("127.0.0.1", 0), First)
+    threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (first, second)]
+    for thread in threads:
+        thread.start()
+    try:
+        ledger = Ledger(tmp_path / "redir.json")
+        ledger.offer(_event(eid="redir"))
+        config = _cfg(
+            base=f"http://127.0.0.1:{first.server_address[1]}",
+            token="stay-here", timeout=2, deadline=5, backoff_base=0.05, backoff_max=0.05,
+        )
+        # Scripted 302 is the accounting check. The live pair checks the client
+        # does not follow Location.
+        clock = ManualClock()
+        tape = Tape(clock, ["302", "200"])
+        scripted = Ledger(tmp_path / "script.json", clock)
+        scripted.offer(_event(eid="scripted"))
+        scripted_report = scripted.pump(tape, _cfg(deadline=0, backoff_base=0.05, backoff_max=0.05), max_cycles=2)
+        assert scripted_report["D"] == 1 and scripted_report["F"] == 0
+        assert scripted.breaker_for(config.base).fails == 0
+        live = ledger.pump(httpx_transport, config, max_cycles=1)
+    finally:
+        first.shutdown(); second.shutdown()
+        first.server_close(); second.server_close()
+    assert hit["first"] == 1 and hit["second"] == 0
+    assert hit["tokens"] == ["stay-here"]
+    assert live["P"] == 1 and live["D"] == 0 and live["F"] == 0
+    assert ledger.breaker_for(config.base).is_open(0) is False
+
+
+def test_symlink_journal_is_not_a_second_copy_of_the_board(client, tmp_path):
+    assert _post(client, {"id": "real-1", "text": "on the board", "ts": 2}).status_code == 200
+    outside = tmp_path / "outside.jsonl"
+    outside.write_text(
+        '{"id":"secret-post","kind":"finding","text":"from outside","refs":[],"ts":1}\n',
+        encoding="utf-8",
+    )
+    folder = server.state["core"].settings.data_dir / "bridge"
+    link = folder / "outside.jsonl"
+    link.symlink_to(outside)
+    ids = [p["id"] for p in client.get("/api/blackboard", headers=AUTH).json()["posts"]]
+    assert ids == ["real-1"]
+    assert "secret-post" not in ids
+
+
+def test_null_kind_and_blank_run_id_have_defaults(client):
+    r = _post(client, {"text": "defaults", "kind": None, "run_id": "   ", "ts": 6})
+    assert r.status_code == 200, r.text
+    row = client.get("/api/blackboard", headers=AUTH).json()["posts"][0]
+    assert row["kind"] == "finding"
+    assert row["run_id"] == "run"
+    assert _post(client, {"id": " spaced ", "text": "no"}).status_code == 400
+
+
+def test_negative_attempts_and_a_non_list_entry_table(tmp_path):
+    path = tmp_path / "neg.json"
+    path.write_text(json.dumps({
+        "version": 2,
+        "entries": [
+            {"source": "avrone", "id": "neg", "state": "delivered", "event": {"id": "neg"}, "attempts": -4},
+        ],
+    }), encoding="utf-8")
+    loaded = Ledger(path, ManualClock())
+    assert loaded.entries[("avrone", "neg")]["attempts"] == 0
+    bad = tmp_path / "dict.json"
+    bad.write_text('{"version":2,"entries":{"source":"avrone"}}', encoding="utf-8")
+    assert Ledger(bad, ManualClock()).state_errors == 1
 
 
 def test_blank_base_falls_back_and_max_cycles_zero_still_tries_once(monkeypatch, tmp_path):

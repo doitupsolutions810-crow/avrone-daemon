@@ -827,6 +827,10 @@ def _classify(result: HttpResult) -> str:
         return "status5xx"
     if 400 <= status < 500:
         return "permanent"
+    if 300 <= status < 400:
+        # Not a 2xx ack and not a dead socket. Do not open the breaker, and do
+        # not follow the Location: the admin token must stay on this origin.
+        return "status3xx"
     return "dial"
 
 
@@ -839,7 +843,7 @@ def httpx_transport(method: str, url: str, body: bytes | None, headers: dict[str
     """One real HTTP call. ``trust_env`` is off so an HTTP proxy cannot swallow loopback."""
     import httpx
     try:
-        with httpx.Client(timeout=timeout, trust_env=False) as client:
+        with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
             response = client.request(method, url, content=body, headers=headers)
     except httpx.TimeoutException:
         return HttpResult(0, None, "timeout")

@@ -56,7 +56,8 @@ def normalize_blackboard_post(data: Any) -> tuple[dict[str, Any] | None, str | N
     elif not isinstance(raw_run, str):
         return None, "bad run id"
     else:
-        run_id = raw_run[:80] or "run"
+        clipped = raw_run[:80]
+        run_id = clipped if clipped.strip() else "run"
     return {
         "id": pid,
         "run_id": run_id or "run",

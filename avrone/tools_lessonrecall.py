@@ -109,11 +109,12 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     for r in ranked[:lim]:
         t = _ts(r)
         when = age(now - t) if t else "?"
-        text = redact_text(str(r.get("value", "")).replace("\n", " "))
+        from .tools import one_line  # round 134: \r / U+2028 forged extra lesson lines
+        text = redact_text(one_line(r.get("value", "")))
         if len(text) > LESSON_DIGEST:
             text = text[:LESSON_DIGEST] + "..."
-        src = redact_text(str(r.get("task", "") or "").replace("\n", " "))[:80]
-        line = f"- [{when} ago] {r.get('key', '?')}" + (f" ({src})" if src else "") + f": {text}"
+        src = redact_text(one_line(r.get("task", "") or ""))[:80]
+        line = f"- [{when} ago] {one_line(r.get('key', '?'))}" + (f" ({src})" if src else "") + f": {text}"
         if used + len(line) + 1 > LESSON_RECALL_MAX_CHARS:
             lines.append(f"... {len(ranked[:lim]) - shown} more not shown (output cap)")
             break

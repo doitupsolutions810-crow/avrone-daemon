@@ -166,6 +166,14 @@ def _storage_text(e: OSError, names: str) -> str:
 
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
+# every character str.splitlines() breaks on, plus the rest of C0/C1 controls and DEL
+_LINE_BREAKS = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+
+
+def one_line(v: Any) -> str:
+    """str(v) with every line break and control character run collapsed to one space (round 134)."""
+    return _LINE_BREAKS.sub(" ", str(v))
+
 
 def valid_text(text: str) -> str:
     """text with each lone UTF-16 surrogate written as the escape \\udXXX, so it always encodes
@@ -352,7 +360,10 @@ class ToolRegistry:
     def docs(self) -> str:
         lines = ["Available tools (one call per reply, or a small batch of independent calls):"]
         for t in sorted(self._tools.values(), key=lambda t: t.name):
-            lines.append(f"- {t.name} {t.args_doc}: {t.description}")
+            # round 134: a plugin or MCP server's description/args doc with \n, \r, U+2028 ...
+            # wrote extra lines into every agent's tool list (a forged "- shell ..." entry, or an
+            # instruction that read as the system's); each tool is now one line
+            lines.append(f"- {t.name} {one_line(t.args_doc)}: {one_line(t.description)}")
         return "\n".join(lines) + "\n"
 
     def suggest(self, name: str, n: int = 3) -> list[str]:

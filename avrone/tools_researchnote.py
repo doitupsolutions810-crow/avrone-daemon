@@ -146,7 +146,8 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
                 lines.append(f"lessons: already known as {key} (same text stored before; not duplicated)")
             else:
                 lines.append(f"lessons: not stored ({status})")
-    preview = body.replace("\n", " ")
+    from .tools import one_line
+    preview = one_line(body)
     lines.append("note: " + (preview if len(preview) <= 300 else preview[:300] + "..."))
     return "\n".join(lines)
 

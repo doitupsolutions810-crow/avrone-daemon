@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core
+from .fusion_loopback import origin_key
 from .safeio import FileTooBig, atomic_write, read_capped
 from .textsafe import UNSAFE_RUN
 
@@ -548,11 +549,6 @@ def _url_closed(url: str) -> bool:
     return bool(parts.username or parts.password or not parts.hostname)
 
 
-def _origin(url: str) -> str:
-    parts = urllib.parse.urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc.lower()}"
-
-
 def _exchange(
     method: str,
     url: str,
@@ -581,7 +577,9 @@ def _exchange(
     if safe_key:
         headers["Idempotency-Key"] = safe_key
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    opener = urllib.request.build_opener(_NoRedirect)
+    # An empty proxy map ignores HTTP_PROXY. A proxy must not see the admin token
+    # or turn a loopback peer into a remote hop.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     try:
         try:
             response = opener.open(request, timeout=timeout)
@@ -714,7 +712,7 @@ class FusionWatch:
         """
         if self._breaker_threshold <= 0:
             return False
-        host = _origin(url)
+        host = origin_key(url)
         until = self._open_until.get(host)
         if until is None:
             return False
@@ -728,7 +726,7 @@ class FusionWatch:
     def _circuit_observe(self, url: str, error: str | None) -> None:
         if self._breaker_threshold <= 0:
             return
-        host = _origin(url)
+        host = origin_key(url)
         if error is None:
             self._fail_counts.pop(host, None)
             self._open_until.pop(host, None)

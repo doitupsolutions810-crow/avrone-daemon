@@ -109,6 +109,12 @@ A UTF-8 BOM is still stripped before JSON parse on the surviving route. main did
 
 `python3 -m pytest -q tests/test_fusion_peer.py tests/test_fusion_peer_edges.py tests/test_fusion_peer_more.py tests/test_fusion_blackboard.py tests/test_fusion_edges.py tests/test_fusion_deliver.py tests/test_fusion_loopback.py tests/test_fusion_plane.py tests/test_master_prompt.py` — **170 passed** in 20.12s.
 
+## Loopback bucket and proxy
+
+The watchdog's breaker now uses `fusion_loopback.origin_key`, the same bucket as `fusion_deliver`. `127.0.0.1`, `::1`, and `::ffff:127.0.0.1` on one port are one host. `127.0.0.2` is not. Dials use an empty proxy map, so `HTTP_PROXY` cannot carry the admin token or hide the peer.
+
+`python3 -m pytest -q tests/test_fusion_peer_more.py tests/test_fusion_loopback.py tests/test_fusion_peer.py` — **52 passed** in 7.18s.
+
 ## Merge with main `0df6674` (v0.129.0)
 
 `git fetch origin main` then `git merge origin/main`. The only conflict was `MASTER_PROMPT.md`: both sides changed the generated test-file count (ours 300, main 303). That is a simple count, not two intents. Regenerating the file from the merged tree resolved it.

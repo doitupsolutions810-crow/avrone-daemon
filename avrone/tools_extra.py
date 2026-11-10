@@ -323,6 +323,7 @@ async def t_list_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 SEARCH_TIMEOUT_S = 20.0
 from .textsafe import escape as _tsesc  # noqa: E402
+from .textsafe import lines_keepends as _lines_keepends  # noqa: E402
 
 
 async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
@@ -808,7 +809,7 @@ async def t_memory_save(ctx: "AgentContext", args: dict[str, Any]) -> str:
         from .tools import error_text
         return error_text(with_target(e, _mem_file(ctx)), ctx)
     _emit(ctx, "memory.save", key=key, ns=ns, bytes=len(value.encode()))
-    return f"saved memory '{key}'"
+    return f"saved memory '{_tsesc(key)}'"  # round 147
 
 
 def _tokens(s: str) -> set[str]:
@@ -841,7 +842,9 @@ async def t_memory_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
             return f"No memories match {query!r}."
     else:
         recs.sort(key=lambda r: r.get("ts", 0), reverse=True)
-    out = [f"- {r['key']}: {str(r.get('value', ''))[:1000]}" for r in recs[:20]]
+    # round 147: keys and values are shown escaped: a key or value holding "\n- other: ..." printed
+    # rows that read as other memories (and peers can merge entries in over memory_sync)
+    out = [f"- {_tsesc(r['key'])}: {_tsesc(str(r.get('value', ''))[:1000], keep=chr(9))}" for r in recs[:20]]
     return "\n".join(out)
 
 
@@ -854,7 +857,7 @@ async def t_memory_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not mem:
         return f"namespace {ns}: no memories saved yet."
     recs = sorted(mem.values(), key=lambda r: r.get("ts", 0), reverse=True)
-    rows = [f"- {r['key']} ({len(str(r.get('value', '')).encode())} bytes)" for r in recs[:limit]]
+    rows = [f"- {_tsesc(r['key'])} ({len(str(r.get('value', '')).encode())} bytes)" for r in recs[:limit]]  # round 147
     head = f"namespace {ns}: {len(mem)}/{memstore.max_entries()} entries"
     return head + "\n" + "\n".join(rows)
 
@@ -931,7 +934,7 @@ async def t_artifact_save(ctx: "AgentContext", args: dict[str, Any]) -> str:
     rel = _rel(ctx, p)
     size = p.stat().st_size
     _emit(ctx, "artifact", path=rel, bytes=size)
-    return rel
+    return _tsesc(rel)  # round 147: the name is the agent's choice
 
 
 # --------------------------------------------------------------------------- docker_run
@@ -1057,8 +1060,9 @@ async def t_diff_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
         if len(b_text) > DIFF_MAX_TEXT_CHARS:
             return f"ERROR: text_b is longer than {DIFF_MAX_TEXT_CHARS} chars"
     context = _int(args.get("context"), 3, 0, 20)
+    a_name, b_name = _tsesc(a_name), _tsesc(b_name)  # round 147: a "\n" in a name split the header
     if len(a_text) + len(b_text) <= DIFF_INLINE_CHARS:
-        lines = list(difflib.unified_diff(a_text.splitlines(keepends=True), b_text.splitlines(keepends=True),
+        lines = list(difflib.unified_diff(_lines_keepends(a_text), _lines_keepends(b_text),
                                           fromfile=a_name, tofile=b_name, n=context))
     else:
         # big inputs diff in a child process with a deadline: difflib is quadratic on many similar
@@ -1069,7 +1073,10 @@ async def t_diff_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
                     "diff smaller pieces of the files instead")
     if not lines:
         return f"No differences between {a_name} and {b_name}."
-    out = "".join(ln if ln.endswith("\n") else ln + "\n\\ No newline at end of file\n" for ln in lines)
+    # round 147: controls and bidi inside a line are shown escaped (a "\r" or U+202E in a changed
+    # line hid or reversed it: Trojan Source in review); line breaks and tabs stay
+    out = "".join(_tsesc(ln, keep="\n\t") if ln.endswith("\n") else _tsesc(ln, keep="\t") + "\n\\ No newline at end of file\n"
+                  for ln in lines)
     added = sum(1 for ln in lines if ln.startswith("+") and not ln.startswith("+++"))
     removed = sum(1 for ln in lines if ln.startswith("-") and not ln.startswith("---"))
     summary = f"[{added} added, {removed} removed]"

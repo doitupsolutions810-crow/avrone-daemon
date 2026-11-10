@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.140: Round 147: memory listings, artifact names and diffs can't forge rows or split lines. 6,698 tests + 19 integration
+
+A second probe (`forgeprobe2.py`) writes hostile text through the tools (memory, the task board, research notes, artifacts, git), then reads it back through 24 tool calls. On v0.139 it found these:
+
+- **`memory_list`, `memory_recall`, `memory_save`:** keys and values printed raw. A key holding `\n- other: ...` read as another memory. Peers can merge entries in over `memory_sync`. Keys are now escaped, and so are values (tabs kept).
+- **`artifact_save`:** the agent-chosen name was echoed raw. It is now escaped.
+- **`diff_files`:** lines were split with `str.splitlines()`, which also breaks on `\r`, VT, FF, `\x1c`–`\x1e`, NEL, U+2028 and U+2029. One source line came out as two, and the first half was marked `\ No newline at end of file`. The fix is a new `textsafe.lines_keepends` that splits on `\n` only, in both the inline and the child-process path. Controls and bidi characters inside a changed line are escaped (Trojan Source in review). File names in the header are escaped too.
+
+Left as is: `git` output, which is raw like `shell`. `json_tool get` prints U+202E inside a JSON string.
+
+Tests: `tests/test_round147_memory_diff_display.py` (9). All 9 fail on v0.139.
+
 ## v0.139: Round 146: names in listings are shown escaped, so they can't forge rows. 6,689 tests + 19 integration
 
 A new probe (`forgeprobe.py`) plants files with hostile names and starts a child process with hostile arguments, then calls every read-only tool. On v0.138, four tools printed those names raw:

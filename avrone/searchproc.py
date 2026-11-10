@@ -84,8 +84,10 @@ def diff_main() -> None:
     """unified_diff in a child (see t_diff_files): difflib is quadratic on many similar short lines
     (20k lines: 5 s; the 1 MB input cap allows ~200k lines: minutes) and cannot be interrupted."""
     import difflib
+
+    from avrone.textsafe import lines_keepends
     req = json.loads(sys.stdin.read())
-    for ln in difflib.unified_diff(req["a"].splitlines(keepends=True), req["b"].splitlines(keepends=True),
+    for ln in difflib.unified_diff(lines_keepends(req["a"]), lines_keepends(req["b"]),
                                    fromfile=req["a_name"], tofile=req["b_name"], n=int(req["n"])):
         sys.stdout.write(json.dumps(ln) + "\n")
     sys.stdout.flush()

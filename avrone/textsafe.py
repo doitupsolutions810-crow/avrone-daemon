@@ -31,3 +31,12 @@ def escape(s: object, keep: str = "") -> str:
     if keep:
         return UNSAFE_ONE.sub(lambda m: m.group() if m.group() in keep else _esc(m), str(s))
     return UNSAFE_ONE.sub(_esc, str(s))
+
+
+def lines_keepends(s: str) -> list[str]:
+    """Round 147: split on "\n" only, keeping it. str.splitlines() also splits on "\r", "\x0b",
+    "\x0c", "\x1c"-"\x1e", NEL, U+2028 and U+2029, so diff_files cut one source line in two and
+    marked the first half "\\ No newline at end of file"; git, patch and editors see one line."""
+    out = s.split("\n")
+    last = out.pop()
+    return [x + "\n" for x in out] + ([last] if last else [])

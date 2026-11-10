@@ -410,6 +410,7 @@ def test_http_replay_nonce_is_rejected_and_does_not_duplicate_receipt(trial_api_
 
 
 def test_http_body_tampering_after_signature_is_rejected_before_storage(trial_api_client, tmp_path):
+    from avrone.fleet import sign
     from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
 
     path = "/api/fleet/trials"
@@ -417,10 +418,9 @@ def test_http_body_tampering_after_signature_is_rejected_before_storage(trial_ap
     raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
     tampered = raw.replace(b'"from":"peer-a"', b'"from":"peer-b"')
     assert tampered != raw and len(tampered) == len(raw)
+    headers = {"content-type": "application/json", **sign("t" * 32, "POST", path, raw)}
 
-    response = _signed_api_request(
-        trial_api_client, path, body, raw_override=tampered
-    )
+    response = trial_api_client.post(path, content=tampered, headers=headers)
     assert response.status_code == 401
     assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()
 

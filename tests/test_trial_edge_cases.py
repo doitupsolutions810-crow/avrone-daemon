@@ -319,7 +319,7 @@ def test_body_limit_rejects_oversized_chunked_request_without_reading_more(tmp_p
 
     chunks = [
         {"type": "http.request", "body": b"a" * 200_000, "more_body": True},
-        {"type": "http.request", "body": b"b" * (56 * 1024 + 1), "more_body": True},
+        {"type": "http.request", "body": b"b" * (64 * 1024 + 1), "more_body": True},
         {"type": "http.request", "body": b"c", "more_body": False},
     ]
     reads = 0
@@ -449,3 +449,174 @@ def test_http_strict_json_rejects_overflowing_number_after_valid_hmac(trial_api_
 
     assert response.status_code == 400
     assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()
+
+
+def test_strict_json_rejects_escaped_lone_surrogates_in_values_and_keys():
+    for raw in (b'{"value":"\\\\ud800"}', b'{"\\\\udfff":"value"}'):
+        with pytest.raises(ValueError, match="unambiguous"):
+            strict_json_loads(raw)
+
+
+def test_body_limit_accepts_exact_trial_body_cap():
+    import asyncio
+
+    from avrone.server import BodyLimit, TRIAL_INGEST_MAX_BODY_BYTES
+
+    payload = b"x" * TRIAL_INGEST_MAX_BODY_BYTES
+    reads = 0
+    sent = []
+
+    async def receive():
+        nonlocal reads
+        reads += 1
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    async def downstream(scope, limited_receive, downstream_send):
+        message = await limited_receive()
+        assert len(message["body"]) == TRIAL_INGEST_MAX_BODY_BYTES
+        await downstream_send({"type": "http.response.start", "status": 200, "headers": []})
+        await downstream_send({"type": "http.response.body", "body": b"ok"})
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/fleet/trials",
+        "headers": [(b"content-length", str(len(payload)).encode("ascii"))],
+    }
+    asyncio.run(BodyLimit(downstream)(scope, receive, send))
+
+    assert reads == 1
+    assert sent[0]["status"] == 200
+
+
+def test_body_limit_rejects_declared_oversize_before_calling_downstream():
+    import asyncio
+
+    from avrone.server import BodyLimit, TRIAL_INGEST_MAX_BODY_BYTES
+
+    reads = 0
+    sent = []
+
+    async def receive():
+        nonlocal reads
+        reads += 1
+        return {"type": "http.request", "body": b"x", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    async def downstream(scope, limited_receive, downstream_send):
+        raise AssertionError("downstream must not run for a declared oversized request")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/fleet/trials",
+        "headers": [(b"content-length", str(TRIAL_INGEST_MAX_BODY_BYTES + 1).encode("ascii"))],
+    }
+    asyncio.run(BodyLimit(downstream)(scope, receive, send))
+
+    assert reads == 0
+    assert sent[0]["status"] == 413
+
+
+def test_cross_process_duplicate_delivery_commits_one_trial_and_two_receipts(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    path = tmp_path / "trials.sqlite3"
+    TrialStore(path)
+    go = tmp_path / "go"
+    payload = json.dumps(sample(), separators=(",", ":"), ensure_ascii=False)
+    root = Path(__file__).resolve().parents[1]
+    worker = """
+import json, pathlib, sys, time
+from avrone.trial_receiver import TrialStore
+database, ready, gate, raw = sys.argv[1:]
+store = TrialStore(database)
+pathlib.Path(ready).touch()
+deadline = time.monotonic() + 12
+while not pathlib.Path(gate).exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit(3)
+    time.sleep(0.005)
+result = store.ingest_many([json.loads(raw)], sender="peer-a", transport="fleet")
+print(result["results"][0]["status"])
+"""
+    processes = []
+    ready_files = [tmp_path / "ready-a", tmp_path / "ready-b"]
+    results = []
+    try:
+        for ready in ready_files:
+            processes.append(subprocess.Popen(
+                [sys.executable, "-c", worker, str(path), str(ready), str(go), payload],
+                cwd=str(root), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ))
+        deadline = time.monotonic() + 15
+        while not all(ready.exists() for ready in ready_files):
+            if time.monotonic() >= deadline:
+                raise AssertionError("workers did not reach the synchronized start gate")
+            if any(proc.poll() is not None for proc in processes):
+                raise AssertionError("a worker exited before the synchronized start gate")
+            time.sleep(0.01)
+        go.touch()
+        results = [proc.communicate(timeout=20) for proc in processes]
+    finally:
+        for proc in processes:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+
+    assert all(proc.returncode == 0 for proc in processes), results
+    assert sorted(stdout.strip() for stdout, _ in results) == ["accepted", "duplicate"]
+
+    reopened = TrialStore(path)
+    db = reopened._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 2
+    finally:
+        db.close()
+    assert reopened.pool_snapshot()["runs"] == 1
+    assert reopened.pool_snapshot()["independence"] == "not_assessed"
+
+
+def test_process_exit_before_receipt_commit_recovers_without_partial_trial(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    path = tmp_path / "trials.sqlite3"
+    TrialStore(path)
+    envelope = json.dumps(sample(), separators=(",", ":"), ensure_ascii=False)
+    root = Path(__file__).resolve().parents[1]
+    script = """
+import json, os, sys
+from avrone.trial_receiver import TrialStore
+store = TrialStore(sys.argv[1])
+def crash_before_receipt(*args, **kwargs):
+    os._exit(73)
+store._record_receipt = crash_before_receipt
+store.ingest_many([json.loads(sys.argv[2])], sender="peer-a", transport="fleet")
+raise SystemExit(4)
+"""
+    child = subprocess.run(
+        [sys.executable, "-c", script, str(path), envelope],
+        cwd=str(root), capture_output=True, text=True, timeout=15,
+    )
+    assert child.returncode == 73, child.stderr
+
+    recovered = TrialStore(path)
+    db = recovered._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM trial_quarantine").fetchone()[0] == 0
+    finally:
+        db.close()
+    assert recovered.pool_snapshot()["runs"] == 0

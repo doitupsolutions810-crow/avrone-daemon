@@ -135,3 +135,8 @@ def test_outbound_adapters_use_fleet_policy_and_signed_post_paths():
     assert result["status"] == "accepted"
     assert any(call[0] == "post" and call[2] == BRIDGE_TRIAL_PATH for call in manager.calls)
     assert any(call[0] == "post" and call[3]["schema"] == BRIDGE_TRIAL_SCHEMA for call in manager.calls)
+
+    manager.calls.clear()
+    asyncio.run(BridgeTrialAdapter.send(manager, "receiver", "bridge-2-wave1", [sample()]))
+    bridge_post = next(call for call in manager.calls if call[0] == "post")
+    assert bridge_post[3]["run_id"] == "bridge-2"

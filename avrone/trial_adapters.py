@@ -29,6 +29,9 @@ def _parse_finite_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed):
         raise ValueError("JSON number is outside the finite float range")
+    mantissa = value.partition("e")[0].partition("E")[0]
+    if parsed == 0.0 and any(ch in "123456789" for ch in mantissa):
+        raise ValueError("JSON number underflows the finite float range")
     return parsed
 
 

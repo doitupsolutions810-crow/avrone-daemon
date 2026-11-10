@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.137: Round 144: a task board that can't be read right now is never replaced. 6,682 tests + 19 integration
+
+- **Bug** (`agentkit._task_board_locked`):
+  - Any OSError reading the board (EMFILE, EIO, EACCES) counted as corrupt.
+  - The board was moved aside as `*.corrupt-<ts>`, and an add then wrote a board holding only the new task, so every agent lost the run's tasks.
+  - If the set-aside rename failed, the write replaced the unreadable board anyway.
+- **Fix:**
+  - A read error returns `ERROR: could not read the task board (...); nothing changed`.
+  - A torn or oversized board is still set aside. If that rename fails, the call returns an error and writes nothing.
+- **Noted, not fixed:** `FleetManager._load_saved` still starts empty when it cannot rename a corrupt `fleet.json` aside, so the next save overwrites that corrupt file.
+- **Tests:** `tests/test_round144_task_board_read_error.py` (3). 2 fail on v0.136.
+
 ## v0.136: Round 143: a transient fleet.json read error never gives a node a new identity. 6,679 tests + 19 integration
 
 - **Bug** (`FleetManager._load_saved`):

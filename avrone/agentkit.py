@@ -601,16 +601,20 @@ async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> str:
     bad = False
+    from .safeio import FileTooBig, read_capped
     try:
-        from .safeio import read_capped
         raw = read_capped(p, BOARD_READ_MAX)
         board: Any = json.loads(raw) if raw else []
     except FileNotFoundError:
         board = []
-    except (OSError, ValueError, RecursionError):
+    except (FileTooBig, ValueError, RecursionError):
         # read_regular used to hand back the tail of a >8 MB board, which never parses; the next
         # write then silently replaced every task. The old file is now kept as *.corrupt-<ts>.
         board, bad = [], True
+    except OSError as e:
+        # round 144: a transient read error (EMFILE, EIO, EACCES) counted as corrupt: the board was
+        # moved aside and an add left agents a board holding only the new task
+        return f"ERROR: could not read the task board ({e.strerror or type(e).__name__}); nothing changed"
     if not isinstance(board, list):
         board, bad = [], True
     # round 133: entries without a plain int id (a hand-edited or older board: "id": "3", true,
@@ -645,8 +649,11 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
         if bad:
             try:
                 os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError as e:  # round 144: the write went ahead and replaced the unreadable board
+                return (f"ERROR: the task board is unreadable and could not be set aside "
+                        f"({e.strerror or type(e).__name__}); nothing changed")
         from .safeio import atomic_write  # random temp name: a planted .board.<pid>.tmp link is never followed
         atomic_write(p, json.dumps(board + keep, indent=1))  # atomic: a crash never leaves a half-written board
     if op != "list":

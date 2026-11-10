@@ -137,6 +137,11 @@ class _Handler(BaseHTTPRequestHandler):
         if peer.mode == "text":
             self._send(200, None, raw=b"not-json")
             return
+        if peer.mode == "204":
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if peer.mode == "307":
             self.send_response(307)
             self.send_header("Location", "http://127.0.0.1:9/steal")

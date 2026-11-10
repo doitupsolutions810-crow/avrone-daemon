@@ -611,7 +611,8 @@ def _exchange(
     if status >= 400 or (300 <= status < 400):
         return {"ok": False, "status": status, "error": _status_error(status), "body": parsed}
     if 200 <= status < 300:
-        if parsed is None:
+        # 204 and an empty 200 are delivered. Non-empty garbage is not JSON, so retry.
+        if parsed is None and raw.strip():
             return {"ok": False, "status": status, "error": "malformed", "body": None}
         return {"ok": True, "status": status, "error": None, "body": parsed}
     return {"ok": False, "status": status or None, "error": "down", "body": parsed}

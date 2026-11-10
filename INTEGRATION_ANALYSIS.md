@@ -115,6 +115,12 @@ The watchdog's breaker now uses `fusion_loopback.origin_key`, the same bucket as
 
 `python3 -m pytest -q tests/test_fusion_peer_more.py tests/test_fusion_loopback.py tests/test_fusion_peer.py` — **52 passed** in 7.18s.
 
+## Empty success, separate ports, ledger file
+
+An empty 2xx (`204`) is delivered and remembered. Non-empty garbage on a 2xx stays malformed and is retried. Two loopback ports do not share a breaker. Pointing `FusionWatch` at a version-2 ledger file (it has `entries`, not `seen`) leaves that file byte-for-byte unchanged.
+
+`python3 -m pytest -q tests/test_fusion_peer_more.py::test_empty_2xx_is_delivered_and_ports_do_not_share_a_breaker_and_a_ledger_file_is_kept tests/test_fusion_peer.py::test_watch_duplicate_oversized_permanent_and_retryable` — **2 passed** in 0.85s.
+
 ## Merge with main `0df6674` (v0.129.0)
 
 `git fetch origin main` then `git merge origin/main`. The only conflict was `MASTER_PROMPT.md`: both sides changed the generated test-file count (ours 300, main 303). That is a simple count, not two intents. Regenerating the file from the merged tree resolved it.

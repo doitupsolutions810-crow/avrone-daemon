@@ -254,6 +254,49 @@ def test_loopback_spellings_share_a_breaker_and_a_proxy_is_ignored(monkeypatch):
         assert "/health" in peer.gets
 
 
+def test_empty_2xx_is_delivered_and_ports_do_not_share_a_breaker_and_a_ledger_file_is_kept(tmp_path):
+    with _Running() as peer:
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        watch = fp.FusionWatch()
+        peer.mode = "204"
+        event = fp.event_from_post(POST)
+        first = watch.submit(base + "/v1/events", "secret", event, "find0000001")
+        assert first["ok"] is True and first["remembered"] is True and first["duplicate"] is False
+        second = watch.submit(base + "/v1/events", "secret", event, "find0000001")
+        assert second["skipped"] is True
+        assert peer.posts_hits == 1
+
+    with _Running() as left, _Running() as right:
+        left.health_delay = 0.4
+        watch = fp.FusionWatch()
+        urls = _urls(f"http://127.0.0.1:{left.server_address[1]}")
+        urls.update(timeout=0.15, breaker_threshold=1, breaker_cooldown=30.0)
+        assert watch.watch_once(**urls)["health"] == "timeout"
+        other = f"http://127.0.0.1:{right.server_address[1]}/health"
+        assert watch._circuit_blocked(other) is False
+        hop = watch._dial("GET", other, timeout=1.0)
+        assert hop["ok"] is True and "/health" in right.gets
+
+    ledger = {
+        "version": 2,
+        "cursor": "keep",
+        "boots": {"cyclekernal": "boot-a"},
+        "entries": [{
+            "source": "avrone", "id": "find0000001", "state": "pending",
+            "event": {"id": "find0000001", "source": "avrone"}, "detail": None,
+            "attempts": 0, "status": None,
+        }],
+        "state_errors": 0,
+    }
+    path = tmp_path / "ledger.json"
+    raw = json.dumps(ledger)
+    path.write_text(raw)
+    watch = fp.FusionWatch(path)
+    assert watch.seen == set() and watch._writable is False
+    assert watch._save() is False
+    assert path.read_text() == raw
+
+
 def test_breaker_env_defaults_and_clamps(monkeypatch):
     monkeypatch.delenv("FUSION_BREAKER_THRESHOLD", raising=False)
     monkeypatch.delenv("FUSION_BREAKER_COOLDOWN", raising=False)

@@ -116,13 +116,22 @@ def require_blackboard_admin(token: str | None) -> None:
 
     The previous token is a rotation grace for this route only. Other admin
     routes keep require_admin and ignore it. The route stays off when the
-    current token is unset, even if a previous token is set.
+    current token is unset, even if a previous token is set. Either the
+    Settings field or the live environment value matches, so a test can set
+    either one. Empty never matches. The compare does not trim.
     """
     if not settings.admin_token:
         raise HTTPException(403, "Admin access is off. Set AVRONE_ADMIN_TOKEN to enable it.")
-    previous = getattr(settings, "admin_token_previous", "")
-    if not (token_eq(token, settings.admin_token) or token_eq(token, previous)):
-        raise HTTPException(401, "Bad admin token")
+    candidates = []
+    configured = getattr(settings, "admin_token_previous", "")
+    if isinstance(configured, str):
+        candidates.append(configured)
+    live = os.environ.get("AVRONE_ADMIN_TOKEN_PREVIOUS", "")
+    if isinstance(live, str):
+        candidates.append(live)
+    if token_eq(token, settings.admin_token) or any(token_eq(token, item) for item in candidates):
+        return
+    raise HTTPException(401, "Bad admin token")
 
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -184,13 +193,6 @@ HARD_MAX_BODY_BYTES = 512 * 1024 * 1024
 # Fusion blackboard only. The process-wide cap below stays AVRONE_MAX_BODY_BYTES.
 FUSION_BLACKBOARD_MAX_BODY = 4096
 FUSION_BLACKBOARD_PATH = "/api/blackboard"
-# One id for this process. The fusion relay treats a change as a restart and
-# resends what this process would have forgotten. Stable until import again.
-BOOT_ID = uuid.uuid4().hex
-
-
-def boot_id() -> str:
-    return BOOT_ID
 
 
 def body_too_large_detail(path: str, limit: int) -> str:
@@ -314,6 +316,63 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
+# One id for this process. The fusion relay treats a change as a restart
+# that dropped in-memory dedup, and the same value as the same peer.
+BOOT_ID = uuid.uuid4().hex
+
+
+def boot_id() -> str:
+    return BOOT_ID
+
+
+def _fusion_timeout() -> float:
+    import math
+    raw = (os.environ.get("FUSION_TIMEOUT") or "").strip()
+    try:
+        value = float(raw) if raw else 5.0
+    except ValueError:
+        value = 5.0
+    if not math.isfinite(value):
+        return 5.0
+    return min(30.0, max(0.05, value))
+
+
+def _fusion_deadline() -> float | None:
+    """Seconds one watch cycle may spend dialing. ``0`` and non-finite values disable it."""
+    import math
+    raw = (os.environ.get("FUSION_CYCLE_DEADLINE") or "").strip()
+    if not raw:
+        return 10.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 10.0
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return min(120.0, value)
+
+
+def _fusion_breaker() -> tuple[int, float]:
+    """``(threshold, cooldown)``. Threshold 0 disables the breaker. Junk falls back."""
+    import math
+    raw = (os.environ.get("FUSION_BREAKER_THRESHOLD") or "").strip()
+    try:
+        threshold = int(raw) if raw else 1
+    except ValueError:
+        threshold = 1
+    if threshold < 0:
+        threshold = 0
+    threshold = min(100, threshold)
+    raw_cd = (os.environ.get("FUSION_BREAKER_COOLDOWN") or "").strip()
+    try:
+        cooldown = float(raw_cd) if raw_cd else 30.0
+    except ValueError:
+        cooldown = 30.0
+    if not math.isfinite(cooldown) or cooldown < 0:
+        cooldown = 30.0
+    return threshold, min(600.0, cooldown)
+
+
 @app.get("/api/status")
 async def status():
     c = core()
@@ -332,6 +391,46 @@ async def status():
         "codex": c.codex.health() if hasattr(c.codex, "health") else None,
         "boot": BOOT_ID,
     }
+
+
+@app.get("/api/fusion")
+async def fusion_status(x_admin_token: str | None = Header(default=None)):
+    """Last fusion supervision report plus this process's boot id. Does not dial out."""
+    require_admin(x_admin_token)
+    from .fusion_peer import last_watch
+    return {"boot": BOOT_ID, "blackboard": FUSION_BLACKBOARD_PATH, "watch": last_watch()}
+
+
+@app.post("/api/fusion/watch")
+async def fusion_watch(x_admin_token: str | None = Header(default=None)):
+    """One supervision cycle. Dials only when board, events, and health URLs are all set."""
+    require_admin(x_admin_token)
+    board = (os.environ.get("FUSION_BOARD_URL") or "").strip()
+    events = (os.environ.get("FUSION_EVENTS_URL") or "").strip()
+    health = (os.environ.get("FUSION_HEALTH_URL") or "").strip()
+    if not board or not events or not health:
+        return {"watched": False, "reason": "unset"}
+    from .fusion_peer import shared_watch
+    token = (os.environ.get("FUSION_TOKEN") or "").strip()
+    board_token = (os.environ.get("FUSION_BOARD_TOKEN") or token).strip()
+    events_token = (os.environ.get("FUSION_EVENTS_TOKEN") or os.environ.get("CK_FUSION_TOKEN") or token).strip()
+    # Not FUSION_STATE_PATH: that file belongs to the relay (version 2). Writing
+    # it from here would drop the ids the relay has already delivered.
+    state_path = (os.environ.get("AVRONE_FUSION_WATCH_PATH") or "").strip() or None
+    watch = shared_watch(state_path)
+    threshold, cooldown = _fusion_breaker()
+    return await asyncio.to_thread(
+        watch.watch_once,
+        board_url=board,
+        events_url=events,
+        health_url=health,
+        board_token=board_token,
+        events_token=events_token,
+        timeout=_fusion_timeout(),
+        deadline=_fusion_deadline(),
+        breaker_threshold=threshold,
+        breaker_cooldown=cooldown,
+    )
 
 
 def _open_checkpoint(cid_raw: str, task: str, mode: str):
@@ -756,7 +855,9 @@ async def blackboard_write(request: Request, x_admin_token: str | None = Header(
     if len(raw) > FUSION_BLACKBOARD_MAX_BODY:
         raise HTTPException(413, f"request body too large (max {FUSION_BLACKBOARD_MAX_BODY} bytes)")
     require_blackboard_admin(x_admin_token)
-    if not raw:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    if not raw or not raw.strip():
         raise HTTPException(400, "body must be JSON")
     try:
         data = json.loads(raw.decode("utf-8"))

@@ -81,6 +81,14 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.145: Round 152: vendor-prefixed tokens redacted everywhere
+
+- **Gap:** I tested 23 credential formats against `ctxspawn.redact`, which masks every CodeX event. 14 of them got through unmasked: Stripe `sk_/rk_/pk_live|test_`, GitLab `glpat-`, Hugging Face `hf_`, npm `npm_`, Groq `gsk_`, Replicate `r8_`, Perplexity `pplx-`, Slack app `xapp-`, Google OAuth `ya29.`, SendGrid `SG.x.y`, AWS temporary `ASIA…`, Azure `AccountKey=`, and Telegram bot tokens. `secret_scan` reported those runs as CLEAN.
+- **Fix:** new `avrone/secretshapes.py`, with `TOKEN_PREFIX_RE` (fixed prefix plus a long body) and a substring `PREFIX_GATE`. It is the 12th `ctxspawn` rule, and `secret_scan` names its matches `vendor-token`. `research_note` and `env_report` use it too, since each of them had its own, different list.
+- **Unchanged:** ordinary identifiers (`hf_cache_dir`, `npm_config_prefix`, `SG.items`, `ASIAN`, timestamps) are left alone. The cost stays linear: 400 KB of gate-matching text takes about 20 ms.
+- **Still not covered:** bare AWS secret keys, Discord tokens and Twilio `SK…`. Without a key name next to them they are too ambiguous; the key=value rule still masks them when one is there.
+- **Tests:** `tests/test_round152_vendor_tokens.py` (36). 23 of them fail on v0.144. `test_round82` now expects 12 rules.
+
 ## v0.144: Round 151: secret_scan fix keeps run logs valid; xAI keys redacted
 
 - **xAI keys:** `xai-` keys (Grok) matched no redaction pattern, so they were neither masked when events were emitted nor flagged by `secret_scan`. They now share the `sk-`/`pk-`/`rk-` rule and its gate.

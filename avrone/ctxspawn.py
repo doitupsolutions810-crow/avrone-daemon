@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import secretshapes as _shapes
+
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
@@ -88,6 +90,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), REDACTED),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), REDACTED),
     (re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s:]+:[^/@\s]+@"), r"\1***@"),
+    (_shapes.TOKEN_PREFIX_RE, REDACTED),  # round 152: vendor tokens (secretshapes); keep last
 ]
 
 
@@ -210,6 +213,7 @@ def _fold(s: str) -> str:
 _ANY_GATES: dict[int, tuple[str, ...]] = {
     4: ("sk-", "pk-", "rk-", "xai-"),
     5: ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
+    11: _shapes.PREFIX_GATE,
 }
 _KV_WORDS = ("token", "secret", "passw", "api", "private", "access", "_key", "credential")
 _GATES: list[tuple[tuple[str, ...], tuple[str, ...]] | None] = [

@@ -117,3 +117,17 @@ def test_validation_rejects_extra_or_tampered_fields():
     bad = copy.deepcopy(record)
     bad["node"] = "cafe\u0301"
     assert not validate_trial_envelope(bad)
+
+def test_config_whitespace_is_preserved_as_semantic_data():
+    assert canonical_config_bytes({"label": " x "}) != canonical_config_bytes({"label": "x"})
+    assert canonical_config_bytes({" x ": 1}) != canonical_config_bytes({"x": 1})
+    assert sample(check_config={"label": " x "})["trial_id"] != sample(
+        check_config={"label": "x"}
+    )["trial_id"]
+
+
+def test_config_strings_reject_control_characters_and_lone_surrogates():
+    with pytest.raises(ValueError, match="control characters"):
+        canonical_config_bytes({"label": "line\nbreak"})
+    with pytest.raises(ValueError, match="valid Unicode"):
+        canonical_config_bytes({"label": "\ud800"})

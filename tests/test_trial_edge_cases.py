@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier

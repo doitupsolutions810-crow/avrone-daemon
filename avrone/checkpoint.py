@@ -488,26 +488,40 @@ def is_busy(path: str | Path) -> bool:
 
 def claim(path: str | Path) -> Any:
     """Mark the checkpoint in use; returns a release() callable. CheckpointConflict when taken."""
-    k = _path_key(Path(path))
+    try:
+        k = _path_key(Path(path))
+    except ValueError as e:  # embedded NUL in the path, before any open
+        raise CheckpointError(f"checkpoint path is not usable: {e}") from e
     with _active_lock:
         if k in _active:
             raise CheckpointConflict(f"checkpoint {Path(path).stem!r} is in use by a running job")
         # ...and not by a job in ANOTHER process on this data dir (the in-process set cannot see it).
         # A non-blocking flock on <ckpt>.claim: the kernel drops it if that process dies, so a crash
         # never leaves the checkpoint stuck "in use".
-        # Round 131: the same open used to follow a symlink (O_RDWR|O_CREAT created the link's
+        # Round 131/137: the same open used to follow a symlink (O_RDWR|O_CREAT created the link's
         # target anywhere the daemon could write, then flock'ed that file) and treated a FIFO,
         # socket or directory as "no flock here", so claim() succeeded with no cross-process
         # exclusion. A non-regular claim file is a conflict, not a best-effort in-process claim.
+        # A hard link is a regular file whose flock would cover another name, so nlink must be 1.
         fd = None
         try:
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+            except ValueError as e:  # embedded NUL: os.open would raise the same, uncaught by OSError
+                raise CheckpointError(f"checkpoint path is not usable: {e}") from e
             from .safeio import NotRegularFile, _open_regular
             try:
                 fd = _open_regular(str(path) + ".claim", os.O_RDWR | os.O_CREAT, 0o600)
             except NotRegularFile as e:
                 raise CheckpointConflict(
                     f"checkpoint {Path(path).stem!r} claim file is not a regular file") from e
+            except ValueError as e:
+                raise CheckpointError(f"checkpoint path is not usable: {e}") from e
+            if os.fstat(fd).st_nlink != 1:
+                os.close(fd)
+                fd = None
+                raise CheckpointConflict(
+                    f"checkpoint {Path(path).stem!r} claim file is linked to another name")
             import fcntl
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except CheckpointConflict:

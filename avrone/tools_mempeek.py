@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import re
+
+from . import textsafe as _textsafe
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -64,7 +66,7 @@ def _iso(ts: Any) -> str:
 
 
 def _clean(s: str, n: int) -> str:
-    s = re.sub(r"[\x00-\x1f\x7f]", "?", s)
+    s = _textsafe.UNSAFE_ONE.sub("?", s)
     return s if len(s) <= n else s[:n] + "..."
 
 

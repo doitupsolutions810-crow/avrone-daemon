@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.124.0)
+# AVRONE MASTER PROMPT (v0.130.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~5,966 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~6,622 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -64,6 +64,10 @@ Avrone/
 │   ├── evolve.py                Self-evolution (v0.9): AVRONE proposes and validates changes to its OWN codebase.
 │   ├── fleet.py                 Fleet: link AVRONE servers into a network of nodes that spawn agents on each other.
 │   ├── fsunify.py               Unify the generic file tools with the per-agent filesystem.
+│   ├── fusion_blackboard.py     Fan-in blackboard for the fusion relay.
+│   ├── fusion_deliver.py        Outbound delivery from this daemon to CycleKernal ``POST /v1/events``.
+│   ├── fusion_loopback.py       Loopback spelling shared by access control, the doctor, and fusion delivery.
+│   ├── fusion_plane.py          How the daemon reads a capability-authority execute response.
 │   ├── gateway.py               Gateway: route model calls across several providers with fallback + circuit breaking.
 │   ├── governor.py              Health / thermal governor: adapt squad parallelism to the node's condition.
 │   ├── greatscale.py            Great Scale bridge: AVRONE peer of doitupsolutions810-crow/great-scale (public/residual.cjs).
@@ -82,6 +86,7 @@ Avrone/
 │   ├── server.py                Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD).
 │   ├── sovereign.py             Sovereign OS: the environment agents live and work in.
 │   ├── telemetry.py             Telemetry + System Map: AVRONE traces its own nodes.
+│   ├── textsafe.py              One character class for "show this outside text on one line" (round 136).
 │   ├── tools.py                 Tool registry. Every tool an agent can call lives here: built-ins, plugins, MCP tools.
 │   ├── tools_agenthome.py       agent_home: a read-only, bounded report on the calling agent's OWN home.
 │   ├── tools_codexstats.py      codex_stats: a bounded, redacted aggregate of the calling agent's OWN run in the Eternal CodeX log.
@@ -102,7 +107,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 298 test files, offline by default
+├── tests/                  # 310 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -117,6 +122,8 @@ Avrone/
 │   ├── mac-avrone-autopilot.sh
 │   ├── mac-local-squad.sh
 │   ├── verify-grok-bridge.sh
+│   ├── verify_fusion_daemon.py
+│   ├── verify_fusion_daemon.sh
 ├── deploy/
 │   ├── full.env
 │   ├── openclaw.json5
@@ -312,31 +319,43 @@ landed and the suite is green. End with what is still open.
 - **toolset-hardening**: Use the self-evolve loop to harden AVRONE's own tools - audit the toolset, pick a weak tool, prove the weakness with a failing test, and land the fix through a gated prop
 
 ## 7. Environment knobs (every `AVRONE_*` the code reads)
-`AVRONE_ADMIN_TOKEN`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
+`AVRONE_ADMIN_TOKEN`, `AVRONE_ADMIN_TOKEN_PREVIOUS`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_FUSION_STATE_PATH`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
-## v0.124: Round 131: a checkpoint claim file cannot be a planted symlink. 5,966 tests + 19 integration
+## v0.130: Round 137: a checkpoint claim file cannot be a planted symlink or a hard link. 6,622 tests + 19 integration
 
 - **Bug.** `checkpoint.claim` opened `<file>.claim` with `os.open(O_RDWR|O_CREAT)` and no `O_NOFOLLOW`. Round 102 had already closed that hole for `<file>.lock` and `fleet_nonces.json.lock`. `.claim` was still the old open. A symlink planted in the data directory (an agent's shell can write there) was followed: a dangling link created its target anywhere the daemon could write, and the flock landed on that file. A FIFO, socket or directory was swallowed as "no flock here", so the checkpoint was marked busy with no cross-process exclusion. Two processes could then resume the same squad checkpoint.
-- **Fix.** The claim file is opened through `safeio._open_regular` (`O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, then `fstat` must say regular, mode `0o600`). Anything else raises `CheckpointConflict` and does not mark the checkpoint busy, so the claim can be retried once the path is a normal file. A lock held by another live process is still an immediate conflict. A missing parent directory is still created. Other open errors stay best-effort and in-process only, as before.
-- **Tests.** `tests/test_round131_claim_file.py` (8). On v0.123 the dangling-symlink case creates the link target and returns a live claim. The others cover an existing target held with `LOCK_EX`, a FIFO, a directory, a Unix socket, retry after the bad name is removed, mode `0600` plus close-on-exec, a name swapped for a symlink after release, and eight concurrent claims with one winner.
+- **Fix.** The claim file is opened through `safeio._open_regular` (`O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`, then `fstat` must say regular, mode `0o600`). Anything else raises `CheckpointConflict` and does not mark the checkpoint busy, so the claim can be retried once the path is a normal file. A hard link (`st_nlink != 1`) is refused the same way: it is a regular file, but the flock would cover the other name. An embedded NUL in the path raises `CheckpointError` instead of an uncaught `ValueError`. A lock held by another live process is still an immediate conflict. A missing parent directory is still created. Other open errors stay best-effort and in-process only, as before.
+- **Tests.** `tests/test_round137_claim_file.py` (19). On v0.123 the dangling-symlink case creates the link target and returns a live claim. Also covered: a relative symlink, a symlink chain, a symlink loop, a symlink to the checkpoint file, `/dev/null`, or a directory, a hard link, a claim held by another process, 100 release cycles, 32 independent checkpoints, an embedded NUL, a parent path that is a file, names at NAME_MAX, a symlink to a FIFO, and threads reclaiming the same checkpoint. The non-integration run on this merge passed 6,622, skipped 2, and failed 2 (`test_master_prompt` before this file was regenerated, and `test_proc_status_zombie_and_caps`, which sees an extra long-lived child once the suite has run for at least 600s).
 
-## v0.123: Round 130: a model's non-finite "final" renders as valid text. 5,957 tests + 19 integration
+## v0.129: Round 136: one shared unsafe-character class, now covering bidi controls. 6,482 tests + 19 integration
 
-- **Bug** (probe `llmfuzz.py`, cases `final_num` and `final_nan`): a model reply of `{"final": 1e999}` answered `"Infinity"`, and `{"final": {"x": NaN}}` answered `{"x": NaN}`, which is not valid JSON.
-- **Fix:** `normalize_action` uses the new `trinity._finite_json` to write each non-finite number as `"inf"`, `"-inf"` or `"nan"`, then dumps with `allow_nan=False`. Structured finals stay valid JSON. Finite numbers and strings are unchanged.
-- **Probed clean:**
-  - Every other id-to-filename sanitizer either dedups (MCP tool names) or already hashes (task board, and the bridge since round 129).
-  - The fleet's `status_of` handles a clock step-back, and offline eviction never removes a live peer.
-- **Tests:** `tests/test_round130_final_nonfinite.py` (11). 9 fail on v0.122.
+- **Refactor:** the new `avrone/textsafe.py` defines `UNSAFE_CLASS`, `UNSAFE_RUN` and `UNSAFE_ONE`. Ten modules used to keep their own copy of the one-line class, and round 135 had to fix all nine of the sanitizers. Those modules now import it:
+  - tools, fleet, presence, agentkit, tools_extra
+  - mempeek, agenthome, introspect, research_note, lesson_forget
+- **Bug:** no sanitizer removed Unicode bidi controls, so a peer's node name with U+202E could reverse the rest of its `fleet_nodes` or `fleet_agents` row on screen ("Trojan Source"). The class now also covers:
+  - U+200E, U+200F
+  - U+061C
+  - U+202A to U+202E
+  - U+2066 to U+2069
 
-## v0.122: Round 129: runs no longer share a bridge file through their sanitized ids. 5,946 tests + 19 integration
+  ZWJ and variation selectors are kept, so emoji are unchanged.
+- **Guard:** `test_no_private_copies` fails if a module adds its own `\x00-\x1f` class.
+- **Tests:** `tests/test_round136_textsafe.py` (106). 98 fail on v0.128.
 
-- **Bug** (probe `capsur.py`): `bridge.safe_run_id` stripped non-ASCII characters, surrogates and punctuation, and cut ids at 80 characters. So `"r\ud800"` and `"r"`, or `"运行1"` and `"运行2"`, shared one bridge file. Each run read the other's posts, and those posts counted against its own post cap.
-  - Run ids are generated internally, so this was mostly latent. The task board had already guarded against it since round 112.
-- **Fix:** an id that had to be changed now carries 12 hex of its SHA-256, the same rule the task board uses. Ids that are already safe are unchanged, so no existing files move.
-- **Probed clean:** with capgate audit on, every receipt for a call carrying lone surrogates in its args, run id or agent name was recorded. `verify_chain` passes, and the memory, bridge, receipt and run log files stay valid UTF-8.
-- **Tests:** `tests/test_round129_bridge_run_ids.py` (17). 5 fail on v0.121.
+## v0.128: Round 135: one-line sanitizers remove every line break, C1 controls included. 6,376 tests + 19 integration
+
+- **Bug:** a test ran every Python `str.splitlines()` break (10 characters) and all C1 controls through each sanitizer. U+0085 (NEL) and U+0080 to U+009F passed through all nine below, and some also let U+2028 and U+2029 through. A peer's node or agent name containing NEL could still split into a forged row.
+  - `fleet._clip1`
+  - `presence._one`
+  - `tools_extra._line1`
+  - `agentkit._one_line`
+  - mempeek and agenthome `_clean`
+  - `introspect.redact_value`
+  - research_note's topic
+  - lesson_forget's reason
+- **Fix:** every sanitizer now uses the same class as `tools.one_line`: `[\x00-\x1f\x7f-\x9f\u2028\u2029]`.
+- **Tests:** `tests/test_round135_c1_breaks.py` has 345 tests, a sweep of sanitizers against breaks. 236 fail on v0.127.
 
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
@@ -349,4 +368,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.124.0 checked out: 5,966 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.130.0 checked out: 6,622 passed, 99% coverage. Next: round <N+1> on <angle>."

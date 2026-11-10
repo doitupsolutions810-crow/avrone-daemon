@@ -16,6 +16,8 @@ import dataclasses
 import json
 import os
 import re
+
+from . import textsafe as _textsafe
 from typing import TYPE_CHECKING, Any
 
 from .tools import Tool
@@ -130,7 +132,7 @@ def redact_value(name: str, value: Any) -> str:
         return "***redacted (token-shaped value)***"
     v = _URL_USERINFO_RE.sub(r"\1***@", v)
     v = _SECRET_QUERY_RE.sub(r"\1***", v)
-    v = re.sub(r"[\x00-\x1f\x7f]", "?", v)
+    v = _textsafe.UNSAFE_ONE.sub("?", v)
     return v[:ENV_REPORT_MAX_VALUE] + ("..." if len(v) > ENV_REPORT_MAX_VALUE else "")
 
 

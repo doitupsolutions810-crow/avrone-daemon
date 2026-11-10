@@ -13,6 +13,8 @@ import functools
 import inspect
 import os
 import re
+
+from . import textsafe as _textsafe
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
@@ -109,7 +111,39 @@ def error_text(e: BaseException, ctx: Any = None) -> str:
         return (f"ERROR: the text contains a lone UTF-16 surrogate (U+{ord(ch):04X} at position {e.start}), "
                 "which is not valid text and cannot be stored or run. Remove or replace that character "
                 "and try again.")
+    sq = sqlite_storage_text(e)
+    if sq:
+        return sq
     return f"ERROR: {type(e).__name__}: {_safe_str(e)}"
+
+
+# round 131: a full or broken job-queue database answered "ERROR: OperationalError: disk I/O error"
+# (and the /api/fleet/jobs route a bare 500), with no word on whether a retry could help
+_SQLITE_HINTS = (
+    ("database or disk is full", "the disk is full", False),
+    ("disk i/o error", "the storage reported an I/O error", False),
+    ("readonly database", "the storage is read-only", False),
+    ("database is locked", "the database is busy (another process holds its lock)", True),
+    ("database table is locked", "the database is busy (another process holds its lock)", True),
+    ("unable to open database file", "the database file could not be opened", False),
+    ("file is not a database", "the database file is damaged", False),
+    ("database disk image is malformed", "the database file is damaged", False),
+)
+
+
+def sqlite_storage_text(e: BaseException) -> str | None:
+    """Plain ERROR line for a sqlite storage failure, or None when e is not one."""
+    import sqlite3
+    if not isinstance(e, sqlite3.DatabaseError):
+        return None
+    msg = _safe_str(e)
+    low = msg.lower()
+    for key, hint, retry in _SQLITE_HINTS:
+        if key in low:
+            after = ("It may work if retried in a moment." if retry else
+                     "Retrying will fail the same way until the storage problem is fixed.")
+            return f"ERROR: database write or read failed: {hint} (sqlite: {msg}). {after}"
+    return None
 
 
 import errno as _errno_mod  # noqa: E402
@@ -133,6 +167,14 @@ def _storage_text(e: OSError, names: str) -> str:
 
 
 _SURROGATE = re.compile("[\ud800-\udfff]")
+
+# every character str.splitlines() breaks on, plus the rest of C0/C1 controls and DEL
+_LINE_BREAKS = _textsafe.UNSAFE_RUN
+
+
+def one_line(v: Any) -> str:
+    """str(v) with every line break and control character run collapsed to one space (round 134)."""
+    return _LINE_BREAKS.sub(" ", str(v))
 
 
 def valid_text(text: str) -> str:
@@ -320,7 +362,10 @@ class ToolRegistry:
     def docs(self) -> str:
         lines = ["Available tools (one call per reply, or a small batch of independent calls):"]
         for t in sorted(self._tools.values(), key=lambda t: t.name):
-            lines.append(f"- {t.name} {t.args_doc}: {t.description}")
+            # round 134: a plugin or MCP server's description/args doc with \n, \r, U+2028 ...
+            # wrote extra lines into every agent's tool list (a forged "- shell ..." entry, or an
+            # instruction that read as the system's); each tool is now one line
+            lines.append(f"- {t.name} {one_line(t.args_doc)}: {one_line(t.description)}")
         return "\n".join(lines) + "\n"
 
     def suggest(self, name: str, n: int = 3) -> list[str]:

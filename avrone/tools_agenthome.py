@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import re
+
+from . import textsafe as _textsafe
 import shutil
 import stat as _st
 from pathlib import Path
@@ -42,7 +44,7 @@ def _clean(v: Any, n: int = 80) -> Any:
         return v
     if isinstance(v, (int, float)):
         return v if v == v else None
-    s = re.sub(r"[\x00-\x1f\x7f]", "?", str(v))
+    s = _textsafe.UNSAFE_ONE.sub("?", str(v))
     return s if len(s) <= n else s[:n] + "..."
 
 

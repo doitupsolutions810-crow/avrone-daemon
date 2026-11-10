@@ -172,7 +172,11 @@ TRIAL_INGEST_PATHS = frozenset({"/api/fleet/trials", "/api/fleet/bridge/trials"}
 
 def max_body_bytes(path: str = "") -> int:
     """Largest request body this server reads for path. Trial relays have a hard cap."""
-    if path in TRIAL_INGEST_PATHS:
+    # Match fleet.canonical_path(): reverse-proxy deployments may retain a mount prefix.
+    marker = "/api/fleet/"
+    offset = path.find(marker)
+    canonical_path = path[offset:] if offset >= 0 else path
+    if canonical_path in TRIAL_INGEST_PATHS:
         return TRIAL_INGEST_MAX_BODY_BYTES
     n = max(_env_cap("AVRONE_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, HARD_MAX_BODY_BYTES),
             12 * max_message_chars() + 64 * 1024)

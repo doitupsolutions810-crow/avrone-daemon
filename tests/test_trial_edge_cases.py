@@ -950,62 +950,44 @@ def test_quarantined_sender_capacity_exhaustion_is_transactional(tmp_path, monke
     assert duplicate["results"][0]["status"] == "duplicate"
 
 
-def test_sqlite_full_rolls_back_trial_and_receipt_as_one_transaction(tmp_path, monkeypatch):
+def test_sqlite_full_error_on_receipt_rolls_back_staged_trial(tmp_path, monkeypatch):
     import sqlite3
 
     path = tmp_path / "trials.sqlite3"
     store = TrialStore(path)
     original_connect = store._connect
 
-    # Create a filler table, cap the database at its current size, then consume
-    # every remaining page with committed rows until SQLite reports SQLITE_FULL.
-    filler = original_connect()
-    try:
-        filler.execute("CREATE TABLE disk_fill (payload BLOB NOT NULL)")
-        current_pages = filler.execute("PRAGMA page_count").fetchone()[0]
-        limit = filler.execute(f"PRAGMA max_page_count={current_pages}").fetchone()[0]
-        assert limit == current_pages
+    class FailReceiptWrite:
+        def __init__(self, connection):
+            self.connection = connection
 
-        filled_rows = 0
-        while True:
-            try:
-                filler.execute("INSERT INTO disk_fill(payload) VALUES (zeroblob(3000))")
-                filled_rows += 1
-            except sqlite3.OperationalError as exc:
-                assert "full" in str(exc).lower()
-                break
-        assert filled_rows >= 1
-        assert filler.execute("PRAGMA page_count").fetchone()[0] <= limit
-    finally:
-        filler.close()
+        def execute(self, sql, *args):
+            if sql.lstrip().upper().startswith("INSERT INTO TRIAL_RECEIPTS"):
+                raise sqlite3.OperationalError("database or disk is full")
+            return self.connection.execute(sql, *args)
 
-    def connect_at_full_page_limit():
-        db = original_connect()
-        page_count = db.execute("PRAGMA page_count").fetchone()[0]
-        db.execute(f"PRAGMA max_page_count={page_count}")
-        return db
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
 
-    monkeypatch.setattr(store, "_connect", connect_at_full_page_limit)
-    large = make_trial(
-        system="cyclekernel",
-        node="node-a",
-        run_id="run-disk-full",
-        check_id="verify",
-        check_version="10.2",
-        attempt_id="large-config",
-        outcome="pass",
-        check_config={"padding": "x" * 16_000},
+    monkeypatch.setattr(
+        store,
+        "_connect",
+        lambda: FailReceiptWrite(original_connect()),
     )
-
     with pytest.raises(TrialStoreError, match="transaction failed"):
-        store.ingest_many([large], sender="peer-a", transport="fleet")
+        store.ingest_many(
+            [sample("pass", "sqlite-full-receipt")],
+            sender="peer-a",
+            transport="fleet",
+        )
 
     monkeypatch.setattr(store, "_connect", original_connect)
     recovered = original_connect()
     try:
+        # The trial INSERT succeeded inside the transaction; the injected SQLITE_FULL
+        # on the receipt INSERT must roll that trial back before it becomes visible.
         assert recovered.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 0
         assert recovered.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 0
-        assert recovered.execute("SELECT COUNT(*) FROM disk_fill").fetchone()[0] == filled_rows
     finally:
         recovered.close()
     assert store.pool_snapshot()["runs"] == 0

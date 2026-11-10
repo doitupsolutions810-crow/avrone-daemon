@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.138: Round 145: a corrupt fleet.json that can't be set aside is never overwritten. 6,684 tests + 19 integration
+
+- **Bug** (`FleetManager._load_saved`):
+  - A failed rename of the corrupt file was ignored.
+  - The node started with an empty registry, and its first save (in `__init__`) replaced the file, so nothing of it was kept.
+- **Fix:**
+  - The node remembers that the set-aside is still pending (`_pending_aside`).
+  - Every `_write_registry` tries the rename first. While it still fails, the write is skipped, `save_blocked` counts the skips, and the registry stays in memory only. The node keeps booting and serving.
+  - Once the rename works, the old file is kept as `.corrupt-<ts>` and saves resume.
+- **Tests:** `tests/test_round145_fleet_aside.py` (2). Both fail on v0.137.
+
 ## v0.137: Round 144: a task board that can't be read right now is never replaced. 6,682 tests + 19 integration
 
 - **Bug** (`agentkit._task_board_locked`):

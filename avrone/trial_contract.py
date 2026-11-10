@@ -35,6 +35,15 @@ def _identity(value: Any, field: str, max_chars: int = MAX_FIELD_CHARS) -> str:
     return value
 
 
+def _config_string(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    normalized = unicodedata.normalize("NFC", value).strip()
+    if len(normalized) > MAX_CONFIG_BYTES:
+        raise ValueError(f"{field} exceeds {MAX_CONFIG_BYTES} characters")
+    return _identity(normalized, field, MAX_CONFIG_BYTES)
+
+
 def _normalize_json(value: Any, depth: int, budget: list[int]) -> Any:
     budget[0] += 1
     if budget[0] > MAX_CONFIG_NODES:
@@ -52,13 +61,13 @@ def _normalize_json(value: Any, depth: int, budget: list[int]) -> Any:
             raise ValueError("check_config numbers must be finite")
         return value
     if isinstance(value, str):
-        return _identity(value, "check_config string", MAX_CONFIG_BYTES)
+        return _config_string(value, "check_config string")
     if isinstance(value, list):
         return [_normalize_json(item, depth + 1, budget) for item in value]
     if isinstance(value, dict):
         normalized: dict[str, Any] = {}
         for key, item in value.items():
-            normalized_key = _identity(key, "check_config key", MAX_CONFIG_BYTES)
+            normalized_key = _config_string(key, "check_config key")
             if normalized_key in normalized:
                 raise ValueError("check_config has duplicate keys after Unicode normalization")
             normalized[normalized_key] = _normalize_json(item, depth + 1, budget)

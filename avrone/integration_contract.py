@@ -35,8 +35,8 @@ def _text(value: Any, field: str, limit: int) -> str:
         raise EvidenceContractError(f"{field} must be NFC-normalized")
     # Machine identifiers must not contain C0/C1 controls, bidi controls, zero-width
     # format characters, or surrogate code points. These can spoof logs and identities.
-    if any(unicodedata.category(ch) in {"Cc", "Cf", "Cs"} for ch in value):
-        raise EvidenceContractError(f"{field} contains a control or formatting character")
+    if any(unicodedata.category(ch) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for ch in value):
+        raise EvidenceContractError(f"{field} contains a control, formatting, or line-separator character")
     return value
 
 

@@ -642,6 +642,7 @@ def test_http_trial_ingest_denies_empty_allowlist_even_with_valid_hmac(trial_api
     from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
 
     server._fleet().allow = []
+    server._fleet().require_allow = False
     path = "/api/fleet/trials"
     body = wrapper(FLEET_TRIAL_SCHEMA, [sample()])
     raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()

@@ -485,7 +485,9 @@ class Ledger:
     def _note_boot(self, peer: str, boot: Any) -> bool:
         if boot is None or boot == "":
             return False
-        if isinstance(boot, bool) or not isinstance(boot, (str, int)):
+        if isinstance(boot, bool) or isinstance(boot, float) or not isinstance(boot, (str, int)):
+            # A float is not an int. str(1.0) is "1.0" and str(1) is "1", so
+            # accepting both would resend on every poll that changes type.
             return False
         text = str(boot)
         prev = self.boots.get(peer)

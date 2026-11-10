@@ -554,6 +554,45 @@ def test_mirror_spellings_are_suppressed(tmp_path):
     assert ledger.accounts()["A"] == 0 and ledger.accounts()["suppressed"] == 4
 
 
+def test_duplicate_true_counts_as_delivered_once(tmp_path):
+    clock = ManualClock()
+    bodies = []
+
+    def transport(method, url, body, headers, timeout):
+        if method == "GET":
+            return HttpResult(200, {"boot": "same"}, None)
+        bodies.append(json.loads(body))
+        return HttpResult(200, {"accepted": True, "duplicate": True, "id": bodies[-1]["id"]}, None)
+
+    ledger = Ledger(tmp_path / "dup.json", clock)
+    assert ledger.offer(_event(eid="once", text="original")) == "accepted"
+    assert ledger.offer(_event(eid="once", text="rewrite")) == "duplicate"
+    report = ledger.pump(transport, _cfg(), max_cycles=2)
+    assert report["A"] == 1 and report["D"] == 1 and report["P"] == 0 and report["F"] == 0
+    assert len(bodies) == 1 and bodies[0]["payload"]["text"] == "original"
+    assert ledger.pump(transport, _cfg(), max_cycles=1)["calls"] == 0
+
+
+def test_float_boot_does_not_look_like_a_restart(tmp_path):
+    """A JSON number that is not an int is not a boot id. The same 1.5 twice
+    must not resend, and must not flap against the string \"1.5\"."""
+    clock = ManualClock()
+    posts = []
+
+    def transport(method, url, body, headers, timeout):
+        if method == "GET":
+            return HttpResult(200, {"status": "ghost-online", "boot": 1.5}, None)
+        posts.append(json.loads(body)["id"])
+        return HttpResult(200, {"accepted": True, "duplicate": False}, None)
+
+    ledger = Ledger(tmp_path / "float-boot.json", clock)
+    ledger.offer(_event(eid="stay"))
+    assert ledger.pump(transport, _cfg(), max_cycles=1)["D"] == 1
+    assert ledger.pump(transport, _cfg(), max_cycles=1)["calls"] == 0
+    assert posts == ["stay"]
+    assert "cyclekernal" not in ledger.boots
+
+
 def test_padded_and_leading_zero_content_lengths(client):
     """4096 is in range. 0004097 is 4097 and is refused before the body is read."""
 

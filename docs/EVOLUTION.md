@@ -285,3 +285,20 @@ Verify.sh exists in the repo tree (root). docker-verify job is present in .githu
 Recommend re-running CI; if green, pause this automation.
 
 On main: most recent CI runs show failure conclusions (e.g. 42848472627). Focus remains on the requested branch.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 676d6ae6) — GREEN
+
+Most recent CI run (42892263618) completed with success. Real runners assigned (runner_id 1000008512/8513/8514 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. Previous minimal fix (increased SIGKILL mid-write delays) resolved the flaky timing.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI runs (e.g. 42848472627 and prior) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.

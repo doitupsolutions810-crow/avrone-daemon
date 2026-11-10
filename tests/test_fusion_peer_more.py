@@ -297,6 +297,49 @@ def test_empty_2xx_is_delivered_and_ports_do_not_share_a_breaker_and_a_ledger_fi
     assert path.read_text() == raw
 
 
+def test_retry_after_holds_the_origin_and_garbage_does_not_spin(tmp_path):
+    with _Running() as peer:
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        url = base + "/v1/events"
+        watch = fp.FusionWatch()
+        event = fp.event_from_post(POST)
+        peer.mode = "429"
+        peer.retry_after = "0"
+        first = watch.submit(url, "secret", event, "find0000001")
+        assert first["error"] == "retry" and first["remembered"] is False
+        assert peer.posts_hits == 1
+        held = watch.submit(url, "secret", event, "find0000001")
+        assert held["error"] == "retry" and peer.posts_hits == 1
+        watch._hold_until.clear()
+        peer.retry_after = "31"
+        watch.submit(url, "secret", event, "find0000001")
+        wait = next(iter(watch._hold_until.values())) - time.monotonic()
+        assert 0 < wait < 0.2
+        watch._hold_until.clear()
+        peer.retry_after = "Wednesday"
+        watch.submit(url, "secret", event, "find0000001")
+        wait = next(iter(watch._hold_until.values())) - time.monotonic()
+        assert 0 < wait < 0.2
+        peer.mode = "ok"
+        watch._hold_until.clear()
+        assert watch.submit(url, "secret", event, "find0000001")["ok"] is True
+
+    with _Running() as peer:
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        watch = fp.FusionWatch()
+        peer.mode = "429"
+        peer.retry_after = "0.4"
+        event = fp.event_from_post(dict(POST, id="wait00000001", text="later"))
+        assert watch.submit(base + "/v1/events", "secret", event, "wait00000001")["error"] == "retry"
+        other = _Running()
+        try:
+            other.__enter__()
+            hopped = watch._dial("GET", f"http://127.0.0.1:{other.httpd.server_address[1]}/health", timeout=1.0)
+            assert hopped["ok"] is True
+        finally:
+            other.__exit__(None, None, None)
+
+
 def test_breaker_env_defaults_and_clamps(monkeypatch):
     monkeypatch.delenv("FUSION_BREAKER_THRESHOLD", raising=False)
     monkeypatch.delenv("FUSION_BREAKER_COOLDOWN", raising=False)

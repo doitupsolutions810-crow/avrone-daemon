@@ -121,6 +121,12 @@ An empty 2xx (`204`) is delivered and remembered. Non-empty garbage on a 2xx sta
 
 `python3 -m pytest -q tests/test_fusion_peer_more.py::test_empty_2xx_is_delivered_and_ports_do_not_share_a_breaker_and_a_ledger_file_is_kept tests/test_fusion_peer.py::test_watch_duplicate_oversized_permanent_and_retryable` — **2 passed** in 0.85s.
 
+## Retry-After
+
+A 429 or 408 holds that origin. `Retry-After: 0`, a word, or a number above 30 seconds falls back to 0.05 seconds, so a tight loop cannot spin or sleep for half a minute. Another port is not held. The id stays unseen, so the post is sent again after the hold.
+
+`python3 -m pytest -q tests/test_fusion_peer_more.py::test_retry_after_holds_the_origin_and_garbage_does_not_spin tests/test_fusion_peer_edges.py::test_retryable_statuses_and_avrone_boot_keeps_findings tests/test_fusion_peer.py::test_watch_duplicate_oversized_permanent_and_retryable` — **3 passed** in 1.08s.
+
 ## Merge with main `0df6674` (v0.129.0)
 
 `git fetch origin main` then `git merge origin/main`. The only conflict was `MASTER_PROMPT.md`: both sides changed the generated test-file count (ours 300, main 303). That is a simple count, not two intents. Regenerating the file from the merged tree resolved it.

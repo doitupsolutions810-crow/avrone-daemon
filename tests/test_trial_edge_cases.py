@@ -620,3 +620,34 @@ raise SystemExit(4)
     finally:
         db.close()
     assert recovered.pool_snapshot()["runs"] == 0
+
+
+def test_http_valid_hmac_from_unlisted_sender_is_denied_before_storage(trial_api_client, tmp_path):
+    from avrone.fleet import sign
+    from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
+
+    path = "/api/fleet/trials"
+    body = wrapper(FLEET_TRIAL_SCHEMA, [sample()], **{"from": "peer-b"})
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    headers = {"content-type": "application/json", **sign("t" * 32, "POST", path, raw)}
+
+    response = trial_api_client.post(path, content=raw, headers=headers)
+    assert response.status_code == 403
+    assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()
+
+
+def test_http_trial_ingest_denies_empty_allowlist_even_with_valid_hmac(trial_api_client, tmp_path):
+    from avrone import server
+    from avrone.fleet import sign
+    from avrone.trial_adapters import FLEET_TRIAL_SCHEMA
+
+    server._fleet().allow = []
+    path = "/api/fleet/trials"
+    body = wrapper(FLEET_TRIAL_SCHEMA, [sample()])
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    headers = {"content-type": "application/json", **sign("t" * 32, "POST", path, raw)}
+
+    response = trial_api_client.post(path, content=raw, headers=headers)
+    assert response.status_code == 403
+    assert "non-empty" in response.text
+    assert not (tmp_path / "data" / "trials" / "trials.sqlite3").exists()

@@ -103,6 +103,11 @@ def _validate_batch(
             run_id.encode("utf-8")
         except UnicodeEncodeError as exc:
             raise ValueError("bridge run_id must be valid Unicode") from exc
+        # Match Bridge's existing deep-mode behavior: <run>-wave1 shares <run>'s bridge.
+        from .bridge import bridge_run_id
+        run_id = bridge_run_id(run_id)
+        if not run_id.strip():
+            raise ValueError("canonical bridge run_id must not be empty")
     return trials, run_id
 
 

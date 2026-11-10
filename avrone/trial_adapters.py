@@ -6,6 +6,7 @@ has authenticated the exact request bytes and applied the sender allowlist/capab
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 
@@ -22,6 +23,13 @@ SENDER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 def _reject_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant {value} is not allowed")
+
+
+def _parse_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("JSON number is outside the finite float range")
+    return parsed
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -59,6 +67,7 @@ def strict_json_loads(raw: bytes) -> Any:
             bytes(raw).decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
+            parse_float=_parse_finite_float,
         )
         _check_json_bounds(parsed)
         return parsed

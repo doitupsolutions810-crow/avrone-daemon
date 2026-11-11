@@ -88,3 +88,12 @@ def test_config_allows_reused_acyclic_substructures():
     expected = {"left": {"nested": [1, "two", None]}, "right": {"nested": [1, "two", None]}}
 
     assert canonical_config_bytes(value) == canonical_config_bytes(expected)
+
+
+def test_config_integer_bit_length_boundary_is_exact():
+    at_limit = (1 << 4096) - 1
+    over_limit = 1 << 4096
+
+    assert canonical_config_bytes({"integer": at_limit})
+    with pytest.raises(ValueError, match="integer is too large"):
+        canonical_config_bytes({"integer": over_limit})

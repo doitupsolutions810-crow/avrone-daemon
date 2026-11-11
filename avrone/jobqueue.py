@@ -70,18 +70,29 @@ class PermanentJobError(Exception):
     instead of retrying it max_attempts times with backoff."""
 
 
+def _safe_result_text(value: Any) -> str:
+    """Stringify an unsupported result safely, including objects with hostile __str__/__repr__."""
+    try:
+        text = str(value)
+    except Exception:  # noqa: BLE001
+        text = f"<{type(value).__name__}: unprintable>"
+    return _redact_result(text)
+
+
 def _encode_result(result: Any) -> str:
-    """Always valid JSON. The old `json.dumps(result)[:100000]` raised TypeError on a non-JSON
-    result (the finished job was then failed and RE-RUN) and cut long results mid-token, so get()
-    crashed on the stored text forever after."""
+    """Always valid JSON and redact strings created by fallback serialization as well."""
     try:
         result = _redact_result(result)
-    except Exception:  # noqa: BLE001  (a cyclic or odd object: json.dumps below reports it)
-        pass
+    except Exception:  # noqa: BLE001
+        result = _safe_result_text(result)
     try:
-        text = json.dumps(result, default=str, allow_nan=False)
-    except (TypeError, ValueError):
-        text = json.dumps(repr(result))
+        text = json.dumps(result, default=_safe_result_text, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        try:
+            fallback = repr(result)
+        except Exception:  # noqa: BLE001
+            fallback = f"<{type(result).__name__}: unprintable>"
+        text = json.dumps(_redact_result(fallback))
     if len(text) > RESULT_MAX:
         text = json.dumps({"truncated": True, "bytes": len(text), "head": text[:RESULT_MAX - 200]})
     return text

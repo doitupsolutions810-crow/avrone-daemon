@@ -21,24 +21,66 @@ from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
+    """Depth-first, sorted, same order as the old os.walk loop. Round 49: an explicit stack.
+    os.walk recursed on Python 3.11 (the oldest one pyproject allows), so a tree deeper than the
+    recursion limit (about 1000 one-letter directories) killed the scan with RecursionError and
+    search_files returned no hits at all. Symlinked directories are listed, never entered."""
     if root.is_file():
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
+    stack = [str(root)]
+    while stack:
+        top = stack.pop()
+        try:
+            with os.scandir(top) as it:
+                entries = list(it)
+        except OSError:
+            continue
+        dirs, files = [], []
+        for e in entries:
+            try:
+                is_dir = e.is_dir(follow_symlinks=False)
+            except OSError:
+                is_dir = False
+            (dirs if is_dir else files).append(e.name)
+        for fn in sorted(files):
+            yield Path(top) / fn
+        keep = [d for d in sorted(dirs) if d not in skip_names and os.path.join(top, d) not in skip_paths]
+        stack.extend(os.path.join(top, d) for d in reversed(keep))
+
+
+def _lines(text: str):
+    """Round 49: split on "\n" only, as grep, git and editors count lines (textsafe.lines_keepends
+    has the same rule). str.splitlines() also broke on \x0c, \x0b, \x1c-\x1e, NEL, U+2028 and a
+    lone \r, so after a form feed in a Python file every reported line number was off, and a
+    pattern could not match text either side of one. A CRLF's \r is dropped; a UTF-8 BOM at the
+    start of the file is dropped so ^anchors match line 1."""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    parts = text.split("\n")
+    if parts and parts[-1] == "":
+        parts.pop()
+    for ln in parts:
+        yield ln[:-1] if ln.endswith("\r") else ln
+
+
+def _int(req: dict, key: str, default: int, lo: int, hi: int) -> int:
+    v = req.get(key, default)
+    if type(v) is not int:
+        return default
+    return max(lo, min(hi, v))
 
 
 def run(req: dict, out) -> None:
     rx = re.compile(req["pattern"])
-    cap, max_files, max_bytes = int(req.get("cap", 200)), int(req.get("max_files", 5000)), int(
-        req.get("max_bytes", 1_000_000))
+    # round 49: the parent's limits, bounded (a bool, float or string limit was int()-ed as is)
+    cap = _int(req, "cap", 200, 1, 10_000)
+    max_files = _int(req, "max_files", 5000, 1, 1_000_000)
+    max_bytes = _int(req, "max_bytes", 1_000_000, 0, 64_000_000)
     hits = scanned = 0
     root = Path(req["root"])
     for f in _iter_files(root, set(req.get("skip_dirs") or []), set(req.get("skip_paths") or [])):
-        if scanned > max_files or hits >= cap:
+        if scanned >= max_files or hits >= cap:  # round 49: was ">", one file past the limit
             break
         scanned += 1
         try:
@@ -61,9 +103,9 @@ def run(req: dict, out) -> None:
             continue
         if b"\0" in data[:4096]:
             continue
-        for no, line in enumerate(data.decode(errors="replace").splitlines(), 1):
+        for no, line in enumerate(_lines(data.decode(errors="replace")), 1):
             if rx.search(line):
-                out.write(json.dumps({"path": str(f), "line": no, "text": line.strip()[:300]}) + "\n")
+                out.write(json.dumps({"path": str(f), "line": no, "text": line[:4000].strip()[:300]}) + "\n")
                 out.flush()
                 hits += 1
                 if hits >= cap:
@@ -88,6 +130,6 @@ def diff_main() -> None:
     from avrone.textsafe import lines_keepends
     req = json.loads(sys.stdin.read())
     for ln in difflib.unified_diff(lines_keepends(req["a"]), lines_keepends(req["b"]),
-                                   fromfile=req["a_name"], tofile=req["b_name"], n=int(req["n"])):
+                                   fromfile=req["a_name"], tofile=req["b_name"], n=max(0, min(int(req["n"]), 10_000))):
         sys.stdout.write(json.dumps(ln) + "\n")
     sys.stdout.flush()

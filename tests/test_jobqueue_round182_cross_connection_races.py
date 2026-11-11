@@ -39,13 +39,13 @@ def test_prune_never_deletes_queued_or_running_jobs_during_concurrent_claims(tmp
         try:
             q = queues[0]
             running_id = await q.enqueue("running", {"keep": "running"})
-            queued_id = await q.enqueue("queued", {"keep": "queued"})
             finished_id = await q.enqueue("finished", {"eligible": "prune"})
-            claimed = await q.claim()
-            assert claimed is not None and claimed["id"] == running_id
+            queued_id = await q.enqueue("queued", {"keep": "queued"})
+            running = await q.claim()
+            assert running is not None and running["id"] == running_id
             finished = await q.claim()
-            assert finished is not None and finished["id"] == queued_id
-            assert await q.complete(finished_id, {"done": True})
+            assert finished is not None and finished["id"] == finished_id
+            assert await q.complete(finished_id, {"done": True}, finished["token"])
 
             # Race pruning from several independent connections. keep=0 and age=0
             # makes all finished rows eligible while unfinished rows remain protected.

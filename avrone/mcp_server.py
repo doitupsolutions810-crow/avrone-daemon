@@ -16,11 +16,32 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
 import os
 import sys
 from typing import Any
 
 log = logging.getLogger("avrone.mcp_server")
+
+# json.loads accepts JavaScript-style NaN/Infinity by default. Keep top-level scalar
+# junk tolerant for backwards compatibility, but never let non-JSON numbers enter
+# request objects or batches.
+_INVALID_JSON_CONSTANT = object()
+
+
+def _has_non_json_number(value: Any) -> bool:
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if item is _INVALID_JSON_CONSTANT:
+            return True
+        if isinstance(item, float) and not math.isfinite(item):
+            return True
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
 
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -176,7 +197,9 @@ class AvroneMCPServer:
             if not line:
                 continue
             try:
-                msg = json.loads(line)
+                msg = json.loads(line, parse_constant=lambda _literal: _INVALID_JSON_CONSTANT)
+                if isinstance(msg, (dict, list)) and _has_non_json_number(msg):
+                    raise ValueError("non-standard JSON numeric constant")
             except (ValueError, RecursionError):
                 # ValueError covers JSONDecodeError and also an integer over Python's 4300-digit limit;
                 # RecursionError is very deep nesting. Both used to escape and kill the whole server.

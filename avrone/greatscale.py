@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import Decimal, localcontext, ROUND_CEILING
 from typing import TYPE_CHECKING, Any
 
 from .tools import Tool
@@ -95,7 +96,30 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
         return None
     if p == 1:
         return 1
-    return max(1, math.ceil(math.log(alpha) / math.log1p(-p) - 1e-12))
+    # An unconditional epsilon subtraction can undercount at an adjacent
+    # floating-point confidence boundary: p=0.5, alpha=nextafter(.25, 0)
+    # needs 3 trials, not 2. Only ambiguous ratios need decimal validation.
+    estimate = math.log(alpha) / math.log1p(-p)
+    if math.isfinite(estimate) and estimate < 2**50:
+        distance = abs(estimate - round(estimate))
+        if distance > max(1e-10, 32 * math.ulp(estimate)):
+            return max(1, math.ceil(estimate))
+    # Interpret p and alpha as their exact supplied binary float values.
+    # Adaptive precision also handles p as small as 5e-324, where the
+    # floating-point ratio would overflow to infinity.
+    dp, da = Decimal.from_float(p), Decimal.from_float(alpha)
+    digits = max(90, 4 * max(0, -da.adjusted()) + 80,
+                 2 * max(0, -dp.adjusted()) + 80)
+    with localcontext() as ctx:
+        ctx.prec = digits
+        remaining = Decimal(1) - dp
+        count = max(1, int((da.ln() / remaining.ln()).to_integral_value(rounding=ROUND_CEILING)))
+        # Validate both sides; Decimal logarithms are rounded independently.
+        while remaining ** count > da:
+            count += 1
+        while count > 1 and remaining ** (count - 1) <= da:
+            count -= 1
+        return count
 
 
 def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:

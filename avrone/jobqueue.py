@@ -240,6 +240,16 @@ class JobQueue:
             return await asyncio.to_thread(guarded)
 
     async def enqueue(self, kind: str, payload: dict[str, Any], priority: int = 0, max_attempts: int = 3) -> str:
+        # round 164: None/objects were stored as their repr, and a lone surrogate in it raised a raw
+        # UnicodeEncodeError out of sqlite; both are now a ValueError naming the problem
+        if isinstance(kind, (int, float)) and not isinstance(kind, bool):
+            kind = str(kind)  # a numeric kind was always stored as its text (test_bad_priority_and_kind)
+        if not isinstance(kind, str) or not kind or len(kind) > 64 or not kind.isprintable():
+            raise ValueError("job kind must be a short printable string")
+        try:
+            kind.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("job kind must be valid text (no lone surrogates)") from None
         jid = uuid.uuid4().hex[:12]
         now = time.time()
         body = json.dumps(payload)  # an unserializable payload fails HERE, to the caller, not in a worker

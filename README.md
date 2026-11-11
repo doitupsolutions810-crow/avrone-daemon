@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.157: Round 164: JobQueue.enqueue validates kind
+
+- **Before:** a `kind` containing a lone surrogate raised a raw `UnicodeEncodeError` out of sqlite. `None` and other objects were saved as their repr.
+- **Now:** these cases raise a `ValueError` that says what is wrong:
+  - an empty kind
+  - a kind longer than 64 characters
+  - a non-printable kind, including a newline
+  - a kind with a surrogate
+  - a bool
+  - `None` and other objects
+- **Unchanged:** a numeric kind is still saved as its text (`123` becomes `"123"`).
+- **Tests:** `tests/test_round164_enqueue_kind.py` (9). 5 fail on v0.156.
+
 ## v0.156: Round 163: secret_scan fix masks memory values
 
 - **The gap:** `memory_save` stored values raw, and fleet memory sync sent them to the parent node. `secret_scan` flagged `memory.jsonl`, but `fix` refused to change it.

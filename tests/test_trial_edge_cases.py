@@ -1091,3 +1091,54 @@ def test_sender_quarantine_survives_restart_and_does_not_block_other_senders(tmp
     assert blocked["results"][0]["status"] == "sender_quarantined"
     assert allowed["results"][0]["status"] == "accepted"
     assert reopened.pool_snapshot()["runs"] == 2
+
+
+def test_wal_checkpoint_and_reopen_preserve_evidence_and_receipt_integrity(tmp_path):
+    path = tmp_path / "trials.sqlite3"
+    store = TrialStore(path)
+    envelope = sample("pass", "wal-checkpoint")
+    accepted = store.ingest_many([envelope], sender="peer-a", transport="fleet")
+    assert accepted["results"][0]["status"] == "accepted"
+
+    db = store._connect()
+    try:
+        checkpoint = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        assert checkpoint[0] == 0
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        db.close()
+
+    reopened = TrialStore(path)
+    retry = reopened.ingest_many([envelope], sender="peer-a", transport="fleet")
+    assert retry["results"][0]["status"] == "duplicate"
+    db = reopened._connect()
+    try:
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 2
+    finally:
+        db.close()
+
+
+def test_receipt_retention_remains_bounded_after_restart(tmp_path, monkeypatch):
+    import avrone.trial_receiver as receiver
+
+    monkeypatch.setattr(receiver, "MAX_RECEIPTS", 2)
+    path = tmp_path / "trials.sqlite3"
+    store = TrialStore(path)
+    envelopes = [sample("pass", f"receipt-restart-{index}") for index in range(4)]
+    for envelope in envelopes:
+        store.ingest_many([envelope], sender="peer-a", transport="fleet")
+
+    reopened = TrialStore(path)
+    db = reopened._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 4
+        rows = db.execute(
+            "SELECT trial_id FROM trial_receipts ORDER BY receipt_id"
+        ).fetchall()
+        assert len(rows) == 2
+        assert [row[0] for row in rows] == [envelopes[-2]["trial_id"], envelopes[-1]["trial_id"]]
+    finally:
+        db.close()
+    assert reopened.pool_snapshot()["runs"] == 4

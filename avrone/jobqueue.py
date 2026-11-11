@@ -256,7 +256,10 @@ class JobQueue:
         now = time.time()
         # Reject NaN/Infinity: Python's default encoder emits these non-standard JSON tokens,
         # which downstream strict-JSON consumers cannot reliably parse.
-        body = json.dumps(payload, allow_nan=False)  # unserializable values fail before a row is inserted
+        try:
+            body = json.dumps(payload, allow_nan=False)  # unserializable values fail before insert
+        except RecursionError:
+            raise ValueError("job payload is nested too deeply") from None
         try:
             prio = int(priority)
         except (TypeError, ValueError, OverflowError):

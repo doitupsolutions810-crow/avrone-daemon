@@ -733,3 +733,25 @@ This is the attested-history bridge from daemon main. No test in the suite impor
   - Agent names, kinds and ids are escaped.
   - A post missing kind or agent raised KeyError. A string refs value `"q1"` answered questions `q` and `1`, and an unhashable ref raised TypeError. Posts are now read defensively.
 - Tests: `tests/test_searchproc_lessonforget_robust.py`.
+
+## Hardening round 50 (Hark edge-case series): tools_gatewayview + tools_lessonrecall
+
+### replay_guard
+- **Boot guard:** a boot guard of inf raised OverflowError and NaN raised ValueError out of `int()`. A guard far in the future printed an unbounded countdown. It is now clamped to 0..2 windows.
+- **Nonce cache:** a non-dict cache crashed the tool. Bool expiry times are not counted as live.
+- **Readable check:**
+  - `Path.exists()` raising PermissionError crashed the tool. It now reports "unreadable".
+  - A dangling symlink counts as present.
+  - The check now uses the fleet's own `_load_nonce_snapshot` (O_NOFOLLOW, 64 MB cap, safeio json), so "readable" agrees with what the fleet can boot from.
+
+### stream_status
+- A subscriber with no `qsize()` or `maxsize` crashed the whole status. It is now skipped.
+- `maxsize <= 0` counts as unbounded, the way asyncio does. A maxsize of -1 used to be shown as FULL.
+- The subscriber cap allows 1024 subscribers, and every one printed a row. Rows are now sorted deepest first and capped at 30, with a "more not shown" line.
+- Bad counters (None, negative, str, bool) show as 0.
+
+### lesson_recall
+- A non-dict entry in the store crashed rank() and the tool with AttributeError. Such entries are skipped, and a store holding only corrupt entries is reported as such.
+- A finite ts far in the future (1e300, or a peer whose clock is a year ahead) sorted to the top forever and printed "0s ago". Anything past now + 300 s is treated as junk: it sorts last and shows "?". Bool ts values are junk too.
+- A non-text topic (dict, list or number) was converted with `str()`. It is now refused.
+- Tests: `tests/test_gatewayview_lessonrecall_robust.py`.

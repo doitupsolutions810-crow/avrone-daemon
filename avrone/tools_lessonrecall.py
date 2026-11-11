@@ -34,14 +34,29 @@ LESSON_DIGEST = 300
 AGE_MAX_S = 9999 * 86400  # round 131/132: a ts of 1e300 printed a 300-digit day count
 
 
-def _ts(r: dict[str, Any]) -> float:
+FUTURE_SLACK_S = 300  # round 50: clock skew a peer-synced lesson may carry
+
+
+def _ts(r: dict[str, Any], now: float | None = None) -> float:
     """A record's ts as a finite float, 0.0 for junk. Round 132: "inf"/NaN (a hand-edited or
-    peer-synced store) sorted to the top forever, and NaN made the order arbitrary."""
+    peer-synced store) sorted to the top forever, and NaN made the order arbitrary.
+    Round 50: a finite ts far in the future (1e300, or a peer with its clock a year ahead) did the
+    same thing and printed "0s ago"; anything past now + FUTURE_SLACK_S is junk too. A bool or a
+    non-dict record is junk."""
+    if not isinstance(r, dict):
+        return 0.0
+    raw = r.get("ts", 0)
+    if isinstance(raw, bool):
+        return 0.0
     try:
-        v = float(r.get("ts", 0) or 0)
+        v = float(raw or 0)
     except (TypeError, ValueError, OverflowError):
         return 0.0
-    return v if math.isfinite(v) else 0.0
+    if not math.isfinite(v):
+        return 0.0
+    if v > (time.time() if now is None else now) + FUTURE_SLACK_S:
+        return 0.0
+    return v
 
 
 def age(seconds: float) -> str:
@@ -68,7 +83,11 @@ def age(seconds: float) -> str:
 def rank(recs: list[dict[str, Any]], topic: str) -> tuple[list[dict[str, Any]], bool]:
     """(ranked records, matched_by_topic)."""
     want = bridgemod._words(topic or "")
-    ts = _ts
+    now = time.time()
+    recs = [r for r in recs if isinstance(r, dict)]  # round 50: a corrupt entry raised AttributeError
+
+    def ts(r: dict[str, Any]) -> float:
+        return _ts(r, now)
     if not want:
         return sorted(recs, key=lambda r: -ts(r)), False
     scored = [(len(want & bridgemod._words(str(r.get("value", "")))), r) for r in recs]
@@ -80,7 +99,10 @@ def rank(recs: list[dict[str, Any]], topic: str) -> tuple[list[dict[str, Any]], 
 @off_loop
 async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     topic = args.get("topic")
-    topic = "" if topic is None else str(topic)[:500]
+    if topic is not None and not isinstance(topic, str):
+        # round 50: {"a": 1} was str()-ed, and its quote/brace-free words matched lessons
+        return "ERROR: topic must be text"
+    topic = (topic or "")[:500]
     lim = args.get("limit", LESSON_RECALL_DEFAULT)
     from .argnum import tool_int  # round 45: "²".isdigit() is True and int("²") raised; so did int(inf)
     lim = tool_int(lim, LESSON_RECALL_DEFAULT, 1, LESSON_RECALL_MAX, bad=None)
@@ -97,6 +119,9 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: could not read lessons ({type(e).__name__})"
     if not recs:
         return "lesson_recall: no lessons stored yet (runs distill conclusions; research_note adds findings)"
+    recs = [r for r in recs if isinstance(r, dict)]
+    if not recs:
+        return "lesson_recall: no readable lessons stored (the store holds only corrupt entries)"
     ranked, by_topic = rank(recs, topic)
     if by_topic and not ranked:
         return f"lesson_recall: none of {len(recs)} stored lessons share words with that topic"
@@ -108,7 +133,7 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     used = len(head)
     shown = 0
     for r in ranked[:lim]:
-        t = _ts(r)
+        t = _ts(r, now)
         when = age(now - t) if t else "?"
         from .tools import one_line  # round 134: \r / U+2028 forged extra lesson lines
         text = redact_text(one_line(r.get("value", "")))

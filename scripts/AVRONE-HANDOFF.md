@@ -684,3 +684,26 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - **args:** `allow_nan=False`. Args must survive a JSON round trip, so non-str keys at any depth are refused; `{1: "a"}` used to probe the same as `{"1": "a"}`.
 - **format:** `" json "` is accepted.
 - Tests: `tests/test_flakeprobe_robust.py`.
+
+## Hardening round 48 (Hark edge-case series): fusion_loopback + fusion_plane
+
+### fusion_loopback (the HTTP access policy's loopback test, proxy bypass, doctor, breaker buckets)
+- **Brackets:** `host_text` called `.strip("[]")`, which removed any number of brackets from either end. So `]127.0.0.1[` and `[[::1]]` counted as loopback. Only one matched `[...]` pair is removed now.
+- **Zones:** `%` cut a zone from any name, so `127.0.0.1%evil` and `localhost%x` passed `caller_allowed`. That matters behind a trusted proxy that copies X-Forwarded-For. A zone is now allowed only on an IPv6 literal.
+- **Other characters:**
+  - Control characters, NUL, zero-width and non-ASCII characters are refused.
+  - Only spaces and tabs are trimmed, so `127.0.0.1\n` is no longer loopback.
+  - Bytes are decoded as ASCII, and non-str values are refused.
+- **is_any_loopback:** accepts one trailing root dot (`localhost.`) and rejects `.localhost` and `a..localhost`.
+- **origin_key:**
+  - `parts.port` raised ValueError outside the try (`:99999`, `:abc`). It now returns `invalid:`.
+  - The default port was None, so `http://localhost` and `https://localhost` shared one breaker, while `http://localhost` and `:80` did not. Ports now default by scheme.
+  - Non-loopback IPv6 keys are bracketed.
+
+### fusion_plane.classify_execute
+- A list or dict status raised TypeError (unhashable in a set test).
+- A str subclass, or any object with an always-true `__eq__`, could pose as SUCCEEDED, and a dict subclass's `.get()` could answer anything. Only exact `str` values are read, through `dict.get`.
+- A SUCCEEDED body with an `error` key or `result: not_executed` is now `contradictory` and not executed.
+- **Error reasons:** the reason used to be `str(body["error"])`. It was unbounded, multi-line, could call a hostile `__str__`, and an error spelled `plane_succeeded` came back as that reason code. **Behaviour change:** the reason is now `error`, and a clean single-line `detail` of at most 200 characters is added.
+
+- Tests: `tests/test_fusion_seams_robust.py`.

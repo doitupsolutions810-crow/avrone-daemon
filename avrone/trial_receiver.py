@@ -7,6 +7,7 @@ import re
 import stat
 import sqlite3
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -163,13 +164,17 @@ class TrialStore:
     ) -> dict[str, Any]:
         if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
             raise ValueError("authenticated sender must be a fleet node id")
-        if transport not in {"fleet", "bridge"}:
+        if not isinstance(transport, str) or transport not in {"fleet", "bridge"}:
             raise ValueError("transport must be fleet or bridge")
         if transport == "bridge":
             if not isinstance(bridge_run_id, str) or not bridge_run_id.strip() or len(bridge_run_id) > 128:
                 raise ValueError("bridge run_id must contain 1..128 characters")
-            if any(ord(ch) < 32 or ord(ch) == 127 for ch in bridge_run_id):
+            if any(unicodedata.category(ch) == "Cc" for ch in bridge_run_id):
                 raise ValueError("bridge run_id must not contain control characters")
+            try:
+                bridge_run_id.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("bridge run_id must be valid Unicode") from exc
         elif bridge_run_id is not None:
             raise ValueError("bridge_run_id is only valid for bridge transport")
         if not isinstance(envelopes, list) or not 1 <= len(envelopes) <= MAX_BATCH:

@@ -580,3 +580,16 @@ merge without his word.
   - A symlink loop gives a plain refusal.
 - **`display()`** no longer raises on a symlink loop or a broken agent dir.
 - Tests: `tests/test_fsunify_robust.py`.
+
+## Hardening round 42 (Hark edge-case series): logsafe against every argument shape
+- **Non-string arguments went into the server log raw.** Round 150 cleaned only `str` and exception arguments. A `Path("ckpt\nWARNING avrone.fleet ... trusted")`, an object whose `__str__` or `__repr__` held outside text, or a list or dict holding ESC or U+202E could all forge a line or reach the operator's terminal.
+  - They are now wrapped in `_Shown`, so `%s`, `%r` and format specs all render the cleaned and redacted text.
+  - Numbers (`numbers.Number`: int, float, bool, Decimal, Fraction, numpy scalars) and `None` pass through, so `%d`, `%x`, `%.2f` and `%c` keep working.
+  - bytes are left alone, because their repr already escapes control bytes.
+- **Template injection.** With arguments present, the template was never checked, so `log.warning(f"peer {name}: %s", err)` put ESC, `\r` or U+202E from `name` straight through. Templates now keep `\n` and `\t` only; everything else in the unsafe class is escaped.
+- **Non-str messages.** `log.warning(exc)` or `log.info(obj)` with no arguments was rendered by `str(msg)` unescaped. It is now converted, redacted and escaped.
+- **One raising `__str__` disabled cleaning for the whole record**, because the outer `except` swallowed it and left every argument raw. Each argument is now cleaned on its own, and a bad one renders as `<unprintable T: E>`.
+- **Size.** A 50 MB MCP stderr line went into one log line, and every redaction regex ran over it.
+  - Arguments are capped by `AVRONE_LOG_ARG_MAX_CHARS` (default 65536, clamped 256..4 MiB), with a `...[log arg truncated: N chars]` marker.
+  - Redaction sees at most 4x the cap.
+- Tests: `tests/test_logsafe_robust.py`.

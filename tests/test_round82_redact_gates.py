@@ -81,7 +81,7 @@ def test_plain_megabyte_is_much_faster_than_ungated():
 
 
 def test_secret_scan_rules_untouched():
-    assert len(c._PATTERNS) == 12 and isinstance(c._PATTERNS[3][0], c._KVRule)
+    assert len(c._PATTERNS) == 12 + len(__import__("avrone.secretshapes").secretshapes.CONTEXT_RULES) and isinstance(c._PATTERNS[3][0], c._KVRule)
     # round 152: + secretshapes.TOKEN_PREFIX_RE as the 12th rule; secret_scan names it "vendor-token"
     from avrone.tools_secrets import _kinds
     assert _kinds("hf_" + "a" * 34) == ["vendor-token"]

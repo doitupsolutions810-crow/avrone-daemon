@@ -89,9 +89,9 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), REDACTED),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), REDACTED),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), REDACTED),
-    (re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s:]+:[^/@\s]+@"), r"\1***@"),
-    (_shapes.TOKEN_PREFIX_RE, REDACTED),  # round 152: vendor tokens (secretshapes); keep last
-]
+    (re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s:]*:[^/@\s]+@"), r"\1***@"),  # round 153: redis://:pw@
+    (_shapes.TOKEN_PREFIX_RE, REDACTED),  # round 152: vendor tokens (secretshapes)
+] + [(rx, rep) for rx, rep, _g, _n in _shapes.CONTEXT_RULES]  # round 153: -u user:pass, --password x, ...
 
 
 # Scheme regexes above are bounded ({0,31}) and unanchored: `\b[a-z][a-z0-9+.\-]*://` rescanned the
@@ -100,7 +100,8 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 _IDENT_RE = re.compile(r"[\w.-]+")
 _SECRET_RE = re.compile(_SECRET_WORD, re.I)
-_KV_TAIL_RE = re.compile(r"[\"']?\s*[:=]\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
+# round 153: "=>" and ":=" are separators too ("password => 'x'" masked only the ">")
+_KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
 
 
 def _redact_kv(s: str) -> str:
@@ -214,6 +215,7 @@ _ANY_GATES: dict[int, tuple[str, ...]] = {
     4: ("sk-", "pk-", "rk-", "xai-"),
     5: ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
     11: _shapes.PREFIX_GATE,
+    **{12 + i: g for i, (_r, _p, g, _n) in enumerate(_shapes.CONTEXT_RULES)},
 }
 _KV_WORDS = ("token", "secret", "passw", "api", "private", "access", "_key", "credential")
 _GATES: list[tuple[tuple[str, ...], tuple[str, ...]] | None] = [

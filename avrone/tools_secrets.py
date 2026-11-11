@@ -35,6 +35,11 @@ TEXT_SUFFIXES = {".jsonl", ".json", ".log", ".txt", ".md", ".py", ".sh", ".env",
                  ".ini", ""}
 
 
+def _shapes_rules():
+    from .secretshapes import CONTEXT_RULES
+    return CONTEXT_RULES
+
+
 def _kinds(line: str) -> list[str]:
     from . import ctxspawn
     found = []
@@ -46,7 +51,7 @@ def _kinds(line: str) -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     names = ["private-key", "auth-header", "bearer", "secret-assignment", "api-key", "github-token", "slack-token",
-             "aws-key", "google-key", "jwt", "url-credentials", "vendor-token"]
+             "aws-key", "google-key", "jwt", "url-credentials", "vendor-token"] + [n for *_x, n in _shapes_rules()]
     for (pat, _rep), name in zip(ctxspawn._PATTERNS, names):
         if pat.search(line):
             found.append(name)

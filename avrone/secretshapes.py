@@ -30,3 +30,30 @@ TOKEN_PREFIX_RE = re.compile(
 
 PREFIX_GATE = ("sk_", "rk_", "pk_", "glpat-", "hf_", "npm_", "gsk_", "r8_", "pplx-", "xapp-", "ya29.",
                "SG.", "ASIA", "AccountKey=", ":AA")
+
+
+# Round 153: secrets known by the words around them rather than by their own shape. Each rule is
+# (regex, replacement, any-of gate, secret_scan name). The value groups stop at whitespace, quotes
+# and backslashes, so a rule applied to a raw JSON line never eats the string's closing quote
+# or a "\n" escape.
+_V = r"[^\s\"'\\]+"
+# start of a word, also right after a JSON escape ("...\n--password x" in a raw event line)
+_START = r"(?:(?<=\\[nrt])|(?<![\w-]))"
+CONTEXT_RULES: list[tuple["re.Pattern[str]", str, tuple[str, ...], str]] = [
+    # curl -u user:pass / --user user:pass
+    (re.compile(_START + r"(-u|--user)(\s+|=)([^\s:\"'\\]+):" + _V),
+     r"\1\2\3:[REDACTED]", ("-u", "--user"), "cli-user-password"),
+    # --password VALUE (the "=" form is the key=value rule's)
+    (re.compile(r"(?i)" + _START + r"(--(?:password|passwd|pass|token|secret|api-?key|access-?token|auth-?token))"
+                r"(\s+)(?!-)" + _V),
+     r"\1\2[REDACTED]", ("--",), "cli-secret-flag"),
+    # mysql/mariadb -pSECRET, sshpass -p SECRET
+    (re.compile(r"\b((?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n\"]{0,200}?\s-p)" + _V),
+     r"\1[REDACTED]", ("mysql", "mariadb"), "cli-db-password"),
+    (re.compile(r"\b(sshpass\s+-p\s*)" + _V), r"\1[REDACTED]", ("sshpass",), "sshpass"),
+    # Cookie / Set-Cookie header values
+    (re.compile(r"(?i)" + _START + r"((?:set-)?cookie\s*:\s*)[^\r\n\"\\]+"), r"\1[REDACTED]", ("ookie", "OOKIE"), "cookie"),
+    # <password>x</password> and friends
+    (re.compile(r"(?i)(<(password|passwd|secret|token|api_?key|access_?token|client_?secret)>)[^<]{1,4096}(</\2>)"),
+     r"\1[REDACTED]\3", ("</",), "xml-secret"),
+]

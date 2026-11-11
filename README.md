@@ -81,6 +81,21 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.146: Round 153: secrets identified by the words around them
+
+- **Gap:** `ctxspawn.redact` (applied to every CodeX event) let these through unmasked. They appear whenever an agent echoes a shell command or an HTTP exchange:
+  - `curl -u user:pass`, `--user user:pass`
+  - `--password X`, `--token X`, `--api-key X`
+  - `mysql -pX`, `sshpass -p X`
+  - `Cookie:` and `Set-Cookie:` headers
+  - `redis://:pw@host` (a URL with an empty user)
+  - `<password>x</password>`
+- **Fix:** `secretshapes.CONTEXT_RULES` adds 6 gated rules, which `secret_scan` reports by name. Values stop at whitespace, quotes and backslashes, so a raw JSON line stays valid. Rules also match right after a JSON `\n` escape.
+- **Key=value rule:** it now treats `=>` and `:=` as separators. `password => 'x'` used to mask only the `>`.
+- **Unchanged:** `ls -a`, `git log -u`, `tar -a x:y`, `--password-file f` and `--password -x`. Hostile 100k-repeat inputs run in well under a second.
+- **Still not covered:** `?sig=` query values, a bare `Token x`, and `passwd x`.
+- **Tests:** `tests/test_round153_context_secrets.py` (24). 16 fail on v0.145. The round 63 old-regex equivalence fuzz now skips `:=` and `=>`.
+
 ## v0.145: Round 152: vendor-prefixed tokens redacted everywhere
 
 - **Gap:** I tested 23 credential formats against `ctxspawn.redact`, which masks every CodeX event. 14 of them got through unmasked: Stripe `sk_/rk_/pk_live|test_`, GitLab `glpat-`, Hugging Face `hf_`, npm `npm_`, Groq `gsk_`, Replicate `r8_`, Perplexity `pplx-`, Slack app `xapp-`, Google OAuth `ya29.`, SendGrid `SG.x.y`, AWS temporary `ASIA…`, Azure `AccountKey=`, and Telegram bot tokens. `secret_scan` reported those runs as CLEAN.

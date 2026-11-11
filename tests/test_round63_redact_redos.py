@@ -47,6 +47,8 @@ def test_kv_rule_matches_the_old_regex(seed):
               "secret", "tokenizer", ",", "}", "]", ";", "[REDACTED]", "\t", "my", "aws_key"]
     for _ in range(1500):
         s = "".join(rnd.choice(pieces) for _ in range(rnd.randint(0, 18)))
+        if ":=" in s or "=>" in s:  # round 153: separators of their own now (the old regex took "=x" as the value)
+            continue
         assert ctxspawn._redact_kv(s) == _old_kv(s), repr(s)
 
 

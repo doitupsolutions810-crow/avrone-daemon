@@ -527,3 +527,18 @@ def test_register_fleet_tools():
     fleet_mod.register_fleet_tools(r)
     assert {"fleet_nodes", "remote_spawn", "remote_broadcast", "agent_message",
             "queue_submit", "queue_status", "fleet_agents"} <= set(r.names())
+
+
+def test_future_skewed_nonce_survives_until_request_leaves_timestamp_window(fm, monkeypatch):
+    fixed_now = 1_800_000_000.0
+    monkeypatch.setattr(fleet_mod.time, "time", lambda: fixed_now)
+    timestamp = str(int(fixed_now) + WINDOW_S)
+    headers = sign("tok", "POST", "/p", b"", ts=timestamp, nonce="future-window-edge")
+    fm.verify("POST", "/p", b"", headers)
+
+    # At exactly the opposite edge, the original signed request is still valid.
+    # Its nonce must therefore remain reserved even though 2*WINDOW_S elapsed.
+    fixed_now += 2 * WINDOW_S
+    with pytest.raises(PermissionError, match="replayed"):
+        fm.verify("POST", "/p", b"", headers)
+    assert fm._nonces["future-window-edge"] == fixed_now

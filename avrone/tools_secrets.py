@@ -42,6 +42,14 @@ def _shapes_rules():
 
 def _kinds(line: str) -> list[str]:
     from . import ctxspawn
+    # round 157: redact() skips every rule whose literals are absent (round 82 gates), so a line it
+    # leaves unchanged holds nothing to report; the ungated search below cost ~0.4 s per MB, which
+    # mattered once whole run logs (up to 64 MiB) are scanned
+    try:
+        if ctxspawn.redact(line) == line:
+            return []
+    except Exception:  # noqa: BLE001
+        pass
     found = []
     try:
         for v in ctxspawn._env_secret_values():
@@ -72,7 +80,9 @@ def _roots(ctx: "AgentContext", scope: str) -> Path | None:
 
 def scan(root: Path) -> dict[str, Any]:
     hits: list[dict[str, Any]] = []
-    files = scanned = 0
+    files = scanned = total = 0
+    total_cap = SCAN_TOTAL_MAX
+    partial_files: list[str] = []
     from .safeio import NotRegularFile, TreeWalk, open_read
     # round 90: sorted(rglob("*")) listed the whole workspace (node_modules, .git included) before
     # scanning 2000 files; .git is now pruned while walking and at most SCAN_ENTRIES_MAX are read.
@@ -88,18 +98,57 @@ def scan(root: Path) -> dict[str, Any]:
         except OSError:
             continue
         files += 1
+        cap = min(_file_cap(p), max(0, total_cap - total))
         try:  # O_NOFOLLOW|O_NONBLOCK: a FIFO or link swapped in after the check is not read
             with open_read(p) as f:
-                data = f.read(MAX_BYTES)
+                n, partial = _scan_stream(f, cap, str(p.relative_to(root)), hits)
         except OSError:
             continue
+        total += n
         scanned += 1
-        for i, line in enumerate(data.decode(errors="replace").splitlines(), 1):
-            k = _kinds(line)
-            if k:
-                hits.append({"path": str(p.relative_to(root)), "line": i, "kinds": sorted(set(k))})
-    return {"files": scanned, "hits": hits,
+        if partial:
+            partial_files.append(str(p.relative_to(root)))
+    return {"files": scanned, "hits": hits, "partial": partial_files,
             "truncated": files >= MAX_FILES or bool(getattr(walk, "truncated", False))}
+
+
+# Round 157 (v0.150): scan() read the first MAX_BYTES (2 MiB) of each file and reported the rest
+# CLEAN. Run logs rotate at 64 MiB, so a secret written after the first 2 MiB of a run was never
+# flagged, and `fix` (which only rewrites flagged logs) never removed it. Run logs and archives are
+# now read whole up to FIX_MAX_BYTES; other files keep the 2 MiB cap. A file read only in part is
+# reported, never silently CLEAN. Lines are split on "\n" only, the same split fix uses: the old
+# splitlines() also split on U+2028, \x0b, \x1c ... so reported line numbers were wrong.
+SCAN_TOTAL_MAX = 2 * 1024 * 1024 * 1024  # bytes read by one scan, all files together
+LINE_CHUNK = 4 * 1024 * 1024  # one line is examined in pieces of this size, overlapping
+
+
+def _file_cap(p: Path) -> int:
+    return FIX_MAX_BYTES if is_run_log(p.name) else MAX_BYTES
+
+
+def _scan_stream(f: Any, cap: int, rel: str, hits: list[dict[str, Any]]) -> tuple[int, bool]:
+    """Scan up to `cap` bytes of an open binary file line by line. Returns (bytes read, partial)."""
+    read = 0
+    lineno = 1
+    tail = b""  # the end of the previous piece of a long line, so a secret across pieces is seen
+    flagged = False
+    while read < cap:
+        chunk = f.readline(min(LINE_CHUNK, cap - read))
+        if not chunk:
+            return read, False
+        read += len(chunk)
+        ends = chunk.endswith(b"\n")
+        if not flagged:
+            k = _kinds((tail + chunk).decode("utf-8", errors="replace"))
+            if k:
+                hits.append({"path": rel, "line": lineno, "kinds": sorted(set(k))})
+                flagged = True
+        if ends:
+            lineno += 1
+            tail, flagged = b"", False
+        else:
+            tail = chunk[-4096:]
+    return read, bool(f.read(1))
 
 
 _ARCHIVE_RE = None
@@ -230,6 +279,11 @@ class _Moved(Exception):
     pass
 
 
+def _tsesc(x: Any) -> str:
+    from .textsafe import escape
+    return escape(str(x))
+
+
 async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = args.get("scope", "runs")
     if scope not in ("runs", "data", "workspace"):
@@ -244,7 +298,12 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     head = (f"secret_scan [{scope}]: {'CLEAN' if not hits else 'FOUND'} - {len(hits)} line(s) in "
             f"{len({h['path'] for h in hits})} file(s); {res['files']} file(s) read"
             + (" (file cap reached)" if res["truncated"] else ""))
-    lines = [head] + [f"- {h['path']}:{h['line']} {', '.join(h['kinds'])}" for h in hits[:MAX_SHOWN]]
+    if res.get("partial"):
+        part = res["partial"]
+        head += (f"; {len(part)} file(s) only partly read (size cap), the rest NOT scanned: "
+                 + ", ".join(_tsesc(x) for x in part[:5]) + (" ..." if len(part) > 5 else ""))
+    # round 157: hit paths were printed raw; a run log named "x.jsonl\n- CLEAN" forged report lines
+    lines = [head] + [f"- {_tsesc(h['path'])}:{h['line']} {', '.join(h['kinds'])}" for h in hits[:MAX_SHOWN]]
     if len(hits) > MAX_SHOWN:
         lines.append(f"... {len(hits) - MAX_SHOWN} more")
     if hits and args.get("fix") is True:

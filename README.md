@@ -81,6 +81,26 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.150: Round 157: secret_scan reads whole run logs
+
+- `scan()` read only the first 2 MiB of each file and reported the rest CLEAN. Run logs rotate at
+  64 MiB, so a secret logged after the first 2 MiB was never flagged, and `fix` (which rewrites
+  only flagged logs) never removed it.
+  - Run logs and their archives are now streamed whole, up to `FIX_MAX_BYTES` (256 MiB). Other
+    files keep the 2 MiB cap.
+  - One scan reads at most 2 GiB in total.
+  - Long lines are examined in 4 MiB pieces that overlap by 4 KiB.
+  - A file that is only partly read is named in the report ("only partly read (size cap), the
+    rest NOT scanned"), never reported silently CLEAN. `scan()` returns it under `partial`.
+- Lines are now split on `\n` only, the same split `fix` uses. Before, `splitlines()` also split
+  on U+2028, `\x0b`, `\x1c` and other separators, so the reported line numbers were wrong.
+- Hit paths are escaped (`textsafe.escape`). A run log with a newline in its name could forge
+  report lines.
+- `_kinds` first checks whether gated `redact()` changes the line, and skips the line when it
+  does not. A 64 MiB log now scans in 4.4 s instead of 27.7 s.
+- Tests: `tests/test_round157_secret_scan_whole.py` (6 tests, all fail on v0.149).
+  `test_cov14_a` now expects the `partial` key.
+
 ## v0.149: Round 156: 27 more secret shapes (vendor tokens, signed URLs, webhooks, Discord)
 
 - A probe of 57 real-world secret formats found 31 that `ctxspawn.redact` passed through and

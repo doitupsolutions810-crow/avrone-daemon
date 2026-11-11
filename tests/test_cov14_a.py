@@ -27,7 +27,7 @@ def test_scan_unreadable_file(tmp_path, monkeypatch):
     real_read = _sio.open_read
     monkeypatch.setattr(_sio, "open_read", lambda p, *a, **k: (_ for _ in ()).throw(PermissionError("no"))
                         if Path(p).name == "a.log" else real_read(p, *a, **k))
-    assert ts.scan(tmp_path) == {"files": 0, "hits": [], "truncated": False}
+    assert ts.scan(tmp_path) == {"files": 0, "hits": [], "partial": [], "truncated": False}  # round 157: + partial
 
 
 def test_fix_runs_skips(tmp_path):

@@ -593,3 +593,17 @@ merge without his word.
   - Arguments are capped by `AVRONE_LOG_ARG_MAX_CHARS` (default 65536, clamped 256..4 MiB), with a `...[log arg truncated: N chars]` marker.
   - Redaction sees at most 4x the cap.
 - Tests: `tests/test_logsafe_robust.py`.
+
+## Hardening round 43 (Hark edge-case series): evidence_pool identity canonicalisation
+- **Duplicate relays in disguise.** `pool_trials` exists so one outcome relayed twice can't count as two confirmations, but it compared raw strings. All of these were "distinct" trial_ids and were counted twice:
+  - NFC vs NFD (`trial-é`), a zero-width space or joiner, a BOM, a soft hyphen, and bidi marks
+  - fullwidth digits, ligatures, and no-break or ideographic spaces
+  - Identity fields are now NFKC-normalised, Unicode format characters (Cf) are removed, and whitespace runs collapse to one space.
+- **Fake silos.** `Node-A`, `node-a` and `node-a\u200b` were separate sources, so one node could fake an orientation conflict. Sources are now grouped case-insensitively after canonicalisation, the first spelling seen is reported, and the source cap counts canonical names. Trial ids stay case-sensitive.
+- **Control characters and lone surrogates** in either field are refused. They used to pass into the report and break JSON encoding.
+- **Lengths are checked on the canonical form.** Padding no longer rejects a valid id, and NFKC expansion (U+FDFA becomes 18 characters) can't get past the limits. A raw bound of 4x the limit comes first.
+- **Duplicate error messages** quote the id escaped to ASCII and cut to 64 characters.
+- **Input checks:**
+  - A lone dict, a string, bytes or None as `trials` gets a clear refusal.
+  - A Mapping whose `.get` raises becomes a ValueError.
+- Tests: `tests/test_evidence_pool_robust.py`.

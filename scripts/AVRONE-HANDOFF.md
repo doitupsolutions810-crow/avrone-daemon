@@ -568,3 +568,15 @@ merge without his word.
   - Children inherited the real stdout, so a lingering child held the client's pipe open.
   - Fixes: `shutdown()` waits up to the grace period (at least 1 s), then cancels the core build, and stops the runner and MCP of a core that finished during shutdown. `protocol_stdout()` gives JSON-RPC a private, non-inheritable dup of fd 1 and points fd 1 at stderr, so a stray child print can't corrupt the protocol either.
   - Six new tests in tests/test_mcp_server_robust.py. The subprocess test then passed 6 of 6 runs.
+
+## Hardening round 41 (Hark edge-case series; not the v0.x "round 1xx" series): fsunify on case-insensitive filesystems
+- **Agent-isolation bypass on macOS and Windows.** `shared/Agents/<other>/...`, `shared/AGENTS/...`, `shared/agents./...` and `shared/agents::$INDEX_ALLOCATION/...` resolved to paths that `is_relative_to(ws/agents)` called outside. On APFS, HFS+ and NTFS they are the same directory, so one agent could read or overwrite another agent's dir and dodge its own quota through `shared/`. A symlink whose target names the agents root in another case slipped past the same way.
+  - `_touches_agents()` now also compares the first component casefolded, with NTFS `:stream` syntax and trailing dots and spaces removed.
+  - Names that only look similar stay allowed: `agents-notes`, `my-agents`, `x/agents`, and an `Agents/` folder inside your own dir.
+  - On Linux this refuses `shared/Agents/` even though it would be a separate dir. That is deliberate: the same tree has to behave the same on a Mac.
+- **Unusable agent dir.**
+  - `agent_root()` used to leak a raw `OSError` with the host's absolute path when mkdir failed (read-only disk, permissions). It now raises an audited `AgentFSError`.
+  - A file sitting where the dir should be is refused.
+  - A symlink loop gives a plain refusal.
+- **`display()`** no longer raises on a symlink loop or a broken agent dir.
+- Tests: `tests/test_fsunify_robust.py`.

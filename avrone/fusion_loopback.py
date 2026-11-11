@@ -17,7 +17,19 @@ from urllib.parse import urlsplit
 
 
 def host_text(host: str | None) -> str:
-    name = str(host or "").strip().strip("[]").lower()
+    name = str(host or "").strip().lower()
+    if "[" in name or "]" in name:
+        # Only one balanced IPv6 literal wrapper is legitimate. strip("[]")
+        # silently promoted malformed peer strings to trusted loopback hosts.
+        if not (
+            name.startswith("[")
+            and name.endswith("]")
+            and name.count("[") == 1
+            and name.count("]") == 1
+            and ":" in name[1:-1]
+        ):
+            return ""
+        name = name[1:-1]
     if "%" in name:
         name = name.split("%", 1)[0]
     return name

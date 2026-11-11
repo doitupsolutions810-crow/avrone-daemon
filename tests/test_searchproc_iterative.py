@@ -30,3 +30,14 @@ def test_iterative_scan_keeps_sorted_order_and_no_symlink_descent(tmp_path):
     paths = [p.relative_to(tmp_path).as_posix() for p in
              searchproc._iter_files(tmp_path, set(), {str(tmp_path / "a")})]
     assert paths == ["top.txt", "b/hit.txt", "skip/hit.txt"]
+
+
+def test_search_max_files_is_a_hard_upper_bound(tmp_path):
+    (tmp_path / "a.txt").write_text("needle", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("needle", encoding="utf-8")
+    for limit in (0, 1):
+        output = io.StringIO()
+        searchproc.run({"root": str(tmp_path), "pattern": "needle", "max_files": limit}, output)
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert len([row for row in rows if "path" in row]) <= limit
+        assert rows[-1]["scanned"] == limit

@@ -189,7 +189,7 @@ def test_empty_json_input() -> None:
                 env={"ALLOW_AGENT_EXECUTION": "true"},
                 timeout=8,
             )
-            record(f"{label} --input no hang", code != -1, f"code={code}")
+            record(f"{label} --input no hang", code >= 0, f"code={code}")
         finally:
             os.unlink(path)
 
@@ -203,7 +203,7 @@ def test_path_sep_only() -> None:
             ["bash", str(MASTER), slug],
             env={"ALLOW_AGENT_EXECUTION": "true"},
         )
-        record(f"path-sep [{slug!r}] no hang", code != -1, f"code={code}")
+        record(f"path-sep [{slug!r}] no hang", code >= 0, f"code={code}")
 
 
 # ─── source identical all ────────────────────────────────────────────────────
@@ -277,7 +277,7 @@ def test_lattice_strict() -> None:
         if aid.startswith("grok-bot-"):
             record(f"{aid} lattice==Control12", lat == "Control12")
         else:
-            record(f"{aid} lattice not Control12 or absent", lat != "Control12" or lat is None or True)
+            record(f"{aid} lattice not Control12 or absent", lat != "Control12")
 
 
 # ─── Refuse key presence ─────────────────────────────────────────────────────

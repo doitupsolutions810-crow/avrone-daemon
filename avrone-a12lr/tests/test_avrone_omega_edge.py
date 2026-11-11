@@ -133,7 +133,7 @@ def test_gate_length_extremes() -> None:
         env={"ALLOW_AGENT_EXECUTION": val},
         timeout=10,
     )
-    record("10k-char near-true refuses / no hang", code != 0 and code != -1, f"code={code}")
+    record("10k-char near-true refuses / no hang", code != 0 and code >= 0, f"code={code}")
 
 
 # ─── Component printable escapes ─────────────────────────────────────────────
@@ -153,7 +153,7 @@ def test_component_printable_escapes() -> None:
             ["bash", str(MASTER), n],
             env={"ALLOW_AGENT_EXECUTION": "true"},
         )
-        record(f"escape component [{n!r}] no hang", code != -1, f"code={code}")
+        record(f"escape component [{n!r}] no hang", code >= 0, f"code={code}")
 
 
 # ─── 24-worker fan-out ───────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ def test_1mb_input() -> None:
             env={"ALLOW_AGENT_EXECUTION": "true"},
             timeout=20,
         )
-        record("1MB --input no hang", code != -1, f"code={code}")
+        record("1MB --input no hang", code >= 0, f"code={code}")
     finally:
         os.unlink(path)
 
@@ -327,7 +327,7 @@ def test_space_tab_component() -> None:
             ["bash", str(MASTER), slug],
             env={"ALLOW_AGENT_EXECUTION": "true"},
         )
-        record(f"{label} component no hang", code != -1, f"code={code}")
+        record(f"{label} component no hang", code >= 0, f"code={code}")
 
 
 # ─── Multiple --dry-run ──────────────────────────────────────────────────────
@@ -365,7 +365,7 @@ def test_lattice_only_grok() -> None:
         else:
             # lattice may be absent or placeholder
             lat = a.get("lattice")
-            record(f"{aid} lattice absent or not required", lat in (None, "", "—", "-") or True)
+            record(f"{aid} lattice absent or not required", lat != "Control12")
 
 
 # ─── 200× refuse ─────────────────────────────────────────────────────────────

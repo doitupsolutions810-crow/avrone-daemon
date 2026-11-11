@@ -70,18 +70,29 @@ class PermanentJobError(Exception):
     instead of retrying it max_attempts times with backoff."""
 
 
+def _safe_result_text(value: Any) -> str:
+    """Stringify an unsupported result safely, including objects with hostile __str__/__repr__."""
+    try:
+        text = str(value)
+    except Exception:  # noqa: BLE001
+        text = f"<{type(value).__name__}: unprintable>"
+    return _redact_result(text)
+
+
 def _encode_result(result: Any) -> str:
-    """Always valid JSON. The old `json.dumps(result)[:100000]` raised TypeError on a non-JSON
-    result (the finished job was then failed and RE-RUN) and cut long results mid-token, so get()
-    crashed on the stored text forever after."""
+    """Always valid JSON and redact strings created by fallback serialization as well."""
     try:
         result = _redact_result(result)
-    except Exception:  # noqa: BLE001  (a cyclic or odd object: json.dumps below reports it)
-        pass
+    except Exception:  # noqa: BLE001
+        result = _safe_result_text(result)
     try:
-        text = json.dumps(result, default=str, allow_nan=False)
-    except (TypeError, ValueError):
-        text = json.dumps(repr(result))
+        text = json.dumps(result, default=_safe_result_text, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        try:
+            fallback = repr(result)
+        except Exception:  # noqa: BLE001
+            fallback = f"<{type(result).__name__}: unprintable>"
+        text = json.dumps(_redact_result(fallback))
     if len(text) > RESULT_MAX:
         text = json.dumps({"truncated": True, "bytes": len(text), "head": text[:RESULT_MAX - 200]})
     return text
@@ -128,20 +139,50 @@ def exc_text(e: BaseException) -> str:
     return f"{type(e).__name__}: {msg}"
 
 
+def _validate_payload_depth(value: Any, max_depth: int = 64) -> None:
+    """Reject pathological JSON nesting consistently across Python versions.
+
+    Do not rely on json.dumps raising RecursionError: its effective recursion limit varies
+    across interpreter versions. An explicit stack avoids consuming the Python call stack.
+    Cycles are left for json.dumps to reject with its normal circular-reference ValueError.
+    """
+    stack = [(value, 0, frozenset())]
+    while stack:
+        node, depth, ancestors = stack.pop()
+        if not isinstance(node, (dict, list, tuple)):
+            continue
+        if depth > max_depth:
+            raise ValueError("job payload is nested too deeply")
+        identity = id(node)
+        if identity in ancestors:
+            continue
+        next_ancestors = ancestors | {identity}
+        children = node.values() if isinstance(node, dict) else node
+        for child in children:
+            if isinstance(child, (dict, list, tuple)):
+                stack.append((child, depth + 1, next_ancestors))
+
+
 def _redact_result(v: Any, depth: int = 0) -> Any:
-    """Round 155: secrets in a job's result are masked before it is stored and served, as they are
-    in the run's CodeX log (a fleet job's answer reached the requesting peer verbatim)."""
+    """Mask secrets at every traversed depth; never return an uninspected deep subtree."""
     from .ctxspawn import redact
-    if depth > 64:
-        return v
     if isinstance(v, str):
         return redact(v)
+    if depth > 64:
+        # Returning the original subtree here leaked secrets nested beyond the traversal limit.
+        # Replace containers with a marker, while still redacting scalar strings above.
+        if isinstance(v, (dict, list, tuple)):
+            return "[OMITTED: result nesting limit]"
+        return v
     if isinstance(v, list):
         return [_redact_result(x, depth + 1) for x in v]
     if isinstance(v, tuple):
         return tuple(_redact_result(x, depth + 1) for x in v)
     if isinstance(v, dict):
-        return {k: _redact_result(x, depth + 1) for k, x in v.items()}
+        return {
+            redact(k) if isinstance(k, str) else k: _redact_result(x, depth + 1)
+            for k, x in v.items()
+        }
     return v
 
 SCHEMA = """
@@ -238,11 +279,18 @@ class JobQueue:
         self._db.execute("BEGIN IMMEDIATE")
         try:
             out = fn()
+            self._db.execute("COMMIT")
+            return out
         except BaseException:
-            self._db.execute("ROLLBACK")
+            # A failed COMMIT (disk-full, I/O error, deferred constraint, authorizer denial)
+            # can leave SQLite's transaction active. Roll it back before this connection is
+            # reused; otherwise later queue operations may run inside the failed transaction.
+            if self._db.in_transaction:
+                try:
+                    self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    log.exception("job queue rollback failed after transaction error")
             raise
-        self._db.execute("COMMIT")
-        return out
 
     async def _run(self, fn: Callable[[], Any]) -> Any:
         def guarded() -> Any:
@@ -264,9 +312,17 @@ class JobQueue:
             kind.encode("utf-8")
         except UnicodeEncodeError:
             raise ValueError("job kind must be valid text (no lone surrogates)") from None
+        if not isinstance(payload, dict):
+            raise ValueError("job payload must be a JSON object")
         jid = uuid.uuid4().hex[:12]
         now = time.time()
-        body = json.dumps(payload)  # an unserializable payload fails HERE, to the caller, not in a worker
+        # Enforce a stable nesting bound: encoder recursion limits differ by Python version.
+        _validate_payload_depth(payload)
+        # Strict JSON rejects NaN/Infinity, which are accepted by Python's encoder by default.
+        try:
+            body = json.dumps(payload, allow_nan=False)
+        except RecursionError:
+            raise ValueError("job payload is nested too deeply") from None
         # round 164b: no size cap let one enqueue store a 50 MB row that every claim/get/list then loaded
         if len(body) > PAYLOAD_MAX_BYTES:
             raise ValueError(f"job payload is {len(body)} bytes, over the {PAYLOAD_MAX_BYTES} byte limit")

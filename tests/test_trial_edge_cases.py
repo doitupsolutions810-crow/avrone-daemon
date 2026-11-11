@@ -1043,3 +1043,26 @@ def test_store_preserves_valid_unicode_bridge_run_id_exactly(tmp_path):
     finally:
         db.close()
     assert row["bridge_run_id"] == bridge_run_id
+
+
+def test_identical_envelopes_repeated_inside_one_batch_are_idempotent(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    envelope = sample("pass", "same-attempt")
+
+    result = store.ingest_many(
+        [envelope, envelope],
+        sender="peer-a",
+        transport="fleet",
+    )
+
+    assert result["status"] == "partial"
+    assert result["accepted"] == 1
+    assert result["duplicates"] == 1
+    assert [item["status"] for item in result["results"]] == ["accepted", "duplicate"]
+
+    db = store._connect()
+    try:
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 2
+    finally:
+        db.close()

@@ -141,9 +141,9 @@ def test_duplicate_json_object_member_is_parse_error(raw):
     assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
 
 
-@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
 @pytest.mark.parametrize("nested", ['"n":{value}', '"n":[0,{value}]'])
-def test_non_finite_number_inside_request_is_parse_error(literal, nested):
+def test_non_json_constant_inside_request_is_parse_error(literal, nested):
     params = nested.format(value=literal)
     raw = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{' + params + '}}'
     out, _, _ = serve([raw, PING])

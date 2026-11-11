@@ -64,3 +64,27 @@ def test_trial_identity_is_stable_for_nfc_equivalent_identity_and_config_strings
 
     assert composed == decomposed
     assert validate_trial_envelope(composed)
+
+
+def test_config_rejects_direct_and_indirect_container_cycles_as_value_errors():
+    cyclic_list = []
+    cyclic_list.append(cyclic_list)
+
+    cyclic_mapping = {}
+    cyclic_mapping["self"] = cyclic_mapping
+
+    indirect_list = []
+    indirect_mapping = {"back": indirect_list}
+    indirect_list.append(indirect_mapping)
+
+    for value in (cyclic_list, cyclic_mapping, indirect_list):
+        with pytest.raises(ValueError, match="cyclic references"):
+            canonical_config_bytes(value)
+
+
+def test_config_allows_reused_acyclic_substructures():
+    shared = {"nested": [1, "two", None]}
+    value = {"left": shared, "right": shared}
+    expected = {"left": {"nested": [1, "two", None]}, "right": {"nested": [1, "two", None]}}
+
+    assert canonical_config_bytes(value) == canonical_config_bytes(expected)

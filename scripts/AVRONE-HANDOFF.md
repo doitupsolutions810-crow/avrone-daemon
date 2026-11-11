@@ -665,3 +665,22 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - **Note and verify_error** are text: bytes are decoded, lone surrogates become U+FFFD, and the length is capped at 200. A non-string error, such as a dict holding NaN, could otherwise write a non-JSON line and brick the log.
 - **CLI:** a refused log prints one line to stderr and exits 1 instead of a traceback.
 - Tests: `tests/test_capgate_head_attest_robust.py`, which also runs the module selftest.
+
+## Hardening round 47 (Hark edge-case series): flake_probe
+- **`runs`:**
+  - `1e999` raised OverflowError out of the tool.
+  - `2.7` ran 2 times and `"1_0"` ran 10.
+  - NaN, inf, non-integral floats, Unicode digits and bools are now refused. The value goes through `argnum.tool_int`.
+- **Timeout sentinel forgery:** a timed-out run was marked with a string, so a tool returning those exact characters counted as a timeout. The sentinel is now an object compared by identity, and str-subclass outputs are converted to plain str.
+- **One raising run sank the whole probe** (duck-typed registries; the real Registry already catches). It is now an `ERROR: <Type> raised` output.
+- **Other output and counting fixes:**
+  - bytes are decoded.
+  - A hostile `__str__` becomes an error output.
+  - `ARG ERROR` refusals are counted as errors.
+- **Budget:** a run started near the end of the budget could overrun it by a full `run_timeout` (20 s). Later runs now get only what is left.
+- **first_diff_line:**
+  - `"x"` vs `"x\n"` and `"x\r\n"` vs `"x\n"` used to name a line past the end of both outputs. Ending-only differences now name the first line whose ending differs.
+  - Extra lines still name the first extra line.
+- **args:** `allow_nan=False`. Args must survive a JSON round trip, so non-str keys at any depth are refused; `{1: "a"}` used to probe the same as `{"1": "a"}`.
+- **format:** `" json "` is accepted.
+- Tests: `tests/test_flakeprobe_robust.py`.

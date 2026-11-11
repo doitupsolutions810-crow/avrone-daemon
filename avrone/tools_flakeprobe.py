@@ -44,16 +44,41 @@ FLAKE_PROBE_MAX_CHARS = 8000
 _TIMEOUT_MARK = "\x00flake_probe:timeout\x00"
 
 
+class _Timeout(str):
+    """A run that timed out. Round 47: a plain string mark meant a tool that returned those exact
+    characters counted as a timeout; identity (``is``) can not be forged by output."""
+
+
+_TIMEOUT = _Timeout(_TIMEOUT_MARK)
+
+
+def _is_timeout(o: Any) -> bool:
+    return o is _TIMEOUT
+
+
+def _is_error(o: str) -> bool:
+    # round 47: the registry's own refusals start "ARG ERROR" (wrong arg types) and were not counted
+    return o.startswith("ERROR") or o.startswith("ARG ERROR")
+
+
 def _digest(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 def _first_diff_line(a: str, b: str) -> int:
+    """1-based line where a and b first differ, line endings included. Round 47: endings were
+    dropped, so "x\r\n" vs "x\n" and "x" vs "x\n" named a line one past the end of both."""
     la, lb = a.splitlines(), b.splitlines()
     for i, (x, y) in enumerate(zip(la, lb), 1):
         if x != y:
             return i
-    return min(len(la), len(lb)) + 1
+    if len(la) != len(lb):
+        return min(len(la), len(lb)) + 1  # the first extra line, which exists in the longer one
+    ka, kb = a.splitlines(keepends=True), b.splitlines(keepends=True)
+    for i, (x, y) in enumerate(zip(ka, kb), 1):
+        if x != y:  # same text, different line ending
+            return i
+    return max(1, len(la))  # cannot happen for a != b; never a line past the end
 
 
 async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args: dict[str, Any],
@@ -68,21 +93,36 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
             budget_hit = True
             break
         s = time.monotonic()
+        # round 47: a run started near the end of the budget could overrun it by a full
+        # run_timeout; later runs get only what is left of the budget
+        left = run_timeout if not i else max(0.001, min(run_timeout, budget - (s - t0)))
         try:
-            out = await asyncio.wait_for(reg.call(ctx, name, copy.deepcopy(args)), run_timeout)
+            out = await asyncio.wait_for(reg.call(ctx, name, copy.deepcopy(args)), left)
         except asyncio.TimeoutError:
-            out = _TIMEOUT_MARK
+            out = _TIMEOUT
+        except Exception as e:  # noqa: BLE001 - round 47: one raising run sank the whole probe
+            out = f"ERROR: {type(e).__name__} raised"
         times.append(time.monotonic() - s)
-        outs.append(out if isinstance(out, str) else str(out))
+        if out is not _TIMEOUT:
+            if isinstance(out, (bytes, bytearray)):
+                out = bytes(out).decode("utf-8", "replace")
+            elif not isinstance(out, str):
+                try:
+                    out = str(out)
+                except Exception as e:  # noqa: BLE001 - a hostile __str__
+                    out = f"ERROR: unprintable {type(out).__name__} output ({type(e).__name__})"
+            else:
+                out = str.__str__(out)  # a str subclass never passes for the timeout sentinel
+        outs.append(out)
     n = len(outs)
     first = outs[0]
-    differing = [i + 1 for i, o in enumerate(outs) if o != first]
+    differing = [i + 1 for i, o in enumerate(outs) if o != first or _is_timeout(o) != _is_timeout(first)]
     distinct: dict[str, dict[str, Any]] = {}
     for i, o in enumerate(outs, 1):
-        d = "timeout" if o == _TIMEOUT_MARK else _digest(o)
-        e = distinct.setdefault(d, {"digest": d, "chars": 0 if o == _TIMEOUT_MARK else len(o), "runs": 0, "first_run": i})
+        d = "timeout" if _is_timeout(o) else _digest(o)
+        e = distinct.setdefault(d, {"digest": d, "chars": 0 if _is_timeout(o) else len(o), "runs": 0, "first_run": i})
         e["runs"] += 1
-    diffs = [{"run": r, "first_diff_line": None if _TIMEOUT_MARK in (first, outs[r - 1])
+    diffs = [{"run": r, "first_diff_line": None if _is_timeout(first) or _is_timeout(outs[r - 1])
               else _first_diff_line(first, outs[r - 1])} for r in differing[:FLAKE_PROBE_MAX_LISTED]]
     return {
         "tool": name, "runs_requested": runs, "runs": n, "budget_hit": budget_hit,
@@ -90,8 +130,8 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
         "outputs": list(distinct.values())[:FLAKE_PROBE_MAX_LISTED],
         "outputs_hidden": max(0, len(distinct) - FLAKE_PROBE_MAX_LISTED),
         "diffs": diffs, "diffs_hidden": max(0, len(differing) - FLAKE_PROBE_MAX_LISTED),
-        "errors": sum(1 for o in outs if o.startswith("ERROR")),
-        "timeouts": sum(1 for o in outs if o == _TIMEOUT_MARK),
+        "errors": sum(1 for o in outs if not _is_timeout(o) and _is_error(o)),
+        "timeouts": sum(1 for o in outs if _is_timeout(o)),
         "ms": {"min": round(min(times) * 1000, 1), "max": round(max(times) * 1000, 1),
                "total": round(sum(times) * 1000, 1)},
         "great_scale": evidence_snapshot(failures=len(differing), runs=n),
@@ -114,11 +154,13 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     runs = args.get("runs", 5)
     if runs is None or runs == "":
         runs = 5
-    if isinstance(runs, bool):
+    # round 47: int(1e999) raised OverflowError, 2.7 ran twice, "1_0" ran ten times
+    from .argnum import tool_int
+    if isinstance(runs, float) and not (runs == runs and runs not in (float("inf"), float("-inf"))
+                                        and runs.is_integer()):
         return "ERROR: runs must be an integer 1..50"
-    try:
-        runs = int(runs)
-    except (TypeError, ValueError):
+    runs = tool_int(runs, 5, bad=None)
+    if runs is None:
         return "ERROR: runs must be an integer 1..50"
     if not 1 <= runs <= FLAKE_PROBE_MAX_RUNS:
         return f"ERROR: runs must be 1..{FLAKE_PROBE_MAX_RUNS}"
@@ -128,7 +170,11 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not isinstance(targs, dict):
         return "ERROR: args must be an object (the args passed to every run)"
     try:
-        encoded = json.dumps(targs, sort_keys=True)
+        # round 47: allow_nan=False (NaN/Infinity args are not JSON); non-str keys were
+        # silently turned into strings by dumps, so {1: "a"} and {"1": "a"} probed the same
+        encoded = json.dumps(targs, sort_keys=True, allow_nan=False)
+        if json.loads(encoded) != targs:  # a non-str key at any depth, a tuple, a str subclass key...
+            raise TypeError("args do not survive a JSON round trip")
     except (TypeError, ValueError, RecursionError):
         return "ERROR: args must be plain JSON"
     if len(encoded) > FLAKE_PROBE_MAX_ARGS_CHARS:
@@ -147,7 +193,7 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
         if bad:
             return f"ERROR: args rejected by {name}'s schema: {bad[1]}"
     rep = await flake_probe(ctx, reg, name, runs, targs)
-    if str(args.get("format", "text")).lower() == "json":
+    if str(args.get("format", "text")).strip().lower() == "json":
         return _cap(json.dumps(rep, indent=1, sort_keys=True))
     g = rep["great_scale"]
     verdict = ("deterministic" if rep["differing_runs"] == 0 else

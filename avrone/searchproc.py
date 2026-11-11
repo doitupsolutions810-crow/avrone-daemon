@@ -55,7 +55,7 @@ def run(req: dict, out) -> None:
     hits = scanned = 0
     root = Path(req["root"])
     for f in _iter_files(root, set(req.get("skip_dirs") or []), set(req.get("skip_paths") or [])):
-        if scanned > max_files or hits >= cap:
+        if scanned >= max_files or hits >= cap:
             break
         scanned += 1
         try:

@@ -51,7 +51,11 @@ def _config_string(value: Any, field: str) -> str:
     return normalized
 
 
-def _normalize_json(value: Any, depth: int, budget: list[int]) -> Any:
+def _normalize_json(
+    value: Any, depth: int, budget: list[int], active: set[int] | None = None,
+) -> Any:
+    if active is None:
+        active = set()
     budget[0] += 1
     if budget[0] > MAX_CONFIG_NODES:
         raise ValueError(f"check_config exceeds {MAX_CONFIG_NODES} JSON values")
@@ -69,16 +73,23 @@ def _normalize_json(value: Any, depth: int, budget: list[int]) -> Any:
         return value
     if isinstance(value, str):
         return _config_string(value, "check_config string")
-    if isinstance(value, list):
-        return [_normalize_json(item, depth + 1, budget) for item in value]
-    if isinstance(value, dict):
-        normalized: dict[str, Any] = {}
-        for key, item in value.items():
-            normalized_key = _config_string(key, "check_config key")
-            if normalized_key in normalized:
-                raise ValueError("check_config has duplicate keys after Unicode normalization")
-            normalized[normalized_key] = _normalize_json(item, depth + 1, budget)
-        return normalized
+    if isinstance(value, (list, dict)):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("check_config must not contain cyclic references")
+        active.add(identity)
+        try:
+            if isinstance(value, list):
+                return [_normalize_json(item, depth + 1, budget, active) for item in value]
+            normalized: dict[str, Any] = {}
+            for key, item in value.items():
+                normalized_key = _config_string(key, "check_config key")
+                if normalized_key in normalized:
+                    raise ValueError("check_config has duplicate keys after Unicode normalization")
+                normalized[normalized_key] = _normalize_json(item, depth + 1, budget, active)
+            return normalized
+        finally:
+            active.remove(identity)
     raise ValueError("check_config must contain only JSON values")
 
 

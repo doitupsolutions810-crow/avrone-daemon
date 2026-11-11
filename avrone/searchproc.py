@@ -24,11 +24,28 @@ def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
     if root.is_file():
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
+    # Python 3.11's os.walk recurses through generator frames. A workspace
+    # with >1,000 nested directories can raise RecursionError. Iterate with an
+    # explicit stack and preserve walk's sorted, no-symlink-descent behavior.
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        dirs: list[Path] = []
+        files: list[Path] = []
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.is_dir():
+                        if (not entry.is_symlink() and entry.name not in skip_names
+                                and entry.path not in skip_paths):
+                            dirs.append(Path(entry.path))
+                    else:
+                        files.append(Path(entry.path))
+        except OSError:
+            continue
+        for file in sorted(files, key=lambda path: path.name):
+            yield file
+        pending.extend(reversed(sorted(dirs, key=lambda path: path.name)))
 
 
 def run(req: dict, out) -> None:

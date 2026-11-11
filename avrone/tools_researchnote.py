@@ -47,16 +47,23 @@ _TOKEN_RES = (
     re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+)?"),
-    re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]+@"),
+    # round 50 (51): userinfo up to the LAST @ before the host; "u:p@ss@host" leaked "ss"
+    re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/\s]+@"),
     _shapes.TOKEN_PREFIX_RE,  # round 152
 )
 _BLOB_RE = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 REDACTED = "***redacted***"
 
 
+# zero-width / word-joiner / soft hyphen / BOM: invisible, so a token split by one ("sk-\u200b...")
+# slipped past every pattern while reading the same to a human (round 51)
+_INVISIBLE_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
+
+
 def redact_text(text: str) -> str:
-    """Mask credential-shaped tokens inside free text; the rest of the text is kept."""
-    out = str(text)
+    """Mask credential-shaped tokens inside free text; the rest of the text is kept.
+    Round 51: invisible joiners are dropped first so they cannot split a token."""
+    out = _INVISIBLE_RE.sub("", str(text))
     for rx in _TOKEN_RES:
         if rx.groups:
             out = rx.sub(lambda m: m.group(1) + "***@", out)
@@ -93,7 +100,9 @@ def learn(data_dir: Any, text: str, run_id: str, topic: str = "", kind: str = "f
             store.trim(bridgemod.LESSONS_NS, bridgemod.lessons_max())
     except MemoryRefused as e:
         return f"refused: {e}", key
-    except OSError as e:
+    except (OSError, ValueError, TypeError, AttributeError) as e:
+        # round 51: a corrupt store (ValueError/AttributeError) raised AFTER the note was posted,
+        # so the agent was told the whole tool failed and posted it again
         return f"refused: {type(e).__name__}", key
     return "learned", key
 
@@ -107,21 +116,34 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     raw = args.get("text")
     if isinstance(raw, str):
         raw = _no_surrogates(raw)
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str) or not _INVISIBLE_RE.sub("", raw).strip():
+        # round 51: zero-width-only text passed and posted an empty-looking note
         return "ERROR: text is required (a non-empty string)"
     if len(raw) > RESEARCH_NOTE_MAX_TEXT:
         return f"ERROR: text is {len(raw)} chars; the cap is {RESEARCH_NOTE_MAX_TEXT}"
     kind = args.get("kind")
-    kind = "finding" if kind in (None, "") else str(kind).strip().lower()
+    if kind is not None and not isinstance(kind, str):
+        return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
+    kind = "finding" if not kind else kind.strip().lower()
     if kind not in RESEARCH_NOTE_KINDS:
         return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
     topic = args.get("topic")
-    topic = "" if topic is None else _textsafe.UNSAFE_ONE.sub(" ", _no_surrogates(str(topic))).strip()
+    if topic is not None and not isinstance(topic, str):
+        return "ERROR: topic must be text"  # round 51: {"a": 1} was str()-ed into the label
+    topic = "" if topic is None else " ".join(
+        _textsafe.UNSAFE_ONE.sub(" ", _INVISIBLE_RE.sub("", _no_surrogates(topic))).split())
     if len(topic) > RESEARCH_NOTE_MAX_TOPIC:
         return f"ERROR: topic is longer than {RESEARCH_NOTE_MAX_TOPIC} chars"
-    text = redact_text(raw.strip())
+    text = redact_text(raw.strip()).strip()
     masked = text != raw.strip()
-    topic = redact_text(topic)
+    t2 = redact_text(topic)
+    masked = masked or t2 != topic
+    topic = t2
+    if len(text) > RESEARCH_NOTE_MAX_TEXT:
+        # round 51: masking can lengthen ("a@" -> "***@", "bearer x" -> "***redacted***"), and the
+        # bridge silently cut the result at 4000; the note must never be cut without saying so
+        return (f"ERROR: after masking secret-shaped tokens the note is {len(text)} chars; "
+                f"the cap is {RESEARCH_NOTE_MAX_TEXT}")
     body = f"[{topic}] {text}" if topic else text
     if len(body) > RESEARCH_NOTE_MAX_TEXT:
         body = text  # the topic still travels with the lesson; never cut the note itself
@@ -132,6 +154,8 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
         p = b.post(name, kind, body, role=role)
     except bridgemod.BridgeError as e:
         return f"ERROR: {e}"
+    except OSError as e:  # round 51: a full disk / read-only bridge file raised out of the tool
+        return f"ERROR: could not write the run bridge ({type(e).__name__})"
     lines = [f"posted {p['kind']} [{p['id']}] to the run bridge ({len(b)} posts)"
              + (" (secret-shaped tokens masked)" if masked else "")]
     if kind not in LEARNABLE_KINDS:

@@ -755,3 +755,26 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - A finite ts far in the future (1e300, or a peer whose clock is a year ahead) sorted to the top forever and printed "0s ago". Anything past now + 300 s is treated as junk: it sorts last and shows "?". Bool ts values are junk too.
 - A non-text topic (dict, list or number) was converted with `str()`. It is now refused.
 - Tests: `tests/test_gatewayview_lessonrecall_robust.py`.
+
+## Hardening round 51 (Hark edge-case series): tools_researchnote + tools_agenthome
+
+### research_note / redact_text
+- Splitting a token with a zero-width character (`ghp_A1` + U+200B + `b2...`) let it slip past every secret pattern, though it reads the same to a person. redact_text now drops the invisible joiners first (ZWSP, ZWNJ, ZWJ, WJ, BOM, soft hyphen, U+180E). Stored notes lose these characters too.
+- A URL password that contains `@` (`https://u:p@ss@host`) leaked the part after the first `@`. Userinfo is now masked up to the last `@` before the host.
+- Invisible-only text posted a note that looked empty. It is now refused.
+- A non-text topic or kind was converted with `str()`. It is now refused.
+- Topic whitespace is collapsed.
+- A secret in the topic now sets the "masked" flag.
+- Masking can make a note longer (`a@` becomes `***@`), and the bridge then cut it at 4000 without saying so. A note that is over the cap after masking is now refused with the masked length.
+- An OSError from the bridge now returns an ERROR instead of raising.
+- A corrupt lesson store (ValueError, AttributeError or TypeError) raised after the note was already posted, so the agent was told the tool failed. It now reports "not stored".
+
+### agent_home
+- `os.walk` recurses on Python 3.11, so a home about 1000 directories deep raised RecursionError. The scan now uses an explicit stack, visits in sorted order, and enters only real directories found by lstat.
+- A pool record with `uses` set to "abc", inf or 1.5 raised out of `int()`. Such a value now gives `uses: None`.
+- An idle time of NaN or inf, or a float record of inf, made format=json emit `NaN`/`Infinity`. The dump now uses `allow_nan=False`.
+- A JSON dump over the cap was cut into invalid JSON. It now falls back to compact form, then to an error object.
+- The node id was printed raw, so a newline in it forged lines. It is now cleaned.
+- `born_here` compared the home node after it was clipped to 80 characters, so a long node id read as "imported". It now compares the raw values.
+- A format argument that isn't a string gives text output.
+- Tests: `tests/test_researchnote_agenthome_robust.py`.

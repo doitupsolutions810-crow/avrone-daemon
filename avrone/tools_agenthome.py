@@ -17,6 +17,7 @@ Nothing here writes, spawns, networks or reads file contents. Output is capped a
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 
@@ -42,8 +43,10 @@ _RECORD_KEYS = ("home", "origin", "created", "imported", "migrated_to", "migrate
 def _clean(v: Any, n: int = 80) -> Any:
     if isinstance(v, bool) or v is None:
         return v
-    if isinstance(v, (int, float)):
-        return v if v == v else None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):  # round 51: inf made format=json emit "Infinity" (not JSON)
+        return v if math.isfinite(v) else None
     s = _textsafe.UNSAFE_ONE.sub("?", str(v))
     return s if len(s) <= n else s[:n] + "..."
 
@@ -62,26 +65,39 @@ def scan_home(d: Path, limit: int = SCAN_MAX_ENTRIES) -> dict[str, Any]:
     """Bytes / files under `d` by lstat, never following a symlink; stops after `limit` entries."""
     out = {"bytes": 0, "files": 0, "dirs": 0, "symlinks": 0, "special": 0, "truncated": False}
     seen = 0
-    for cur, dirs, files in os.walk(d, followlinks=False):
-        for name in dirs + files:
+    # round 51: os.walk recurses on Python 3.11 (the oldest supported), so a home ~1000 dirs deep
+    # raised RecursionError out of the tool; an explicit stack has no depth limit. Only real
+    # directories found by lstat are entered, so a symlinked dir is never followed.
+    stack = [str(d)]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                names = sorted(e.name for e in it)
+        except OSError:
+            continue
+        subdirs = []
+        for name in names:
             seen += 1
             if seen > limit:
                 out["truncated"] = True
                 return out
+            path = os.path.join(cur, name)
             try:
-                st = os.lstat(os.path.join(cur, name))
+                st = os.lstat(path)
             except OSError:
                 continue
             if _st.S_ISLNK(st.st_mode):
                 out["symlinks"] += 1
             elif _st.S_ISDIR(st.st_mode):
                 out["dirs"] += 1
+                subdirs.append(path)
             elif _st.S_ISREG(st.st_mode):
                 out["files"] += 1
                 out["bytes"] += st.st_size
             else:
                 out["special"] += 1
-        # os.walk(followlinks=False) never descends into a symlinked dir; nothing else to prune
+        stack.extend(reversed(subdirs))
     return out
 
 
@@ -92,16 +108,22 @@ def _container(ctx: "AgentContext", aid: str, node: str) -> dict[str, Any]:
     docker = shutil.which("docker") is not None
     pool = getattr(runner, "agent_pool", None)
     pool_node = getattr(pool, "node", None) if pool is not None else None
-    name = agentcontainer.container_name(pool_node if isinstance(pool_node, str) and pool_node else node, aid)
+    name = _clean(agentcontainer.container_name(pool_node if isinstance(pool_node, str) and pool_node else node,
+                                                aid), 200)
     live = None
     homes = getattr(pool, "homes", None) if pool is not None else None
-    if isinstance(homes, dict) and name in homes:  # only THIS agent's record is ever looked up
-        h = homes[name]
+    raw_name = agentcontainer.container_name(pool_node if isinstance(pool_node, str) and pool_node else node, aid)
+    if isinstance(homes, dict) and raw_name in homes:  # only THIS agent's record is ever looked up
+        h = homes[raw_name]
         try:
             idle = round(float(pool.clock()) - float(h.last_used), 1)
+            idle = idle if math.isfinite(idle) else None  # round 51: NaN/inf broke format=json
         except Exception:  # noqa: BLE001 - an odd clock never breaks a read-only report
             idle = None
-        live = {"uses": int(getattr(h, "uses", 0) or 0), "idle_s": idle}
+        uses = getattr(h, "uses", 0)
+        # round 51: uses="abc" / inf / 1.5 raised ValueError/OverflowError out of int(), outside the try
+        uses = uses if isinstance(uses, int) and not isinstance(uses, bool) and uses >= 0 else None
+        live = {"uses": uses, "idle_s": idle}
     return {"mode": mode, "runner": _clean(kind, 20), "docker_present": docker,
             "hosted": mode == "persistent" and kind == "docker", "name": name, "live": live,
             "idle_reap_s": agentcontainer.idle_secs()}
@@ -160,9 +182,12 @@ def agent_home(ctx: "AgentContext") -> dict[str, Any]:
     rep["container"] = _container(ctx, aid, node)
     rec = agentpack.load_index(data).get(aid)
     rec = {k: _clean(rec[k]) for k in _RECORD_KEYS if isinstance(rec, dict) and k in rec}
-    rep["pack"] = {"node": node, "home_node": _clean(agentpack.home_node(data, aid, node)),
+    home_node = agentpack.home_node(data, aid, node)
+    # round 51: the node id was printed raw (a "\n" in AVRONE_NODE_ID forged report lines), and
+    # born_here compared the 80-char-CLIPPED home node, so a long node id read as "imported"
+    rep["pack"] = {"node": _clean(node, 200), "home_node": _clean(home_node, 200),
                    "record": rec or None, **_packs(data, aid)}
-    rep["pack"]["born_here"] = rep["pack"]["home_node"] == node
+    rep["pack"]["born_here"] = home_node == node
     return rep
 
 
@@ -181,8 +206,13 @@ async def t_agent_home(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except PermissionError as e:
         from .tools import error_text  # round 115: no host path in the message
         return error_text(e, ctx) if e.filename else f"ERROR: {e}"
-    if str((args or {}).get("format", "text")).lower() == "json":
-        return _cap(json.dumps(rep, indent=1, sort_keys=True))
+    fmt = (args or {}).get("format", "text") if isinstance(args, dict) else "text"
+    if isinstance(fmt, str) and fmt.strip().lower() == "json":
+        out = json.dumps(rep, indent=1, sort_keys=True, allow_nan=False, default=str)
+        if len(out) > OUT_MAX_CHARS:  # round 51: a cut indented dump was not parseable JSON
+            out = json.dumps(rep, sort_keys=True, separators=(",", ":"), allow_nan=False, default=str)
+        return out if len(out) <= OUT_MAX_CHARS else json.dumps(
+            {"agent_id": rep["agent_id"], "error": "report over the output cap"})
     lines = [f"agent_home {rep['agent_id']} (your own; read-only): {rep['path']}"
              + ("" if rep["exists"] else " (not created yet)")]
     if rep.get("error"):

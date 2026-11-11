@@ -13,8 +13,8 @@ from avrone.fusion_plane import classify_execute
 # ------------------------------------------------------------ access loopback: still allowed
 @pytest.mark.parametrize("host", [
     "127.0.0.1", "::1", "localhost", "LOCALHOST", "[::1]", "::1%lo", "::1%eth0", "[::1%lo]",
-    "::ffff:127.0.0.1", "[::ffff:127.0.0.1]", "0:0:0:0:0:0:0:1", "::ffff:7f00:1", " 127.0.0.1 ",
-    b"127.0.0.1", "\t::1",
+    "::ffff:127.0.0.1", "[::ffff:127.0.0.1]", "0:0:0:0:0:0:0:1", "::ffff:7f00:1",
+    b"127.0.0.1",
 ])
 def test_access_loopback_still_allowed(host):
     assert is_access_loopback(host) is True
@@ -29,6 +29,7 @@ def test_access_loopback_still_allowed(host):
     "127.0.0.2", "127.1", "0127.0.0.1", "::127.0.0.1", "::ffff:127.0.0.2", "10.0.0.1",
     "localhost.", "a.localhost", "localhost:80", "127.0.0.1:80",
     None, "", 2130706433, ["127.0.0.1"], b"\xff127.0.0.1", object(),
+    " 127.0.0.1 ", "\t::1",
 ])
 def test_access_loopback_refused(host):
     assert is_access_loopback(host) is False
@@ -97,7 +98,7 @@ def test_origin_key_never_raises(base):
 
 def test_origin_key_default_ports():
     assert origin_key("http://localhost") == origin_key("http://localhost:80") == "loopback:80"
-    assert origin_key("https://localhost") == "loopback:443"
+    assert origin_key("https://localhost") == "https://loopback:443"
     assert origin_key("http://localhost") != origin_key("https://localhost")
     assert origin_key("HTTPS://example.com") == origin_key("https://example.com:443")
     assert origin_key("http://example.com") != origin_key("https://example.com")

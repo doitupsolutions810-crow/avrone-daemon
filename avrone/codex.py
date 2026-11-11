@@ -61,8 +61,15 @@ def jsonable(v: Any, depth: int = 0) -> Any:
     both accept. Before, a tuple dict key raised TypeError out of emit() (killing the agent step that
     logged it), NaN/Infinity were written as bare NaN (the HUD's JSON.parse threw, and
     /api/runs/{id} answered 500 "Out of range float"), and bytes or sets sent live made the
-    WebSocket pump raise and drop the dashboard. Never raises."""
-    if v is None or isinstance(v, (bool, int, str)):
+    WebSocket pump raise and drop the dashboard. Integers rejected by Python's
+    decimal-string guard use hex strings under the existing field cap. Never raises."""
+    if v is None or isinstance(v, (bool, str)):
+        return v
+    if isinstance(v, int):
+        try:
+            int.__repr__(v)  # the same decimal conversion guard used by json.dumps
+        except ValueError:
+            return clip_strings(hex(v), field_max_chars())
         return v
     if isinstance(v, float):
         return v if math.isfinite(v) else None
@@ -74,7 +81,8 @@ def jsonable(v: Any, depth: int = 0) -> Any:
             if isinstance(k, str):
                 key = k
             elif k is None or isinstance(k, (bool, int)):
-                key = json.dumps(k)  # what json.dumps would have done with the key
+                projected = jsonable(k)
+                key = projected if isinstance(projected, str) else json.dumps(projected)
             elif isinstance(k, float):
                 key = json.dumps(k) if math.isfinite(k) else str(k)
             else:

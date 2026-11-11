@@ -190,7 +190,8 @@ def test_deep_without_first_answer_still_multi_round(tmp_path):
 # ---------------------------------------------------------------- robustness + reporting
 def test_hung_reviewer_times_out_and_rest_merge(tmp_path):
     llm = ScriptedLLM([_report("None")], boom={"Contrarian": "hang"})
-    core = _core(tmp_path, llm, agent_timeout=0.5)
+    # Healthy workers also write durable events; allow scheduler and disk jitter.
+    core = _core(tmp_path, llm, agent_timeout=2.0)
     r = asyncio.run(asyncio.wait_for(core.deep("q", "a", n=3, rounds=3, run_id="h"), 10))
     res = [a["result"] for a in r["agents"]]
     assert "timed out" in res[2] and not r["agents"][2]["ok"] and r["agents"][0]["ok"]

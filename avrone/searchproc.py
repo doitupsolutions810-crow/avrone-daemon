@@ -21,32 +21,35 @@ from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
-    """Depth-first, sorted, same order as the old os.walk loop. Round 49: an explicit stack.
-    os.walk recursed on Python 3.11 (the oldest one pyproject allows), so a tree deeper than the
-    recursion limit (about 1000 one-letter directories) killed the scan with RecursionError and
-    search_files returned no hits at all. Symlinked directories are listed, never entered."""
     if root.is_file():
         yield root
         return
-    stack = [str(root)]
-    while stack:
-        top = stack.pop()
+    # Python 3.11's os.walk recurses through generator frames. A workspace
+    # with >1,000 nested directories can raise RecursionError. Iterate with an
+    # explicit stack and preserve walk's sorted, no-symlink-descent behavior.
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        dirs: list[Path] = []
+        files: list[Path] = []
         try:
-            with os.scandir(top) as it:
-                entries = list(it)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        is_dir = entry.is_dir()
+                    except OSError:
+                        is_dir = False
+                    if is_dir:
+                        if (not entry.is_symlink() and entry.name not in skip_names
+                                and entry.path not in skip_paths):
+                            dirs.append(Path(entry.path))
+                    else:
+                        files.append(Path(entry.path))
         except OSError:
             continue
-        dirs, files = [], []
-        for e in entries:
-            try:
-                is_dir = e.is_dir(follow_symlinks=False)
-            except OSError:
-                is_dir = False
-            (dirs if is_dir else files).append(e.name)
-        for fn in sorted(files):
-            yield Path(top) / fn
-        keep = [d for d in sorted(dirs) if d not in skip_names and os.path.join(top, d) not in skip_paths]
-        stack.extend(os.path.join(top, d) for d in reversed(keep))
+        for file in sorted(files, key=lambda path: path.name):
+            yield file
+        pending.extend(reversed(sorted(dirs, key=lambda path: path.name)))
 
 
 def _lines(text: str):
@@ -74,10 +77,15 @@ def _int(req: dict, key: str, default: int, lo: int, hi: int) -> int:
 def run(req: dict, out) -> None:
     rx = re.compile(req["pattern"])
     # round 49: the parent's limits, bounded (a bool, float or string limit was int()-ed as is)
-    cap = _int(req, "cap", 200, 1, 10_000)
-    max_files = _int(req, "max_files", 5000, 1, 1_000_000)
+    cap = _int(req, "cap", 200, 0, 10_000)
+    max_files = _int(req, "max_files", 5000, 0, 1_000_000)
     max_bytes = _int(req, "max_bytes", 1_000_000, 0, 64_000_000)
     hits = scanned = 0
+    # Zero and negative scan budgets must not enumerate or open the filesystem.
+    if cap <= 0 or max_files <= 0:
+        out.write(json.dumps({"done": True, "scanned": 0}) + "\n")
+        out.flush()
+        return
     root = Path(req["root"])
     for f in _iter_files(root, set(req.get("skip_dirs") or []), set(req.get("skip_paths") or [])):
         if scanned >= max_files or hits >= cap:  # round 49: was ">", one file past the limit

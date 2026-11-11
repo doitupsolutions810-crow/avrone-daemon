@@ -44,7 +44,8 @@ def classify_execute(body: Any) -> dict[str, Any]:
     status = _exact_str(dict.get(body, "execution_status"))
     outer = _exact_str(dict.get(body, "status"))
     result = dict.get(body, "result")
-    has_error = dict.get(body, "error") not in (None, "", False)
+    error = dict.get(body, "error")
+    has_error = not (error is None or error is False or (type(error) is str and error == ""))
     if status == "SUCCEEDED" and outer == "executed":
         if has_error or _exact_str(result) == "not_executed":
             return {"executed": False, "reason": "contradictory", "runner": "none"}
@@ -70,7 +71,7 @@ def _exact_str(v: Any) -> str | None:
 def _detail(v: Any) -> str:
     """The plane's error text as one short, printable line. Never a reason code: an error
     spelled "plane_succeeded" used to come back as reason "plane_succeeded"."""
-    if v is None or v == "" or v is False:
+    if v is None or v is False or (type(v) is str and v == ""):
         return "error"
     if type(v) is not str:
         return type(v).__name__  # never str() a foreign object

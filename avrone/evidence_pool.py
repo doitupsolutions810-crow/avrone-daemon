@@ -14,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .greatscale import MAX_RUNS, evidence_snapshot
+from .textsafe import UNSAFE_ONE
 
 MAX_POOL_TRIALS = 100_000
 MAX_TRIAL_ID_CHARS = 256
@@ -25,19 +26,21 @@ MAX_SOURCES = 10_000
 # fullwidth digit produced a "distinct" trial_id, so one outcome counted twice: exactly the
 # manufactured confirmation the module exists to stop. "node-a" and "Node-A\u200b" also showed up
 # as two silos, which could fake an orientation conflict.
-# Cc (C0/C1 controls, DEL), Zl/Zp (U+2028/U+2029) and Cs (lone surrogates) are refused. Judged by
-# Unicode category instead of a private copy of textsafe's class: textsafe also lists the bidi
-# marks, which are format characters (Cf) here and are dropped, not refused.
+# Preserve the integration branch's strict provenance boundary: controls, bidi markers and
+# lone surrogates are refused before normalization. Other invisible format characters are
+# removed so a re-encoded relay cannot manufacture an additional confirmation.
 _REFUSED_CATEGORIES = frozenset({"Cc", "Zl", "Zp", "Cs"})
 _WS = re.compile(r"\s+")
 
 
 def _canon(value: str) -> str:
-    """NFKC, Unicode format characters (Cf: ZWSP, ZWJ, BOM, bidi marks, soft hyphen) removed,
-    whitespace runs collapsed to one space and trimmed. Raises ValueError on control characters or
-    lone surrogates, which no well-formed identifier holds and which broke JSON reports later."""
-    if any(unicodedata.category(ch) in _REFUSED_CATEGORIES for ch in value if ch not in "\t\n\r"):
-        raise ValueError("identity fields must not contain control characters or lone surrogates")
+    """Reject unsafe provenance, then NFKC and deduplicate safe invisible/space variants.
+
+    Controls, bidi markers and lone surrogates never become accepted identity text.
+    Other Unicode format characters are removed; harmless spaces collapse and trim.
+    """
+    if UNSAFE_ONE.search(value) or any(unicodedata.category(ch) in _REFUSED_CATEGORIES for ch in value):
+        raise ValueError("identity fields must not contain control or bidi characters or lone surrogates")
     v = unicodedata.normalize("NFKC", value)
     v = "".join(ch for ch in v if unicodedata.category(ch) != "Cf")
     return _WS.sub(" ", v).strip()

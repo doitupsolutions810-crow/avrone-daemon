@@ -1,0 +1,1014 @@
+{
+  "schema": "avrone.accountable-resource-registry.v1",
+  "observed_at_utc": "2026-11-10T22:39:40.160118+00:00",
+  "scope": "Public repository projection only; private resource names/content omitted",
+  "note": "Committed default-branch syntax snapshot plus complete PR census counts and selected integration candidate metadata; no claim that all PR diffs or builds were reviewed. Syntax findings predate the repair PRs.",
+  "repositories": [
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/Aiminer",
+      "repository": "doitupsolutions810-crow/Aiminer",
+      "url": "https://github.com/doitupsolutions810-crow/Aiminer",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "00e3cea3c684a51bd66cc137e767529fd36c9a79",
+      "commit_count_all_refs": "8",
+      "syntax_checks": {
+        "python": 15,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 2,
+        "open": 1,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/Aiminer/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/artifact-hosted-demo",
+      "repository": "doitupsolutions810-crow/artifact-hosted-demo",
+      "url": "https://github.com/doitupsolutions810-crow/artifact-hosted-demo",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "1952262738c890e83f5ab0aaa800a4cbcfc9199c",
+      "commit_count_all_refs": "11",
+      "syntax_checks": {
+        "python": 0,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 1,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/artifact-hosted-demo/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/attested-history",
+      "repository": "doitupsolutions810-crow/attested-history",
+      "url": "https://github.com/doitupsolutions810-crow/attested-history",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "75f8188e6c11668ac9e71de6f8a5a1decfff08cf",
+      "commit_count_all_refs": "21",
+      "syntax_checks": {
+        "python": 2,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 3,
+        "open": 3,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/attested-history/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/Avrone",
+      "repository": "doitupsolutions810-crow/Avrone",
+      "url": "https://github.com/doitupsolutions810-crow/Avrone",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "5cceb5257d2e03499070d727b56c4847de1578e0",
+      "commit_count_all_refs": "968",
+      "syntax_checks": {
+        "python": 259,
+        "node": 1,
+        "shell": 3,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 23,
+        "open": 17,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/Avrone/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 25,
+          "url": "https://github.com/doitupsolutions810-crow/Avrone/pull/25",
+          "title": "Keep poisoned run logs from crashing the JSON response",
+          "state": "open",
+          "draft": false,
+          "head_sha": "993719df639f0fd39d9765abf4abba85922d8c67",
+          "base_sha": "806d15b92611625309132b1c9ec1967706395ca8",
+          "merged_at": null,
+          "head_contained_in_default": false
+        },
+        {
+          "number": 24,
+          "url": "https://github.com/doitupsolutions810-crow/Avrone/pull/24",
+          "title": "Keep nested blackboard values and non-finite timestamps encodable",
+          "state": "open",
+          "draft": false,
+          "head_sha": "12888778a6660946f42b0ad955f200f953ffcf99",
+          "base_sha": "5cceb5257d2e03499070d727b56c4847de1578e0",
+          "merged_at": null,
+          "head_contained_in_default": false
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/avrone-daemon",
+      "repository": "doitupsolutions810-crow/avrone-daemon",
+      "url": "https://github.com/doitupsolutions810-crow/avrone-daemon",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "df792354e5a07aaf0a52ab52190ac72bcd1b1705",
+      "commit_count_all_refs": "826",
+      "syntax_checks": {
+        "python": 427,
+        "node": 1,
+        "shell": 17,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 23,
+        "open": 20,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/avrone-daemon/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 23,
+          "url": "https://github.com/doitupsolutions810-crow/avrone-daemon/pull/23",
+          "title": "Share one loopback breaker bucket and ignore HTTP_PROXY",
+          "state": "open",
+          "draft": false,
+          "head_sha": "cf24092c559a4fec23ec3dddabb8ddd1e84f473a",
+          "base_sha": "5ceacd4b1e03385fc6c9b7a16f78016db0f46dd8",
+          "merged_at": null,
+          "head_contained_in_default": false
+        },
+        {
+          "number": 22,
+          "url": "https://github.com/doitupsolutions810-crow/avrone-daemon/pull/22",
+          "title": "Refuse non-regular checkpoint claim files",
+          "state": "open",
+          "draft": false,
+          "head_sha": "0ec5f587445083f87e60ea439a70ea32f981cacb",
+          "base_sha": "253573d0f235617a670e84c206565d7bfdbf3c23",
+          "merged_at": null,
+          "head_contained_in_default": false
+        },
+        {
+          "number": 21,
+          "url": "https://github.com/doitupsolutions810-crow/avrone-daemon/pull/21",
+          "title": "Bound fusion 429 storms and reject non-UTF-8 payloads",
+          "state": "open",
+          "draft": false,
+          "head_sha": "57afb8bc24bbc4c7b498578769deb0bec2ff9aa1",
+          "base_sha": "253573d0f235617a670e84c206565d7bfdbf3c23",
+          "merged_at": null,
+          "head_contained_in_default": false
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/capability-authority",
+      "repository": "doitupsolutions810-crow/capability-authority",
+      "url": "https://github.com/doitupsolutions810-crow/capability-authority",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "012dc7d5ed254c2ece5c7c1782fb6d3eba3e08ce",
+      "commit_count_all_refs": "269",
+      "syntax_checks": {
+        "python": 62,
+        "node": 0,
+        "shell": 8,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 17,
+        "open": 13,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/capability-authority/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 17,
+          "url": "https://github.com/doitupsolutions810-crow/capability-authority/pull/17",
+          "title": "Persist capability issuance idempotency by correlation id",
+          "state": "closed",
+          "draft": false,
+          "head_sha": "e23db625ef6a9722c2cf8c40f115247d1ae40e94",
+          "base_sha": "e81be6abca27aee8fc52784d128e2e6b147e5f03",
+          "merged_at": "2026-11-10T04:35:34Z",
+          "head_contained_in_default": null
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/capability-plane",
+      "repository": "doitupsolutions810-crow/capability-plane",
+      "url": "https://github.com/doitupsolutions810-crow/capability-plane",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "102554b1adb416a552fdf9f9792ce7578ca941c4",
+      "commit_count_all_refs": "39",
+      "syntax_checks": {
+        "python": 17,
+        "node": 0,
+        "shell": 7,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 2,
+        "open": 2,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/capability-plane/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/cleanroom-agent-system",
+      "repository": "doitupsolutions810-crow/cleanroom-agent-system",
+      "url": "https://github.com/doitupsolutions810-crow/cleanroom-agent-system",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "78e83cdcd546f72921124093009de850efb9466e",
+      "commit_count_all_refs": "6",
+      "syntax_checks": {
+        "python": 13,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/cleanroom-agent-system/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/code",
+      "repository": "doitupsolutions810-crow/code",
+      "url": "https://github.com/doitupsolutions810-crow/code",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "971e0317b28d0ed53d52d63359d564e021b967b6",
+      "commit_count_all_refs": "42",
+      "syntax_checks": {
+        "python": 0,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 3,
+        "open": 2,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/code/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/control12-lattice-ops",
+      "repository": "doitupsolutions810-crow/control12-lattice-ops",
+      "url": "https://github.com/doitupsolutions810-crow/control12-lattice-ops",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "aa669b63b9695eeb33fedcdf3ec2bbf30604b6a5",
+      "commit_count_all_refs": "475",
+      "syntax_checks": {
+        "python": 5,
+        "node": 84,
+        "shell": 27,
+        "package_json": 4,
+        "not_checked": {
+          ".ts": 9,
+          ".tsx": 2
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 31,
+        "open": 16,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/control12-lattice-ops/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/control12-workspace",
+      "repository": "doitupsolutions810-crow/control12-workspace",
+      "url": "https://github.com/doitupsolutions810-crow/control12-workspace",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "6d0a504ee5704fe8bedf052d7acabdf8a96e4fd6",
+      "commit_count_all_refs": "45",
+      "syntax_checks": {
+        "python": 1,
+        "node": 0,
+        "shell": 2,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 7,
+        "open": 2,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/control12-workspace/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/control704-grokbot-knowledge",
+      "repository": "doitupsolutions810-crow/control704-grokbot-knowledge",
+      "url": "https://github.com/doitupsolutions810-crow/control704-grokbot-knowledge",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "9c0111256ca30bc5a6ed42ddcec598c671cc5c6c",
+      "commit_count_all_refs": "8",
+      "syntax_checks": {
+        "python": 31,
+        "node": 0,
+        "shell": 4,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 3,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/control704-grokbot-knowledge/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/control704-proxy-system",
+      "repository": "doitupsolutions810-crow/control704-proxy-system",
+      "url": "https://github.com/doitupsolutions810-crow/control704-proxy-system",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "5f041014b218736798d2328fd77039528eaf4113",
+      "commit_count_all_refs": "8",
+      "syntax_checks": {
+        "python": 0,
+        "node": 1,
+        "shell": 0,
+        "package_json": 1,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 1,
+        "open": 1,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/control704-proxy-system/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/crystal-iris-ruby-zippy",
+      "repository": "doitupsolutions810-crow/crystal-iris-ruby-zippy",
+      "url": "https://github.com/doitupsolutions810-crow/crystal-iris-ruby-zippy",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "6ebabd143ff5744d40b36042ad36894e59157afe",
+      "commit_count_all_refs": "1",
+      "syntax_checks": {
+        "python": 5,
+        "node": 44,
+        "shell": 1,
+        "package_json": 1,
+        "not_checked": {
+          ".ts": 39,
+          ".tsx": 9
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/crystal-iris-ruby-zippy/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/CycleKernal",
+      "repository": "doitupsolutions810-crow/CycleKernal",
+      "url": "https://github.com/doitupsolutions810-crow/CycleKernal",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "642bd646467c93e26de7530caab0f892dcdbb45f",
+      "commit_count_all_refs": "332",
+      "syntax_checks": {
+        "python": 26,
+        "node": 1,
+        "shell": 2,
+        "package_json": 2,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 10,
+        "open": 6,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/CycleKernal/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/cyclekernel-attestpipe_q6-platform-upgrade-2",
+      "repository": "doitupsolutions810-crow/cyclekernel-attestpipe_q6-platform-upgrade-2",
+      "url": "https://github.com/doitupsolutions810-crow/cyclekernel-attestpipe_q6-platform-upgrade-2",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "95777d844cf437e49c763ac71d414e4732112c1b",
+      "commit_count_all_refs": "1",
+      "syntax_checks": {
+        "python": 0,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/cyclekernel-attestpipe_q6-platform-upgrade-2/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/express-openapi-validator",
+      "repository": "doitupsolutions810-crow/express-openapi-validator",
+      "url": "https://github.com/doitupsolutions810-crow/express-openapi-validator",
+      "visibility": "public",
+      "default_branch": "master",
+      "head_sha": "413e43cde9a78c351c14ae8a7411c9972c4280e4",
+      "commit_count_all_refs": "2091",
+      "syntax_checks": {
+        "python": 0,
+        "node": 26,
+        "shell": 1,
+        "package_json": 11,
+        "not_checked": {
+          ".ts": 139
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/express-openapi-validator/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/ghostshell",
+      "repository": "doitupsolutions810-crow/ghostshell",
+      "url": "https://github.com/doitupsolutions810-crow/ghostshell",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "95777d844cf437e49c763ac71d414e4732112c1b",
+      "commit_count_all_refs": "1",
+      "syntax_checks": {
+        "python": 0,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/ghostshell/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/ghostshell-docs",
+      "repository": "doitupsolutions810-crow/ghostshell-docs",
+      "url": "https://github.com/doitupsolutions810-crow/ghostshell-docs",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "8eb9d4759665ad5a595632c8878ea35befbb50ea",
+      "commit_count_all_refs": "8",
+      "syntax_checks": {
+        "python": 2,
+        "node": 0,
+        "shell": 4,
+        "package_json": 1,
+        "not_checked": {
+          ".tsx": 67,
+          ".ts": 38
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 3,
+        "open": 1,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/ghostshell-docs/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/github-api-automation",
+      "repository": "doitupsolutions810-crow/github-api-automation",
+      "url": "https://github.com/doitupsolutions810-crow/github-api-automation",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "324febf279ab408683758b3b4b185ddd5a272113",
+      "commit_count_all_refs": "3",
+      "syntax_checks": {
+        "python": 1,
+        "node": 1,
+        "shell": 0,
+        "package_json": 1,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/github-api-automation/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/great-scale",
+      "repository": "doitupsolutions810-crow/great-scale",
+      "url": "https://github.com/doitupsolutions810-crow/great-scale",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "74cad04cf43746e098b8af50af9c811da6b313a4",
+      "commit_count_all_refs": "1447",
+      "syntax_checks": {
+        "python": 1,
+        "node": 10,
+        "shell": 0,
+        "package_json": 1,
+        "not_checked": {},
+        "errors": [
+          {
+            "path": "research/topological-qgt.cjs",
+            "kind": "node",
+            "message": "/workspace/scratch/a969b36ce65a/audit/recon/syntax_snapshots/great-scale/research/topological-qgt.cjs:3\nconst { CONE, heat } = require('..//public/scale.cjs);\n                               ^^^^^^^^^^^^^^^^^^^^^^^\n\nSyntaxError: Invalid or unexpected token\n    at wrapSafe (node:internal/modules/cjs/loader:1861:18)\n    at checkSyntax (node:internal/main/check_syntax:88:3)\n\nNode.js v24.22.1\n"
+          }
+        ]
+      },
+      "pull_request_census": {
+        "total": 126,
+        "open": 122,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/great-scale/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/GreatScale-Avrone-Grok-Fusion-Bridge",
+      "repository": "doitupsolutions810-crow/GreatScale-Avrone-Grok-Fusion-Bridge",
+      "url": "https://github.com/doitupsolutions810-crow/GreatScale-Avrone-Grok-Fusion-Bridge",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "3f8cc12a965486d5157431c7d906f04024b904cf",
+      "commit_count_all_refs": "83",
+      "syntax_checks": {
+        "python": 7,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 5,
+        "open": 5,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/GreatScale-Avrone-Grok-Fusion-Bridge/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 5,
+          "url": "https://github.com/doitupsolutions810-crow/GreatScale-Avrone-Grok-Fusion-Bridge/pull/5",
+          "title": "Harden the Avrone and CycleKernal fusion relay",
+          "state": "open",
+          "draft": false,
+          "head_sha": "3abf0681cdd094a676a1aed84b4158df9b432068",
+          "base_sha": "3f8cc12a965486d5157431c7d906f04024b904cf",
+          "merged_at": null,
+          "head_contained_in_default": false
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/grok-bot-",
+      "repository": "doitupsolutions810-crow/grok-bot-",
+      "url": "https://github.com/doitupsolutions810-crow/grok-bot-",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "c4d5e95b7a23639c103552ea1cc0470e86c98a21",
+      "commit_count_all_refs": "394",
+      "syntax_checks": {
+        "python": 109,
+        "node": 40,
+        "shell": 4,
+        "package_json": 1,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 4,
+        "open": 4,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/grok-bot-/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 4,
+          "url": "https://github.com/doitupsolutions810-crow/grok-bot-/pull/4",
+          "title": "Wire real signed Swarm specialist execution",
+          "state": "open",
+          "draft": true,
+          "head_sha": "b7e70592c9cee82549253634d5d931430955f4fe",
+          "base_sha": "c4d5e95b7a23639c103552ea1cc0470e86c98a21",
+          "merged_at": null,
+          "head_contained_in_default": false
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/KiloMan",
+      "repository": "doitupsolutions810-crow/KiloMan",
+      "url": "https://github.com/doitupsolutions810-crow/KiloMan",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "4ab7e47f94d7f2f9a68f1a7ffd1562e42d528934",
+      "commit_count_all_refs": "4",
+      "syntax_checks": {
+        "python": 0,
+        "node": 2,
+        "shell": 0,
+        "package_json": 1,
+        "not_checked": {
+          ".tsx": 5,
+          ".ts": 3
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/KiloMan/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/living-intermediate-control-plane",
+      "repository": "doitupsolutions810-crow/living-intermediate-control-plane",
+      "url": "https://github.com/doitupsolutions810-crow/living-intermediate-control-plane",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "5db14c9cbaa8dcf8c9014a1416ee252033e45a9d",
+      "commit_count_all_refs": "944",
+      "syntax_checks": {
+        "python": 10,
+        "node": 118,
+        "shell": 10,
+        "package_json": 3,
+        "not_checked": {
+          ".ts": 34,
+          ".tsx": 7
+        },
+        "errors": [
+          {
+            "path": "platform/src/bridge/descent-engine.mjs",
+            "kind": "node",
+            "message": "/workspace/scratch/a969b36ce65a/audit/recon/syntax_snapshots/living-intermediate-control-plane/platform/src/bridge/descent-engine.mjs:10\n    this.stateDir = opts.stateDir ?? path.join(process.cwd(), 'state);\n                                                              ^^^^^^^^\n\nSyntaxError: Invalid or unexpected token\n    at checkSyntax (node:internal/main/check_syntax:84:5)\n\nNode.js v24.22.1\n"
+          }
+        ]
+      },
+      "pull_request_census": {
+        "total": 36,
+        "open": 25,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/living-intermediate-control-plane/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 39,
+          "url": "https://github.com/doitupsolutions810-crow/living-intermediate-control-plane/pull/39",
+          "title": "feat(control704): technician auth, X/Y/Z role-gated proxy, audited dataset override (v1.5.0)",
+          "state": "closed",
+          "draft": false,
+          "head_sha": "b4b5ad2d4d1ecfe761edc99f0f66a520b7a6f00f",
+          "base_sha": "5fb93800f0f23633e0dd14490af4d68ab0a4bda9",
+          "merged_at": "2026-11-10T03:44:57Z",
+          "head_contained_in_default": null
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/LLM-RE-KnowledgeBase-Agent",
+      "repository": "doitupsolutions810-crow/LLM-RE-KnowledgeBase-Agent",
+      "url": "https://github.com/doitupsolutions810-crow/LLM-RE-KnowledgeBase-Agent",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "e0ad9246ee93225606eb0e49e2dab47157108b26",
+      "commit_count_all_refs": "8",
+      "syntax_checks": {
+        "python": 3,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/LLM-RE-KnowledgeBase-Agent/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/sacp-platform",
+      "repository": "doitupsolutions810-crow/sacp-platform",
+      "url": "https://github.com/doitupsolutions810-crow/sacp-platform",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "0b669185afa316b4b2dad63672bf4c29e2107fa4",
+      "commit_count_all_refs": "1",
+      "syntax_checks": {
+        "python": 0,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/sacp-platform/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/seed-platform-v10x-docs",
+      "repository": "doitupsolutions810-crow/seed-platform-v10x-docs",
+      "url": "https://github.com/doitupsolutions810-crow/seed-platform-v10x-docs",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "0501ddfaa2642b6e35ca4439975b6a7cd9988c03",
+      "commit_count_all_refs": "5",
+      "syntax_checks": {
+        "python": 1,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/seed-platform-v10x-docs/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/swarm-vm-runner",
+      "repository": "doitupsolutions810-crow/swarm-vm-runner",
+      "url": "https://github.com/doitupsolutions810-crow/swarm-vm-runner",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "9bd1cfb75a223aa1e04dcf052b6d30a35f65895b",
+      "commit_count_all_refs": "340",
+      "syntax_checks": {
+        "python": 0,
+        "node": 6,
+        "shell": 5,
+        "package_json": 1,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 4,
+        "open": 4,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/swarm-vm-runner/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": [
+        {
+          "number": 5,
+          "url": "https://github.com/doitupsolutions810-crow/swarm-vm-runner/pull/5",
+          "title": "Make Swarm VM success proof fail closed",
+          "state": "open",
+          "draft": true,
+          "head_sha": "fb55b8cbfbcacef5a7ecb8490f226161410112f2",
+          "base_sha": "9bd1cfb75a223aa1e04dcf052b6d30a35f65895b",
+          "merged_at": null,
+          "head_contained_in_default": false
+        },
+        {
+          "number": 3,
+          "url": "https://github.com/doitupsolutions810-crow/swarm-vm-runner/pull/3",
+          "title": "Security: authenticate, persist, and gate swarm coordinator evidence",
+          "state": "open",
+          "draft": true,
+          "head_sha": "8d78360b0170e686edc39e648d9d31a13e882e36",
+          "base_sha": "9bd1cfb75a223aa1e04dcf052b6d30a35f65895b",
+          "merged_at": null,
+          "head_contained_in_default": false
+        }
+      ]
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/TrainLLM",
+      "repository": "doitupsolutions810-crow/TrainLLM",
+      "url": "https://github.com/doitupsolutions810-crow/TrainLLM",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "22969639b568783aba0fba7573f80107ea65d221",
+      "commit_count_all_refs": "60",
+      "syntax_checks": {
+        "python": 8,
+        "node": 0,
+        "shell": 1,
+        "package_json": 3,
+        "not_checked": {
+          ".ts": 28,
+          ".tsx": 1
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 2,
+        "open": 1,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/TrainLLM/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/trinity-core",
+      "repository": "doitupsolutions810-crow/trinity-core",
+      "url": "https://github.com/doitupsolutions810-crow/trinity-core",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "da657ce9821b67763ab290a4c3e55d2adb204e55",
+      "commit_count_all_refs": "15",
+      "syntax_checks": {
+        "python": 0,
+        "node": 6,
+        "shell": 1,
+        "package_json": 1,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 4,
+        "open": 1,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/trinity-core/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/Understanding-Uploaded-Files_-pasted_content-1-",
+      "repository": "doitupsolutions810-crow/Understanding-Uploaded-Files_-pasted_content-1-",
+      "url": "https://github.com/doitupsolutions810-crow/Understanding-Uploaded-Files_-pasted_content-1-",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "0bd11bc92d5f080fe11f26c77dc77920a11f839b",
+      "commit_count_all_refs": "2",
+      "syntax_checks": {
+        "python": 2,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/Understanding-Uploaded-Files_-pasted_content-1-/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/UnifiedToolStackApplication-utsp-platform",
+      "repository": "doitupsolutions810-crow/UnifiedToolStackApplication-utsp-platform",
+      "url": "https://github.com/doitupsolutions810-crow/UnifiedToolStackApplication-utsp-platform",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "1fcbdd4d3f68659d79cd78fc41dc5c20ebb75c40",
+      "commit_count_all_refs": "1",
+      "syntax_checks": {
+        "python": 0,
+        "node": 0,
+        "shell": 0,
+        "package_json": 0,
+        "not_checked": {},
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/UnifiedToolStackApplication-utsp-platform/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/v0-ai-agent-for-servers",
+      "repository": "doitupsolutions810-crow/v0-ai-agent-for-servers",
+      "url": "https://github.com/doitupsolutions810-crow/v0-ai-agent-for-servers",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "c35b83138e5feb2b92d3db88df7e755b21d2756c",
+      "commit_count_all_refs": "4",
+      "syntax_checks": {
+        "python": 0,
+        "node": 1,
+        "shell": 0,
+        "package_json": 1,
+        "not_checked": {
+          ".ts": 3,
+          ".tsx": 53
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 1,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/v0-ai-agent-for-servers/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    },
+    {
+      "resource_id": "github-repository:doitupsolutions810-crow/wolf-pixel-bolt-frost",
+      "repository": "doitupsolutions810-crow/wolf-pixel-bolt-frost",
+      "url": "https://github.com/doitupsolutions810-crow/wolf-pixel-bolt-frost",
+      "visibility": "public",
+      "default_branch": "main",
+      "head_sha": "7846f90761dc9bb17f0ba8182ebf9316d78e562f",
+      "commit_count_all_refs": "8",
+      "syntax_checks": {
+        "python": 8,
+        "node": 25,
+        "shell": 1,
+        "package_json": 1,
+        "not_checked": {
+          ".ts": 42,
+          ".tsx": 8
+        },
+        "errors": []
+      },
+      "pull_request_census": {
+        "total": 0,
+        "open": 0,
+        "source": "https://api.github.com/repos/doitupsolutions810-crow/wolf-pixel-bolt-frost/pulls?state=all&per_page=100",
+        "scope": "All pages enumerated at observation time."
+      },
+      "integration_candidates": []
+    }
+  ]
+}

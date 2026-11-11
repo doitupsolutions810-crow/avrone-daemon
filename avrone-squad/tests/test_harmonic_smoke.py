@@ -39,13 +39,13 @@ def _serve(directory, port):
     return httpd
 
 
-def test_gauge_smoke_injected_index():
+def test_gauge_smoke_injected_index(tmp_path):
     dash = _load_dash()
     injected = dash.inject_into_index(
         "<html><head><title>AVRONE</title></head><body><h1>HUD</h1></body></html>"
     )
     port = _free_port()
-    tmp = os.path.join(ROOT, ".smoke-tmp")
+    tmp = os.fspath(tmp_path)
     os.makedirs(tmp, exist_ok=True)
     with open(os.path.join(tmp, "index.html"), "w") as f:
         f.write(injected)
@@ -62,13 +62,13 @@ def test_gauge_smoke_injected_index():
         httpd.shutdown()
 
 
-def test_gauge_smoke_missing_d3_graceful():
+def test_gauge_smoke_missing_d3_graceful(tmp_path):
     injected = "<html><body></body></html>".replace(
         "</body>",
         '<div id="harmonic-thermo-gauge"></div>\n<script>/* d3 unavailable */</script>\n</body>',
     )
     port = _free_port()
-    tmp = os.path.join(ROOT, ".smoke-tmp")
+    tmp = os.fspath(tmp_path)
     os.makedirs(tmp, exist_ok=True)
     with open(os.path.join(tmp, "index.html"), "w") as f:
         f.write(injected)

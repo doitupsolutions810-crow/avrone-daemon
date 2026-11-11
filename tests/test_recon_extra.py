@@ -43,6 +43,7 @@ def test_port_cap_authorized_gate(monkeypatch):
     assert "at most 32" in out
     async def mock_open(*args, **kwargs):
         raise OSError("mock offline - no real network")
+    monkeypatch.setattr(recon, "_resolve_ips", lambda host: ["93.184.216.34"])
     monkeypatch.setattr(asyncio, "open_connection", mock_open)
     out = run(recon.t_port_scan(ctx(), {"host": "example.com", "authorized": True, "ports": [80, 443]}))
     assert "port_scan" in out and "open: none" in out

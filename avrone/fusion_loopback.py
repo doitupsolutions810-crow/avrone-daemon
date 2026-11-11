@@ -13,21 +13,14 @@ that wider check except to unwrap the mapped form first.
 from __future__ import annotations
 
 import ipaddress
+import re
 from urllib.parse import urlsplit
 
 
 _HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
-_DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
-
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 def host_text(host: str | None) -> str:
-    """Normalise a host for comparison; "" for anything that is not a plain host spelling.
-
-    Round 48: ``.strip("[]")`` removed any number of brackets from either end, so
-    ``]127.0.0.1[`` and ``[[::1]]`` counted as loopback; ``%`` cut a zone from any name, so
-    ``127.0.0.1%evil`` and ``localhost%x`` did too; and control characters, NUL and
-    non-ASCII passed through to the comparison. Now only one matched ``[...]`` pair is
-    removed, a zone is allowed only on an IPv6 literal, and any other character refuses."""
     if isinstance(host, (bytes, bytearray)):
         try:
             host = bytes(host).decode("ascii")
@@ -35,15 +28,40 @@ def host_text(host: str | None) -> str:
             return ""
     if not isinstance(host, str):
         return ""
-    name = host.strip(" \t").lower()
-    if name.startswith("[") and name.endswith("]") and len(name) >= 2:
+    raw = host
+    # Peer identities are not presentation text: normalization must not erase
+    # disguising whitespace/C0/C1 controls and turn them into loopback.
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in raw):
+        return ""
+    name = raw.lower()
+    if "[" in name or "]" in name:
+        # Only one balanced IPv6 literal wrapper is legitimate. strip("[]")
+        # silently promoted malformed peer strings to trusted loopback hosts.
+        if not (
+            name.startswith("[")
+            and name.endswith("]")
+            and name.count("[") == 1
+            and name.count("]") == 1
+            and ":" in name[1:-1]
+        ):
+            return ""
         name = name[1:-1]
     if "%" in name:
-        addr, _, zone = name.partition("%")
-        if ":" not in addr or not zone or "%" in zone or not all(c in _HOST_CHARS for c in zone):
+        # Zone IDs are meaningful only on IPv6 literals. Never turn
+        # 'localhost%untrusted' or '127.0.0.1%untrusted' into a trusted host.
+        # Check the full suffix instead of silently truncating repeated %s.
+        if name.count("%") != 1:
             return ""
-        name = addr
-    if not name or not all(c in _HOST_CHARS for c in name):
+        address, zone = name.split("%", 1)
+        if not re.fullmatch(r"[a-z0-9_.-]{1,32}", zone):
+            return ""
+        try:
+            if ipaddress.ip_address(address).version != 6:
+                return ""
+        except ValueError:
+            return ""
+        name = address
+    if not name or not all(ch in _HOST_CHARS for ch in name):
         return ""
     return name
 
@@ -90,22 +108,34 @@ def origin_key(base: str) -> str:
     the access policy would treat both hosts as loopback. Other hosts keep
     their own key, so 10.0.0.1 is not folded into loopback.
     """
-    # round 48: ``parts.port`` raised ValueError outside the try (":99999", ":abc"), and the
-    # default port was None, so http://localhost and https://localhost shared one bucket while
-    # http://localhost and http://localhost:80 did not
+    # urlsplit silently strips leading C0 and embedded CR/LF/TAB. Reject
+    # those before parsing so malformed source URLs cannot alias real origins.
     if not isinstance(base, str):
         return "invalid:"
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in base):
+        return "invalid:"
     try:
-        parts = urlsplit(base)
+        parts = urlsplit(base or "")
+        # urlsplit defers malformed or out-of-range port errors until .port
+        # is accessed; guard that access just like parsing the URL itself.
+        host = parts.hostname or ""
         port = parts.port
     except ValueError:
         return "invalid:"
-    host = parts.hostname or ""
+    canonical = host_text(host)
+    if parts.scheme not in {"http", "https"} or not canonical or not parts.netloc:
+        return "invalid:"
+    # A scheme separator must not be expressible inside an HTTP hostname:
+    # "https-" aliases the legal hostname "https-10.0.0.1". Retain existing
+    # HTTP keys except for the remote hostname "loopback", which previously
+    # collided with every actual loopback spelling on the same port.
     if port is None:
-        port = _DEFAULT_PORTS.get(parts.scheme.lower())
+        port = _DEFAULT_PORTS[parts.scheme]
+    prefix = "https://" if parts.scheme == "https" else ""
     if is_access_loopback(host):
-        return f"loopback:{port}"
-    name = host_text(host) or host
-    if ":" in name:
-        name = f"[{name}]"  # "fe80::1:8090" read as host fe80::1 port 8090 or host fe80::1:8090
-    return f"{name}:{port}"
+        return f"{prefix}loopback:{port}"
+    if canonical == "loopback":
+        canonical = "host:loopback"
+    elif ":" in canonical:
+        canonical = f"[{canonical}]"
+    return f"{prefix}{canonical}:{port}"

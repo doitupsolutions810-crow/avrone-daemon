@@ -7,6 +7,10 @@ jobs:
       matrix: { python: ["3.11", "3.12"] }
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Autopilot integration fixtures require the historical base.
+      - name: Verify autopilot test history
+        run: git cat-file -e '1121d26f02a6249f6e76f1dbe6230650183b316f^{commit}'
       - uses: actions/setup-python@v5
         with: { python-version: "${{ matrix.python }}" }
       - name: Install avrone (dev)

@@ -20,18 +20,21 @@ def T(src, tid, failed=False):
     ("t1", "\ufefft1"),                          # BOM
     ("t1", "t1\u200d"),                          # zero-width joiner
     ("t1", "t\u00ad1"),                          # soft hyphen
-    ("t1", "t\u200e1"),                          # LRM
-    ("t1", "\u202et1"),                          # RLO
     ("t1", "t\uff11"),                           # fullwidth digit
     ("ffi-1", "\ufb03-1"),                       # ligature
     ("a b", "a\u00a0b"),                         # no-break space
     ("a b", "a\u3000b"),                         # ideographic space
-    ("a b", "a  \t b"),                          # whitespace run
     ("t1", "  t1  "),
 ])
 def test_disguised_duplicate_ids_rejected(a, b):
     with pytest.raises(ValueError, match="duplicate trial_id"):
         ep.pool_trials([T("n", a), T("n", b)])
+
+
+@pytest.mark.parametrize("unsafe", ["t\u200e1", "\u202et1", "a  \t b"])
+def test_unsafe_variants_refused_before_deduplication(unsafe):
+    with pytest.raises(ValueError, match="control|bidi"):
+        ep.pool_trials([T("n", "t1"), T("n", unsafe)])
 
 
 def test_distinct_ids_still_distinct():
@@ -78,9 +81,10 @@ def test_controls_rejected(bad, field):
         ep.pool_trials([rec])
 
 
-def test_internal_newline_tab_collapse_to_space():
-    with pytest.raises(ValueError, match="duplicate"):
-        ep.pool_trials([T("n", "a\nb"), T("n", "a\tb")])
+def test_internal_newline_tab_rejected_before_normalization():
+    for unsafe in ("a\nb", "a\tb"):
+        with pytest.raises(ValueError, match="control"):
+            ep.pool_trials([T("n", unsafe)])
 
 
 @pytest.mark.parametrize("empty", ["", "   ", "\u200b", "\ufeff\u200d", "\u00a0"])

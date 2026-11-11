@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .greatscale import MAX_RUNS, evidence_snapshot
+from .textsafe import UNSAFE_ONE
 
 MAX_POOL_TRIALS = 100_000
 MAX_TRIAL_ID_CHARS = 256
@@ -48,6 +49,10 @@ def pool_trials(trials: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             raise ValueError("source must be a non-empty string of at most 128 characters")
         if not isinstance(trial_id, str) or not trial_id.strip() or len(trial_id) > MAX_TRIAL_ID_CHARS:
             raise ValueError("trial_id must be a non-empty string of at most 256 characters")
+        # Provenance labels reach reports and may be shown in log/terminal
+        # output. Reject embedded control and bidi markers before storing IDs.
+        if UNSAFE_ONE.search(source) or UNSAFE_ONE.search(trial_id):
+            raise ValueError("source and trial_id must not contain control or bidi characters")
         if not isinstance(failed, bool):
             raise ValueError("failed must be a boolean")
 

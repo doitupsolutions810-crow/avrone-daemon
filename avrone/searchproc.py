@@ -53,6 +53,12 @@ def run(req: dict, out) -> None:
     cap, max_files, max_bytes = int(req.get("cap", 200)), int(req.get("max_files", 5000)), int(
         req.get("max_bytes", 1_000_000))
     hits = scanned = 0
+    # A zero/negative budget must not trigger a directory enumeration. The
+    # walker otherwise scans and sorts the root before the first loop guard.
+    if cap <= 0 or max_files <= 0:
+        out.write(json.dumps({"done": True, "scanned": 0}) + "\n")
+        out.flush()
+        return
     root = Path(req["root"])
     for f in _iter_files(root, set(req.get("skip_dirs") or []), set(req.get("skip_paths") or [])):
         if scanned >= max_files or hits >= cap:

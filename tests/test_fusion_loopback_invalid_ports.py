@@ -42,3 +42,16 @@ def test_loopback_bucket_isolation(url, expected):
 ])
 def test_valid_port_bounds(url, expected):
     assert origin_key(url) == expected
+
+@pytest.mark.parametrize("host", [
+    "[127.0.0.1", "127.0.0.1]", "[[::1]]", "[localhost]",
+    "[::1", "::1]", "[127.0.0.1]", "[[::ffff:127.0.0.1]]",
+])
+def test_malformed_bracketed_peer_cannot_gain_loopback_access(host):
+    from avrone.fusion_loopback import is_any_loopback
+    assert is_access_loopback(host) is False
+    assert is_any_loopback(host) is False
+
+@pytest.mark.parametrize("host", ["[::1]", "[::ffff:127.0.0.1]", "::1%lo"])
+def test_valid_bracketed_ipv6_hosts_keep_access(host):
+    assert is_access_loopback(host) is True

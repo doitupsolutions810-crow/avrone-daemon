@@ -97,3 +97,9 @@ def test_config_integer_bit_length_boundary_is_exact():
     assert canonical_config_bytes({"integer": at_limit})
     with pytest.raises(ValueError, match="integer is too large"):
         canonical_config_bytes({"integer": over_limit})
+
+
+def test_config_rejects_mapping_keys_that_collide_after_nfc_normalization():
+    colliding = {"caf\u00e9": 1, "cafe\u0301": 2}
+    with pytest.raises(ValueError, match="normalization"):
+        canonical_config_bytes(colliding)

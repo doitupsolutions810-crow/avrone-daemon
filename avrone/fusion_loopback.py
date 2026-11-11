@@ -64,10 +64,12 @@ def origin_key(base: str) -> str:
     """
     try:
         parts = urlsplit(base or "")
+        # urlsplit defers malformed or out-of-range port errors until .port
+        # is accessed; guard that access just like parsing the URL itself.
+        host = parts.hostname or ""
+        port = parts.port
     except ValueError:
         return "invalid:"
-    host = parts.hostname or ""
-    port = parts.port
     if is_access_loopback(host):
         return f"loopback:{port}"
     return f"{host_text(host)}:{port}"

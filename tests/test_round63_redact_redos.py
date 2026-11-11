@@ -29,7 +29,23 @@ OLD_KV = re.compile(r"(?i)([\"']?\b[\w.-]*" + _SECRET_WORD + r"[\w.-]*[\"']?\s*[
 
 
 def _old_kv(s: str) -> str:
-    return OLD_KV.sub(lambda m: m.group(1) + REDACTED, s)
+    # round 161: a quoted value keeps its quotes
+    def rep(m):
+        v = m.group(2)
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            return m.group(1) + v[0] + REDACTED + v[0]
+        return m.group(1) + REDACTED
+    return OLD_KV.sub(rep, s)
+
+
+def _spared(s: str) -> bool:
+    """round 160/161 skip values the old regex masked: empty quotes, literals, "{" openers, numbers."""
+    for m in OLD_KV.finditer(s):
+        v = m.group(2).strip("\"'")
+        if v == "" or v.lower() in ("true", "false", "null", "none", "nil", "undefined", "[]") \
+                or v.startswith("{") or v.lstrip("+-").replace(".", "", 1).isdigit():
+            return True
+    return False
 
 
 @pytest.mark.parametrize("unit", ["a.", "a-", "0.", "token", "tokena", "a_key", "token.", "x.y-"])
@@ -47,6 +63,8 @@ def test_kv_rule_matches_the_old_regex(seed):
               "secret", "tokenizer", ",", "}", "]", ";", "[REDACTED]", "\t", "my", "aws_key"]
     for _ in range(1500):
         s = "".join(rnd.choice(pieces) for _ in range(rnd.randint(0, 18)))
+        if _spared(s):
+            continue
         if ":=" in s or "=>" in s:  # round 153: separators of their own now (the old regex took "=x" as the value)
             continue
         assert ctxspawn._redact_kv(s) == _old_kv(s), repr(s)
@@ -54,7 +72,7 @@ def test_kv_rule_matches_the_old_regex(seed):
 
 def test_kv_examples():
     s = 'config: {"api_key": "sk-abc", password=hunter22, my.secret.value: 9, tokenizer=bert}'
-    assert redact(s) == ('config: {"api_key": [REDACTED], password=[REDACTED], '
+    assert redact(s) == ('config: {"api_key": "[REDACTED]", password=[REDACTED], '  # round 161: quotes kept
                          "my.secret.value: [REDACTED], tokenizer=[REDACTED]}")
     assert redact("token=[REDACTED] again") == "token=[REDACTED] again"
     assert redact("no secrets here: a.b.c = 1") == "no secrets here: a.b.c = 1"

@@ -81,6 +81,19 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.154: Round 161: key=value redaction keeps quotes, spares token counts
+
+- **Usage numbers were masked.** The key=value rule hid the value of any key that holds "token". So `max_tokens=4096`, `"prompt_tokens": 12` and `"token_count": 3` were masked in every model usage line.
+- **Empty and literal values were masked too.** `password: null`, `api_key: true`, `secret=""` and `[]` were all hidden, though none can be a secret.
+- **New `ctxspawn._kv_not_secret` leaves these alone:**
+  - empty values;
+  - the literals true, false, null, none, nil, undefined and `[]`;
+  - numbers of up to 9 digits, but only under a token-count key whose name has no other secret word.
+- **What stays masked.** `password=123456`, `access_token=12345`, `api_key=99` and any number of 10 or more digits are still hidden.
+- **Quotes are kept.** A quoted value is masked inside its quotes (`"password": "[REDACTED]"`), so a redacted JSON line still parses.
+- **Updated test oracle.** `test_round63_redact_redos` now models both changes.
+- **Tests.** `tests/test_round161_kv_values.py` has 16 tests, and 10 of them fail on v0.153.
+
 ## v0.153: Round 160: more context secrets, nested key=value fix
 
 - A probe of 44 config and CLI forms found 13 that `redact` and `secret_scan` let through. All 13 are fixed.

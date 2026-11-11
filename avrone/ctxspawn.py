@@ -106,6 +106,24 @@ _SECRET_RE = re.compile(_SECRET_WORD, re.I)
 _KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|(?!\{)[^\s,;}\]]+)")
 
 
+_NUM_RE = re.compile(r"[+-]?\d{1,9}(?:\.\d+)?")
+_LITERALS = frozenset({"true", "false", "null", "none", "nil", "undefined", "[]"})
+_COUNT_KEY_RE = re.compile(r"(?i)tokens?(?![a-z])|tokens?_|_tokens?")
+
+
+def _kv_not_secret(key: str, val: str) -> bool:
+    """Round 161: values that can't be a secret. `max_tokens=4096`, `"prompt_tokens": 12` and
+    `"token_count": 3` were masked in every usage line, and so were `password: null` and
+    `secret=""`. A number is only spared under a token-COUNT key: `password=123456` stays masked."""
+    v = val.strip("\"'") if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'" else val
+    if v == "" or v.lower() in _LITERALS:
+        return True
+    if _NUM_RE.fullmatch(v) and _COUNT_KEY_RE.search(key) and not re.search(
+            r"(?i)secret|passw|api|private|access|auth|credential|bearer", key):
+        return True
+    return False
+
+
 def _redact_kv(s: str) -> str:
     """Mask the value of `key = value` / `"key": "value"` when the key holds a secret word.
 
@@ -121,8 +139,14 @@ def _redact_kv(s: str) -> str:
         tail = _KV_TAIL_RE.match(s, m.end())
         if tail is None:
             continue
+        val = tail.group(1)
+        if _kv_not_secret(m.group(), val):
+            continue
         out.append(s[last:tail.start(1)])
-        out.append(REDACTED)
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            out.append(val[0] + REDACTED + val[0])  # round 161: keep the quotes (JSON stayed invalid)
+        else:
+            out.append(REDACTED)
         last = tail.end(1)
     if not out:
         return s

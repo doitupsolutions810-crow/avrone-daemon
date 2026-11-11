@@ -288,8 +288,8 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = args.get("scope", "runs")
     if scope not in ("runs", "data", "workspace"):
         return "ERROR: scope must be runs, data or workspace"
-    if args.get("fix") is True and scope != "runs":
-        return "ERROR: fix is only allowed for scope runs (run logs); fix other files by hand"
+    if args.get("fix") is True and scope not in ("runs", "data"):
+        return "ERROR: fix is only allowed for scope runs or data (run logs, bridge journals); fix other files by hand"
     root = _roots(ctx, scope)
     if root is None:
         return f"secret_scan: no {scope} directory configured on this node"
@@ -308,9 +308,25 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
         lines.append(f"... {len(hits) - MAX_SHOWN} more")
     if hits and args.get("fix") is True:
         lock = getattr(getattr(getattr(ctx, "core", None), "codex", None), "_write_lock", None)
-        n = await asyncio.to_thread(fix_runs, root, {h["path"] for h in hits}, lock)
+        paths = {h["path"] for h in hits}
+        if scope == "runs":
+            n = await asyncio.to_thread(fix_runs, root, paths, lock)
+            nb = 0
+        else:  # round 158: data scope fixes run logs under runs/ and bridge journals under bridge/
+            n = await asyncio.to_thread(fix_runs, root / "runs",
+                                        {x[5:] for x in paths if x.startswith("runs/") and "/" not in x[5:]}, lock)
+            from .bridge import fix_journal
+            core = getattr(ctx, "core", None)
+            nb = 0
+            for x in sorted(paths):
+                if x.startswith("bridge/") and "/" not in x[7:]:
+                    try:
+                        nb += await asyncio.to_thread(fix_journal, root / x, core)
+                    except OSError:
+                        pass
         after = await asyncio.to_thread(scan, root)
-        lines.append(f"fixed {n} run log(s); {len(after['hits'])} line(s) still flagged")
+        lines.append(f"fixed {n} run log(s)" + (f" and {nb} bridge journal(s)" if scope == "data" else "")
+                     + f"; {len(after['hits'])} line(s) still flagged")
     return "\n".join(lines)
 
 

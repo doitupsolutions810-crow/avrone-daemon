@@ -46,7 +46,7 @@ def test_scan_reports_without_values_and_fixes(tmp_path, monkeypatch):
 def test_scope_errors_and_missing(tmp_path, monkeypatch):
     c = ctx(tmp_path)
     assert run(ts.t_secret_scan(c, {"scope": "etc"})).startswith("ERROR")
-    assert "only allowed for scope runs" in run(ts.t_secret_scan(c, {"scope": "data", "fix": True}))
+    assert "only allowed for scope runs or data" in run(ts.t_secret_scan(c, {"scope": "workspace", "fix": True}))  # round 158
     assert "CLEAN" in run(ts.t_secret_scan(c, {"scope": "workspace"}))  # missing dir is clean, not a crash
     assert "no data directory" in run(ts.t_secret_scan(SimpleNamespace(core=None), {"scope": "data"}))
 

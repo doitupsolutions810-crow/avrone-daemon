@@ -740,3 +740,50 @@ def parse_revise(reply: Any) -> tuple[list[dict[str, Any]], str]:
             break
     revised = obj.get("revised")
     return posts, revised.strip() if isinstance(revised, str) else ""
+
+
+# --------------------------------------------------------------------------- journal scrub
+class _JournalRef:
+    """Just enough of a Bridge for _file_lock: the journal path."""
+    def __init__(self, path: Path):
+        self.path = path
+
+
+def fix_journal(path: Path | str, core: Any = None) -> bool:
+    """Round 158: redact a bridge journal written before v0.147 (posts were stored raw: a finding
+    quoting "token=..." went to every peer and the fusion bus). Lines are redacted value by value
+    and dumped again, so the journal stays valid JSONL; bytes that are not UTF-8 are kept. Runs
+    under the same thread lock and cross-process file lock as append and compaction, then
+    reloads any open Bridge for this journal, whose ring still held the raw text in memory.
+    True when the journal was rewritten. A journal over JOURNAL_READ_MAX is left alone."""
+    from .safeio import atomic_write, read_regular
+    from .tools_secrets import _redact_line, _kinds, _line_hides_secret
+    p = Path(path)
+    if p.is_symlink() or not p.is_file() or p.suffix != ".jsonl":
+        return False
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(str(p.resolve()), threading.RLock())
+    with lock:
+        with Bridge._file_lock(_JournalRef(p)):  # type: ignore[arg-type]
+            try:
+                if p.stat().st_size > JOURNAL_READ_MAX:
+                    return False
+            except OSError:
+                return False
+            raw = read_regular(p, JOURNAL_READ_MAX)
+            if raw is None:
+                return False
+            text = raw.decode("utf-8", errors="surrogateescape")
+            out = [(_redact_line(ln) if _kinds(ln) or _line_hides_secret(ln) else ln) for ln in text.split("\n")]
+            new = "\n".join(out)
+            if new == text:
+                return False
+            atomic_write(p, new.encode("utf-8", errors="surrogateescape"), fsync=True)
+        cache = getattr(core, "_bridges", None) if core is not None else None
+        for b in list(cache.values()) if cache else []:
+            try:
+                if b.path is not None and b.path.resolve() == p.resolve():
+                    b._load()
+            except OSError:
+                pass
+    return True

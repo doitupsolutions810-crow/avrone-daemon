@@ -81,6 +81,25 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.151: Round 158: secret_scan fix scrubs bridge journals
+
+- Bridge journals written before v0.147 hold posts unredacted. v0.150 could report them, but
+  `fix=true` was refused outside scope `runs`.
+- `secret_scan {"scope": "data", "fix": true}` now fixes run logs under `runs/` and bridge
+  journals under `bridge/`. Other files are still refused, so they have to be fixed by hand.
+- New `bridge.fix_journal(path, core)`:
+  - Redacts flagged lines value by value, so the journal stays valid JSONL. Bytes that are not
+    UTF-8 are kept.
+  - Takes the same thread lock and cross-process file lock as append and compaction, and writes
+    with an atomic fsync.
+  - Reloads any open Bridge for that journal, because its in-memory ring still served the raw text.
+  - Refuses symlinks and journals over 64 MiB.
+- Caveat: the reload drops a post that exists only in memory because its write failed (a journal
+  lock timeout).
+- The jobs database (`jobs.db`, results stored before v0.148) is still not scrubbed.
+- Tests: `tests/test_round158_bridge_scrub.py` (4 tests). 3 fail on v0.150; the 4th checks that
+  fix stays refused for the workspace. `test_tool_secrets` now checks the workspace refusal.
+
 ## v0.150: Round 157: secret_scan reads whole run logs
 
 - `scan()` read only the first 2 MiB of each file and reported the rest CLEAN. Run logs rotate at

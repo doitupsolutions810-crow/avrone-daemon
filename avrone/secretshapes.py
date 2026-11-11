@@ -72,7 +72,10 @@ CONTEXT_RULES: list[tuple["re.Pattern[str]", str, tuple[str, ...], str]] = [
     (re.compile(_START + r"(-u|--user)(\s+|=)([^\s:\"'\\]+):" + _V),
      r"\1\2\3:[REDACTED]", ("-u", "--user"), "cli-user-password"),
     # --password VALUE (the "=" form is the key=value rule's)
-    (re.compile(r"(?i)" + _START + r"(--(?:password|passwd|pass|token|secret|api-?key|access-?token|auth-?token))"
+    # round 160: any --x-...-SECRETWORD flag (--client-secret, --db-password, --secret-key); a flag
+    # whose last part is not a secret word (--token-file PATH) is left alone
+    (re.compile(r"(?i)" + _START + r"(--(?:[a-z0-9]+-)*(?:password|passwd|pass|token|secret|api-?key|access-?token"
+                r"|auth-?token|secret-?key|private-?key|access-?key))"
                 r"(\s+)(?!-)" + _V),
      r"\1\2[REDACTED]", ("--",), "cli-secret-flag"),
     # mysql/mariadb -pSECRET, sshpass -p SECRET
@@ -95,6 +98,31 @@ CONTEXT_RULES: list[tuple["re.Pattern[str]", str, tuple[str, ...], str]] = [
      r"\1[REDACTED]", ("hooks.slack.com",), "slack-webhook"),
     (re.compile(r"((?:discord|discordapp)\.com/api/webhooks/\d+/)[A-Za-z0-9_-]{20,}"),
      r"\1[REDACTED]", ("/webhooks/",), "discord-webhook"),
+    # Round 160. ~/.netrc: machine HOST login USER password SECRET (HOST has a dot, so prose like
+    # "machine learning password reset" is left alone)
+    (re.compile(r"(?i)\b((?:machine\s+[^\s.]+\.\S+|default)\s+(?:login\s+\S+\s+)?(?:account\s+\S+\s+)?password\s+)" + _V),
+     r"\1[REDACTED]", ("machine", "default"), "netrc"),
+    # ~/.pgpass: host:port:db:user:password (a whole line; the user holds a non-hex letter so IPv6
+    # addresses and dotted times are not taken for it)
+    (re.compile(r"(?m)^([^\s:]+:(?:\d{1,5}|\*):[^\s:]+:[^\s:]*[g-zG-Z_*][^\s:]*:)(?:\\:|[^\s:])+$"), r"\1[REDACTED]", (":",), "pgpass"),
+    # docker config.json "auth": "<base64 user:pass>" and "identitytoken"
+    (re.compile(r'(?i)("(?:auth|identitytoken|registrytoken)"\s*:\s*")[A-Za-z0-9+/=_.-]{8,}(?=")'),
+     r"\1[REDACTED]", ('"auth"', '"identitytoken"', '"registrytoken"', '"Auth"'), "docker-auth"),
+    # PowerShell ConvertTo-SecureString "x" -AsPlainText
+    (re.compile(r"(?i)(ConvertTo-SecureString\s+(?:-String\s+)?[\"'])[^\"'\\]+"),
+     r"\1[REDACTED]", ("SecureString",), "ps-securestring"),
+    # kubeconfig client-key-data (the base64 private key)
+    (re.compile(r"(?i)(client-key-data\s*:\s*)" + _V), r"\1[REDACTED]", ("key-data",), "kube-client-key"),
+    # PuTTY .ppk private lines
+    (re.compile(r"(Private-Lines:\s*\d+(?:\\r)?(?:\\n|\r?\n))[A-Za-z0-9+/=]+(?:(?:\\r)?(?:\\n|\r?\n)[A-Za-z0-9+/=]+)*"),
+     r"\1[REDACTED]", ("Private-Lines",), "putty-key"),
+    # Sentry-style DSN: the 32-hex key is the URL's user
+    (re.compile(r"(?i)(https?://)[0-9a-f]{32}(?::[0-9a-f]{32})?@"), r"\1[REDACTED]@", ("@",), "dsn-key"),
+    # connection strings: Pwd=, AccountKey=, SharedAccessKey= (Password= is the key=value rule's)
+    (re.compile(r"(?i)((?:^|(?<=[;\"'\s]))(?:pwd|accountkey|sharedaccesskey|sharedaccesssignature)\s*=\s*)[^;\"'\s\\]+"),
+     r"\1[REDACTED]", ("=",), "conn-string-secret"),
+    # crypt(3) hashes in htpasswd / shadow lines: user:$apr1$salt$hash
+    (re.compile(r"(?<=:)\$(?:apr1|2[abxy]?|1|5|6|y|gy|7)\$[./A-Za-z0-9$=+]{8,}"), "[REDACTED]", (":$",), "password-hash"),
     # Discord bot tokens: base64 user id . 6 . 27+ (no fixed prefix)
     (re.compile(r"(?<![A-Za-z0-9_.-])[MNO][A-Za-z0-9_-]{23,27}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,40}(?![A-Za-z0-9_-])"),
      "[REDACTED]", (".",), "discord-token"),

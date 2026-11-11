@@ -101,7 +101,9 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _IDENT_RE = re.compile(r"[\w.-]+")
 _SECRET_RE = re.compile(_SECRET_WORD, re.I)
 # round 153: "=>" and ":=" are separators too ("password => 'x'" masked only the ">")
-_KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
+# round 160: an unquoted value may not open a container: {"credentials": {"secret": "x"}} masked the
+# "{" and the nested secret went out raw
+_KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|(?!\{)[^\s,;}\]]+)")
 
 
 def _redact_kv(s: str) -> str:

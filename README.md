@@ -81,6 +81,25 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.153: Round 160: more context secrets, nested key=value fix
+
+- A probe of 44 config and CLI forms found 13 that `redact` and `secret_scan` let through. All 13 are fixed.
+- Nine new `secretshapes.CONTEXT_RULES`:
+  - `netrc`: the host must contain a dot, or the line starts with `default`.
+  - `pgpass`: matches a whole line. The user field must contain a non-hex letter, so IPv6 addresses and dotted times are not matched.
+  - `docker-auth`: `"auth"`, `"identitytoken"` and `"registrytoken"`.
+  - `ps-securestring`: `ConvertTo-SecureString "x"`.
+  - `kube-client-key`: `client-key-data`.
+  - `putty-key`: the `Private-Lines` block, in raw or JSON-escaped form.
+  - `dsn-key`: a 32-hex DSN user, as in Sentry.
+  - `conn-string-secret`: `Pwd=`, `AccountKey=`, `SharedAccessKey=` and `SharedAccessSignature=`.
+  - `password-hash`: crypt hashes such as `$apr1$`, `$2y$` and `$6$` after a colon.
+- The CLI flag rule now covers any `--x-...-SECRETWORD` flag, such as `--client-secret`, `--db-password` and `--secret-key`. A flag whose last part is not a secret word, like `--token-file PATH`, is left alone.
+- Key=value bug: for `{"credentials": {"secret": "x"}}`, the rule masked the `{` and the nested secret went out raw. An unquoted value may no longer open `{`.
+- Left alone on purpose: prose such as "machine learning password reset", `--api-key-file`, and `a:1:b:c:d`.
+- Known behavior, not changed: the key=value rule also masks numeric values (`{"tokens": 3}`). A quoted value loses its quotes, so JSON lines are redacted value by value wherever that matters, as `secret_scan fix` already does.
+- Tests: `tests/test_round160_more_context_secrets.py` (27). 16 fail on v0.152.
+
 ## v0.152: Round 159: secret_scan checks jobs.db
 
 Job results and errors written before v0.148 are stored raw in `jobs.db`, and `/api/fleet/jobs`

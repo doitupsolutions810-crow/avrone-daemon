@@ -99,9 +99,13 @@ def origin_key(base: str) -> str:
     canonical = host_text(host)
     if parts.scheme not in {"http", "https"} or not canonical or not parts.netloc:
         return "invalid:"
-    # HTTP and HTTPS on one host:port do not share a circuit breaker.
-    # Retain existing HTTP keys for backward compatibility.
-    prefix = "https-" if parts.scheme == "https" else ""
+    # A scheme separator must not be expressible inside an HTTP hostname:
+    # "https-" aliases the legal hostname "https-10.0.0.1". Retain existing
+    # HTTP keys except for the remote hostname "loopback", which previously
+    # collided with every actual loopback spelling on the same port.
+    prefix = "https://" if parts.scheme == "https" else ""
     if is_access_loopback(host):
         return f"{prefix}loopback:{port}"
+    if canonical == "loopback":
+        canonical = "host:loopback"
     return f"{prefix}{canonical}:{port}"

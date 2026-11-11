@@ -264,3 +264,29 @@ def test_server_register_behind_prefix_and_rotation(tmp_path, monkeypatch):
         assert r.status_code == 200, r.text
         r = c.post(PATH, content=body, headers={"content-type": "application/json", **sign("x" * 32, "POST", PATH, body)})
         assert r.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "offset,accepted",
+    [
+        (-WINDOW_S, True),
+        (WINDOW_S, True),
+        (-WINDOW_S - 1, False),
+        (WINDOW_S + 1, False),
+    ],
+)
+def test_signed_timestamp_window_exact_edges(tmp_path, monkeypatch, offset, accepted):
+    fm = make(tmp_path, monkeypatch)
+    fixed_now = 1_800_000_000.0
+    monkeypatch.setattr(fleet_mod.time, "time", lambda: fixed_now)
+    timestamp = str(int(fixed_now) + offset)
+    headers = hdrs("a" * 32, ts=timestamp, nonce=f"edge-{offset}")
+
+    if accepted:
+        fm.verify("POST", PATH, BODY, headers)
+        assert f"edge-{offset}" in fm._nonces
+    else:
+        with pytest.raises(GatewayRefused) as exc:
+            fm.verify("POST", PATH, BODY, headers)
+        assert exc.value.code == "stale"
+        assert f"edge-{offset}" not in fm._nonces

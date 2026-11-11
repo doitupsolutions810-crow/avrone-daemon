@@ -646,3 +646,22 @@ merge without his word.
 - **Wired in:** tools_extra, codexstats, fleetstatus and mempeek (`bad=None`, so junk still reports an error), agentfs_tools, agentkit resources, bridge, tools_limits, lessonrecall, netdiag (bad port gives `ERROR: port must be an integer`).
 - **Behaviour change:** `True` as a count now gives the default instead of 1.
 - Tests: `tests/test_argnum_robust.py`.
+
+## Hardening round 46 (Hark edge-case series): capgate_head_attest
+This is the attested-history bridge from daemon main. No test in the suite imported it.
+- **Its own `--selftest` failed: 25 passed, 1 failed.** The "middle corruption" check replaced `'"seq": 0'`, but the log is compact JSON (`"seq":0`), so nothing was edited. The check is fixed and now really tampers with the line.
+- **seq was never validated.** On a digest-valid line, the next append behaved like this:
+  - `"seq": "x"` raised ValueError.
+  - `true` attested as seq 2.
+  - `1.5` was truncated.
+  - `Infinity` raised OverflowError.
+  - A missing seq raised KeyError.
+  - Skipped or repeated seqs passed.
+  - Fix: every line's seq must be an int equal to its position. A bad one raises OSError, so the log fails closed as designed.
+- **Strict JSON reads:**
+  - Duplicate keys are refused. Python keeps the last value while other readers may keep the first, so one line could verify here and mean something else elsewhere.
+  - `NaN` and `Infinity` are refused.
+  - Writes use `allow_nan=False`.
+- **Note and verify_error** are text: bytes are decoded, lone surrogates become U+FFFD, and the length is capped at 200. A non-string error, such as a dict holding NaN, could otherwise write a non-JSON line and brick the log.
+- **CLI:** a refused log prints one line to stderr and exits 1 instead of a traceback.
+- Tests: `tests/test_capgate_head_attest_robust.py`, which also runs the module selftest.

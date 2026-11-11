@@ -186,19 +186,20 @@ class AvroneMCPServer:
                 await self.send({"jsonrpc": "2.0", "id": None,
                                  "error": {"code": -32600, "message": "Invalid Request: empty batch"}})
                 continue
-            items = msg if isinstance(msg, list) else [msg]
+            is_batch = isinstance(msg, list)
+            items = msg if is_batch else [msg]
             cap = max_batch()
             if len(items) > cap:
                 await self.send({"jsonrpc": "2.0", "id": None, "error": {
                     "code": -32600, "message": f"Invalid Request: batch of {len(items)} exceeds {cap} (AVRONE_MCP_MAX_BATCH)"}})
                 continue
             for m in items:
-                self._dispatch(m)
+                self._dispatch(m, batch=is_batch)
         if self._tasks:
             await self._drain()
         await self.shutdown()
 
-    def _dispatch(self, m: Any) -> None:
+    def _dispatch(self, m: Any, *, batch: bool = False) -> None:
         if isinstance(m, dict) and m.get("method") == "notifications/cancelled":
             self._cancel(m.get("params"))
             return
@@ -210,11 +211,11 @@ class AvroneMCPServer:
                 self._tasks.add(t)
                 t.add_done_callback(self._tasks.discard)
                 return
-            t = asyncio.create_task(self._handle_safe(m))
+            t = asyncio.create_task(self._handle_safe(m, batch=batch))
             self._by_id[key] = t
             t.add_done_callback(lambda _t, k=key: self._by_id.pop(k, None) if self._by_id.get(k) is _t else None)
         else:
-            t = asyncio.create_task(self._handle_safe(m))
+            t = asyncio.create_task(self._handle_safe(m, batch=batch))
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
 
@@ -276,9 +277,14 @@ class AvroneMCPServer:
                 with contextlib.suppress(Exception):
                     await runner.stop()
 
-    async def _handle_safe(self, m: Any) -> None:
-        if not isinstance(m, dict) or "method" not in m:
-            return  # responses to requests we never send, or junk
+    async def _handle_safe(self, m: Any, *, batch: bool = False) -> None:
+        if not isinstance(m, dict):
+            if batch:
+                await self.send({"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32600, "message": "Invalid Request"}})
+            return  # preserve the existing single-line scalar-junk tolerance
+        if "method" not in m:
+            return  # responses to requests we never send
         rid = m.get("id")
         is_request = "id" in m
         try:

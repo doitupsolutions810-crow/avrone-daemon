@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .textsafe import UNSAFE_RUN
+
 # Pins from the read-only inspection. The evidence script re-reads the remotes.
 PLANE_MAIN_SHA = "012dc7d5ed254c2ece5c7c1782fb6d3eba3e08ce"
 PLANE_PR17_SHA = "ee13c32d4e8e90ad1f952fb8bdda7e5a8a0e459e"
@@ -38,14 +40,21 @@ def classify_execute(body: Any) -> dict[str, Any]:
     if not isinstance(body, dict):
         return {"executed": False, "reason": "malformed", "runner": "none"}
     status = body.get("execution_status")
-    if status == "SUCCEEDED" and body.get("status") == "executed":
+    reported_status = body.get("status")
+    if status == "SUCCEEDED" and reported_status == "executed":
         return {"executed": True, "reason": "plane_succeeded", "runner": "plane"}
     if status == "NOT_IMPLEMENTED":
         return {"executed": False, "reason": "not_implemented", "runner": "none"}
-    if status is None and body.get("result") == "executed" and body.get("status") in {"ok", "executed"}:
+    # Remote JSON may contain a list/dict for status; set membership would
+    # raise TypeError instead of failing closed.
+    if (status is None and body.get("result") == "executed"
+            and isinstance(reported_status, str) and reported_status in {"ok", "executed"}):
         return {"executed": False, "reason": "unscoped_stub", "runner": "none"}
-    if body.get("status") == "error":
-        return {"executed": False, "reason": str(body.get("error") or "error"), "runner": "none"}
+    if reported_status == "error":
+        raw_error = body.get("error")
+        # Error text is external data, not a trusted terminal/log record.
+        reason = UNSAFE_RUN.sub(" ", raw_error[:512]).strip()[:160] if isinstance(raw_error, str) else ""
+        return {"executed": False, "reason": reason or "error", "runner": "none"}
     return {"executed": False, "reason": "not_executed", "runner": "none"}
 
 

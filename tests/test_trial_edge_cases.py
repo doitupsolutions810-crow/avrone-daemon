@@ -1066,3 +1066,28 @@ def test_identical_envelopes_repeated_inside_one_batch_are_idempotent(tmp_path):
         assert db.execute("SELECT COUNT(*) FROM trial_receipts").fetchone()[0] == 2
     finally:
         db.close()
+
+
+def test_sender_quarantine_survives_restart_and_does_not_block_other_senders(tmp_path):
+    path = tmp_path / "trials.sqlite3"
+    first_store = TrialStore(path)
+    original = sample("pass", "original")
+    conflict = sample("fail", "original")
+
+    first_store.ingest_many([original], sender="peer-a", transport="fleet")
+    conflict_result = first_store.ingest_many(
+        [conflict], sender="peer-b", transport="fleet"
+    )
+    assert conflict_result["results"][0]["status"] == "conflict_quarantined"
+
+    reopened = TrialStore(path)
+    blocked = reopened.ingest_many(
+        [sample("pass", "peer-b-new")], sender="peer-b", transport="fleet"
+    )
+    allowed = reopened.ingest_many(
+        [sample("pass", "peer-c-new")], sender="peer-c", transport="fleet"
+    )
+
+    assert blocked["results"][0]["status"] == "sender_quarantined"
+    assert allowed["results"][0]["status"] == "accepted"
+    assert reopened.pool_snapshot()["runs"] == 2

@@ -13,6 +13,7 @@ that wider check except to unwrap the mapped form first.
 from __future__ import annotations
 
 import ipaddress
+import re
 from urllib.parse import urlsplit
 
 
@@ -31,7 +32,20 @@ def host_text(host: str | None) -> str:
             return ""
         name = name[1:-1]
     if "%" in name:
-        name = name.split("%", 1)[0]
+        # Zone IDs are meaningful only on IPv6 literals. Never turn
+        # 'localhost%untrusted' or '127.0.0.1%untrusted' into a trusted host.
+        # Check the full suffix instead of silently truncating repeated %s.
+        if name.count("%") != 1:
+            return ""
+        address, zone = name.split("%", 1)
+        if not re.fullmatch(r"[a-z0-9_.-]{1,32}", zone):
+            return ""
+        try:
+            if ipaddress.ip_address(address).version != 6:
+                return ""
+        except ValueError:
+            return ""
+        name = address
     return name
 
 
@@ -82,6 +96,12 @@ def origin_key(base: str) -> str:
         port = parts.port
     except ValueError:
         return "invalid:"
+    canonical = host_text(host)
+    if parts.scheme not in {"http", "https"} or not canonical or not parts.netloc:
+        return "invalid:"
+    # HTTP and HTTPS on one host:port do not share a circuit breaker.
+    # Retain existing HTTP keys for backward compatibility.
+    prefix = "https-" if parts.scheme == "https" else ""
     if is_access_loopback(host):
-        return f"loopback:{port}"
-    return f"{host_text(host)}:{port}"
+        return f"{prefix}loopback:{port}"
+    return f"{prefix}{canonical}:{port}"

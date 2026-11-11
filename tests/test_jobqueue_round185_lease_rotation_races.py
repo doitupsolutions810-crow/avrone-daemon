@@ -162,3 +162,36 @@ def test_stale_owner_cannot_extend_after_reclaim(tmp_path):
             await asyncio.gather(q1.close(), q2.close())
 
     asyncio.run(run())
+
+
+def test_three_concurrent_claimers_produce_exactly_one_new_owner(tmp_path):
+    async def run():
+        path = tmp_path / "three-claimers.db"
+        q1, q2, q3 = JobQueue(path), JobQueue(path), JobQueue(path)
+        try:
+            jid = await q1.enqueue("lease-race", {})
+            first = await q1.claim()
+            assert first is not None
+            q1._db.execute("UPDATE jobs SET lease_until=0 WHERE id=?", (jid,))
+
+            claims = await asyncio.gather(q2.claim(), q3.claim())
+            winners = [claim for claim in claims if claim is not None]
+            assert len(winners) == 1
+            winner = winners[0]
+            assert winner["id"] == jid
+            assert winner["token"] != first["token"]
+
+            row = await q1.get(jid)
+            assert row is not None and row["status"] == "running"
+            assert row["attempts"] == 2
+            assert await q1.complete(jid, {"stale": True}, first["token"]) is False
+
+            owner = q2 if claims[0] is not None else q3
+            assert await owner.complete(jid, {"single_winner": True}, winner["token"]) is True
+            final = await q1.get(jid)
+            assert final is not None and final["status"] == "done"
+            assert final["result"] == {"single_winner": True}
+        finally:
+            await asyncio.gather(q1.close(), q2.close(), q3.close())
+
+    asyncio.run(run())

@@ -157,8 +157,8 @@ _IP_IN_NAME_SERVICES = ("nip.io", "sslip.io", "xip.io", "traefik.me", "nip.direc
 # a dotted quad glued to other text inside the name: customer-10.0.0.1.nip.io, make-127.0.0.1-rr.1u.ms
 _GLUED_QUAD = re.compile(r"(?:^|[.-])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?=$|[.-])")
 _DASH_QUAD = re.compile(r"(?<![0-9])(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})(?![0-9])")
-_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
-_TLD = re.compile(r"^(?:[a-z][a-z0-9-]*[a-z0-9]|[a-z]|xn--[a-z0-9-]+)$")
+_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)\Z")
+_TLD = re.compile(r"^(?:[a-z][a-z0-9-]*[a-z0-9]|[a-z]|xn--[a-z0-9-]+)\Z")
 
 
 def _non_public_ip(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:

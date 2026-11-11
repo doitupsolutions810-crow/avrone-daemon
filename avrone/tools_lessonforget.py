@@ -25,7 +25,7 @@ from .tools_researchnote import redact_text
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-KEY_RE = re.compile(r"^l-[0-9a-f]{16}$")
+KEY_RE = re.compile(r"^l-[0-9a-f]{16}\Z")
 REASON_MAX = 300
 STATUS_MAX_AGENTS = 20
 STATUS_MAX_CHARS = 4000

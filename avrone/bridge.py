@@ -45,7 +45,7 @@ MAX_REFS = 20
 DEFAULT_MAX_POSTS, HARD_MAX_POSTS = 500, 5000
 DEFAULT_ROUNDS, HARD_MAX_ROUNDS = 1, 3
 _RUN_RE = re.compile(r"[^A-Za-z0-9_.-]")
-_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}\Z")
 
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()

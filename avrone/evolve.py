@@ -1167,7 +1167,7 @@ async def t_evolve_loop(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 # ---- bounded skill self-authoring ------------------------------------------------------------
 SKILL_MAX_BYTES_CAP = 16384
-SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 SKILLS_DIR = "skills"
 
 

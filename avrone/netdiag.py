@@ -28,7 +28,7 @@ from .tools_extra import _client
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-HOST_RE = re.compile(r"^[A-Za-z0-9.\-:\[\]_]{1,253}$")
+HOST_RE = re.compile(r"^[A-Za-z0-9.\-:\[\]_]{1,253}\Z")
 RTYPES = {"A", "AAAA", "MX", "TXT", "NS", "CNAME", "SOA", "PTR", "CAA", "SRV"}
 
 

@@ -35,7 +35,7 @@ from .tools import Tool, _safe_path, off_loop
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?$")
+PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?\Z")
 
 
 def _ws(ctx: "AgentContext") -> Path:
@@ -200,7 +200,7 @@ async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------- skills
-SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
+SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}\Z")
 SKILL_MAX_BYTES = 256_000
 SKILL_LOAD_CHARS = 12000
 MAX_SKILLS = 500

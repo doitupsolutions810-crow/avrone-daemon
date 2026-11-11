@@ -607,3 +607,25 @@ merge without his word.
   - A lone dict, a string, bytes or None as `trials` gets a clear refusal.
   - A Mapping whose `.get` raises becomes a ValueError.
 - Tests: `tests/test_evidence_pool_robust.py`.
+
+## Hardening round 44 (Hark edge-case series): `$` anchors and blackboard field hygiene
+- **Trailing-newline ids, repo-wide.** In Python, `$` also matches just before a final `\n`. So every `^...$` whole-string validator accepted `"id\n"`. 19 validators in 12 modules now end in `\Z`:
+  - bridge `_ID_RE`. Proven: `p1` and `p1\n` were stored as two blackboard posts, a duplicate-relay bypass.
+  - fleet node id, ts, nonce and sig
+  - memstore namespace
+  - checkpoint id and key, and the sender check
+  - agentpack manifest names and pack file name
+  - agentkit package and skill name
+  - evolve skill name
+  - gateway name
+  - netdiag host
+  - recon label and TLD
+  - lessonforget key
+- **Regression guard:** `test_no_dollar_anchored_validators_left` scans `avrone/*.py` and fails on any new `^...$` pattern. `(?m)` line scans are allowed.
+- **`fusion_blackboard.normalize_blackboard_post`:**
+  - **Text** must be a string. A JSON object, list or number used to be stored as its Python repr.
+  - **agent, role and origin_node:** strings only, trimmed and cut to their limits. A blank or non-string value takes the default.
+  - **Characters are still stored as written.** The board keeps them and display paths (`bridge.compact`, `tools.one_line`) flatten them, per the existing fusion tests. An attempt to escape on store broke that contract, and the gate caught it, so it was reverted.
+  - **run_id** is trimmed.
+- **Fan-in order file:** an unreadable file (permissions, EIO) used to make every `GET /api/blackboard` return a 500. It is now rebuilt by ts, the same as a missing file.
+- Tests: `tests/test_fusion_blackboard_robust.py`.

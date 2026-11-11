@@ -121,13 +121,13 @@ if TYPE_CHECKING:
     from .trinity import AgentContext, TrinityCore
 
 log = logging.getLogger("avrone.fleet")
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}\Z")
 WINDOW_S = 60
 # Signed-header shape (checked before the HMAC is computed, so junk never reaches the cache):
 # ts is 1-12 ASCII digits (int() alone also took "+5", " 5", "1_0" and non-ASCII digits like "٥");
 # a nonce is 1-128 chars of [A-Za-z0-9_-] (an unbounded nonce was stored verbatim in the replay cache).
-TS_RE = re.compile(r"^[0-9]{1,12}$")
-NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+TS_RE = re.compile(r"^[0-9]{1,12}\Z")
+NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}\Z")
 # Replay-cache bound: past this many live nonces new requests are refused (fail closed) rather than
 # evicting a live nonce, which would re-open replay of that request.
 NONCE_CACHE_MAX = 100_000
@@ -585,7 +585,7 @@ def request_capability(kind: str, payload: dict[str, Any]) -> str:
     return kind
 
 
-SIG_RE = re.compile(r"^[0-9a-f]{64}$")
+SIG_RE = re.compile(r"^[0-9a-f]{64}\Z")
 WEAK_TOKEN_CHARS = 16
 FLEET_PATH_MARK = "/api/fleet/"
 

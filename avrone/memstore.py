@@ -47,7 +47,7 @@ try:  # POSIX only; on other platforms the in-process lock still serialises writ
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-NS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+NS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}\Z")
 REMOTE_PREFIX = "fleet:"
 MAX_KEY = 200
 # merged (foreign) entries are clamped to at most this far into the future: a peer with a skewed

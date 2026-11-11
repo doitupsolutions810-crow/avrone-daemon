@@ -195,3 +195,41 @@ def test_three_concurrent_claimers_produce_exactly_one_new_owner(tmp_path):
             await asyncio.gather(q1.close(), q2.close(), q3.close())
 
     asyncio.run(run())
+
+
+def test_eight_queue_connections_claim_backlog_once(tmp_path):
+    async def run():
+        path = tmp_path / "eight-connection-backlog.db"
+        queues = [JobQueue(path) for _ in range(8)]
+        try:
+            expected = {
+                await queues[0].enqueue("parallel-claim", {"sequence": i})
+                for i in range(32)
+            }
+            winners = []
+            while True:
+                batch = await asyncio.gather(*(queue.claim() for queue in queues))
+                if all(job is None for job in batch):
+                    break
+                winners.extend((queue, job) for queue, job in zip(queues, batch) if job is not None)
+
+            claimed_ids = [job["id"] for _, job in winners]
+            tokens = [job["token"] for _, job in winners]
+            assert len(claimed_ids) == 32
+            assert set(claimed_ids) == expected
+            assert len(set(claimed_ids)) == 32
+            assert len(set(tokens)) == 32
+
+            completed = await asyncio.gather(*(
+                queue.complete(job["id"], {"completed_by": "one-owner"}, job["token"])
+                for queue, job in winners
+            ))
+            assert all(completed)
+
+            rows = [await queues[0].get(jid) for jid in expected]
+            assert all(row is not None and row["status"] == "done" and row["attempts"] == 1
+                       for row in rows)
+        finally:
+            await asyncio.gather(*(queue.close() for queue in queues))
+
+    asyncio.run(run())

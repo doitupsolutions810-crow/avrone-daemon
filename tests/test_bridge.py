@@ -489,3 +489,11 @@ def test_distill_failure_never_sinks_run(tmp_path, monkeypatch):
     assert out["answer"].startswith("LEAD MERGED") and "lessons_learned" not in out
     assert any("lessons distill failed" in e["data"].get("message", "")
                for e in core.codex.replay("f1") if e["kind"] == "error")
+
+
+def test_bridge_run_id_wave_suffix_is_removed_once_and_only_at_end():
+    assert bridge_mod.bridge_run_id("run-wave1-wave1") == "run-wave1"
+    assert bridge_mod.bridge_run_id("run-wave10") == "run-wave10"
+    assert bridge_mod.bridge_run_id("run-wave1-extra") == "run-wave1-extra"
+    assert bridge_mod.bridge_run_id("") == "run"
+    assert bridge_mod.bridge_run_id(None) == "run"

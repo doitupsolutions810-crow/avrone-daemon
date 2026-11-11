@@ -81,6 +81,47 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.149: Round 156: 27 more secret shapes (vendor tokens, signed URLs, webhooks, Discord)
+
+- A probe of 57 real-world secret formats found 31 that `ctxspawn.redact` passed through and
+  `secret_scan` reported CLEAN. This round masks 27 shapes covering all 31 samples.
+- `secretshapes.TOKEN_PREFIX_RE` (also used by `research_note` and `env_report`) gains 23 vendor
+  prefixes:
+  - Docker `dckr_pat_`
+  - Shopify `shpat_`, `shpss_`, `shpca_`, `shppa_`
+  - Square `sq0atp-`, `sq0csp-`
+  - Grafana `glsa_`, `glc_`
+  - Linear `lin_api_`
+  - PyPI `pypi-AgEIcHlwaS5vcmc…`
+  - DigitalOcean `doo_`, `dop_`, `dor_v1_`
+  - Tailscale `tskey-`
+  - Vercel Blob
+  - Facebook `EAA…`
+  - Mailgun `key-` + 32 hex
+  - Razorpay `rzp_live_`, `rzp_test_`
+  - Figma `figd_`
+  - Notion `ntn_` and `secret_` + 43 characters
+  - Flutterwave `FLWSECK-`
+  - age `AGE-SECRET-KEY-1`
+  - Vault `hvs.`, `hvb.`
+  - HubSpot `pat-na1-`
+  - Atlassian `ATATT3`, `ATCTT3`
+  - Supabase `sbp_`
+  - Twilio API keys `SK` + 32 hex
+- New `CONTEXT_RULES`, which `secret_scan` reports by name:
+  - `url-query-secret`: signed-URL and OAuth query values (`?sig=`, `X-Amz-Signature=`,
+    `X-Goog-Signature=`, `?code=`, `?key=`, `?client_secret=` …). Only the value is masked, so
+    the rest of the URL stays readable.
+  - `slack-webhook` and `discord-webhook`: the secret path of incoming-webhook URLs.
+  - `discord-token`: bot tokens in the three-part base64 form.
+- Known over-match: `?code=` is masked in any URL (`?code=python`).
+- Cost: redacting 1.6 MB of mixed text went from 0.17 s to 0.29 s. Literal gates still skip rules
+  whose prefixes are absent.
+- Fleet hop counts were probed too: they are already validated at the gateway (`_parse_hops`), so
+  that path needed no change.
+- Tests: `tests/test_round156_more_secret_shapes.py` (41 tests). 30 fail on v0.148; the 11 that
+  check ordinary text passes through untouched pass on both.
+
 ## v0.148: Round 155: job errors always recorded, job results and errors redacted
 
 - `JobQueue.fail` raised in two cases. One was an error containing a lone surrogate (a hostile

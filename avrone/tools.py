@@ -167,7 +167,7 @@ def _storage_text(e: OSError, names: str) -> str:
             f"complete. Retrying will fail the same way until space is freed or the limit is raised.")
 
 
-_SURROGATE = re.compile("[\ud800-\udfff]")
+_SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 # every character str.splitlines() breaks on, plus the rest of C0/C1 controls and DEL
 _LINE_BREAKS = _textsafe.UNSAFE_RUN
@@ -472,7 +472,7 @@ def check_path_text(rel: Any) -> str:
     'UnicodeEncodeError: utf-8 codec ...' / 'OSError: [Errno 36] File name too long' from
     read_file, write_file, edit_file and artifact_save."""
     s = str(rel)
-    if re.search("[\ud800-\udfff]", s):
+    if re.search(r"[\ud800-\udfff]", s):
         raise ValueError("path contains an invalid character (a lone UTF-16 surrogate)")
     if "\x00" in s:
         raise ValueError("path contains a NUL byte")
@@ -589,7 +589,7 @@ def write_content(raw: Any) -> str:
         text = raw.decode("utf-8", "replace")
     else:
         text = str(raw)
-    return re.sub(r"[\ud800-\udfff]", "\ufffd", text)
+    return re.sub(rr"[\ud800-\udfff]", "\ufffd", text)
 
 
 def atomic_write_bytes(p: Path, data: bytes) -> None:

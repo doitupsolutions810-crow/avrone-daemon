@@ -23,10 +23,10 @@ def test_config_exact_utf8_byte_limit_is_accepted_and_one_over_is_rejected():
 
 
 def test_config_exact_node_budget_is_accepted_and_one_over_is_rejected():
-    assert len(canonical_config_bytes([None] * (MAX_CONFIG_NODES - 1))) > 0
+    assert len(canonical_config_bytes([0] * (MAX_CONFIG_NODES - 1))) > 0
 
     with pytest.raises(ValueError, match="JSON values"):
-        canonical_config_bytes([None] * MAX_CONFIG_NODES)
+        canonical_config_bytes([0] * MAX_CONFIG_NODES)
 
 
 def test_config_exact_depth_boundary_is_accepted_and_one_over_is_rejected():

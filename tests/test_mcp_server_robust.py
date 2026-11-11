@@ -135,6 +135,34 @@ def test_non_object_batch_member_gets_invalid_request_response():
     assert out[1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
 
 
+@pytest.mark.parametrize("bad", [
+    {"jsonrpc": "2.0", "id": 5},
+    {"jsonrpc": "2.0", "id": 6, "params": {}},
+    {"jsonrpc": "2.0", "params": {}},
+])
+def test_request_shaped_object_without_method_gets_invalid_request(bad):
+    out, _, _ = serve([bad, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32600, "message": "Invalid Request"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("response", [
+    {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}},
+    {"jsonrpc": "2.0", "id": 8, "error": {"code": -32600, "message": "bad"}},
+])
+def test_unsolicited_response_without_method_is_ignored(response):
+    out, _, _ = serve([response, PING])
+    assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]
+
+
+def test_batch_member_without_method_gets_invalid_request_response():
+    out, _, _ = serve([[{"jsonrpc": "2.0", "id": 7}, PING]])
+    assert any(m == {"jsonrpc": "2.0", "id": None,
+                     "error": {"code": -32600, "message": "Invalid Request"}} for m in out)
+    assert any(m == {"jsonrpc": "2.0", "id": 99, "result": {}} for m in out)
+
+
 def test_crlf_lines():
     out, _, _ = serve([json.dumps(PING) + "\r"])
     assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]

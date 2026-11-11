@@ -95,14 +95,14 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
         return None
     if p == 1:
         return 1
-    return max(1, math.ceil(math.log(alpha) / math.log(1 - p) - 1e-12))
+    return max(1, math.ceil(math.log(alpha) / math.log1p(-p) - 1e-12))
 
 
 def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:
     """Map `failures` out of `runs` independent executions of one check into the Great Scale."""
-    if isinstance(failures, bool) or isinstance(runs, bool):
+    if (not isinstance(failures, int) or isinstance(failures, bool)
+            or not isinstance(runs, int) or isinstance(runs, bool)):
         raise ValueError("failures and runs must be integers")
-    failures, runs = int(failures), int(runs)
     if not (1 <= runs <= MAX_RUNS) or not (0 <= failures <= runs):
         raise ValueError("need 1 <= runs <= 1e9 and 0 <= failures <= runs")
     p = failures / runs

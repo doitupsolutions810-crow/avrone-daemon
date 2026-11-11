@@ -47,15 +47,8 @@ def _onoff(v: Any) -> str:
 
 
 def _int(v: Any, default: int, lo: int, hi: int) -> int | None:
-    if v is None or v == "":
-        return default
-    if isinstance(v, bool):
-        return None
-    try:
-        n = int(v)
-    except (TypeError, ValueError):
-        return None
-    return max(lo, min(hi, n))
+    from .argnum import tool_int  # round 45: one rule for inf, NaN, "1_000", Unicode digits
+    return tool_int(v, default, lo, hi, bad=None)
 
 
 def _num(v: Any) -> float | None:

@@ -629,3 +629,20 @@ merge without his word.
   - **run_id** is trimmed.
 - **Fan-in order file:** an unreadable file (permissions, EIO) used to make every `GET /api/blackboard` return a 500. It is now rebuilt by ts, the same as a missing file.
 - Tests: `tests/test_fusion_blackboard_robust.py`.
+
+## Hardening round 45 (Hark edge-case series): integer tool arguments
+- **inf from model JSON.** `gateway._parse_args` uses Python's json, which turns `1e999` (valid JSON) and the `Infinity` and `NaN` extensions into floats. `int(inf)` raises OverflowError, and these helpers caught only `(TypeError, ValueError)`, so the tool call failed instead of falling back to its default:
+  - `tools_extra._int`, which is used by about 8 tools
+  - fs_read `max_chars`, bridge_read, log_health `runs`, lesson_recall `limit`
+  - the netdiag tcp_ping and traceroute args. These had no guard at all, so `"abc"` raised too.
+- **Digit look-alikes.** `str.isdigit()` is True for `"²"`, but `int()` refuses it:
+  - lesson_recall raised on it.
+  - `server._content_length_over` raised on a `Content-Length: \xb2` header (latin-1 superscript): an unauthenticated 500 from the body-cap middleware. It now requires ASCII.
+  - `int()` also accepted `"1_000"`, Arabic-Indic and full-width digits.
+- **New `avrone/argnum.py`, `tool_int(v, default, lo, hi, bad=default)`:**
+  - Accepts ints (not bool), finite floats (truncated as before), and ASCII integer or float text.
+  - `+inf` and `-inf` clamp to the bound when one exists.
+  - NaN, bools, Unicode digits, underscores and other types return `bad`.
+- **Wired in:** tools_extra, codexstats, fleetstatus and mempeek (`bad=None`, so junk still reports an error), agentfs_tools, agentkit resources, bridge, tools_limits, lessonrecall, netdiag (bad port gives `ERROR: port must be an integer`).
+- **Behaviour change:** `True` as a count now gives the default instead of 1.
+- Tests: `tests/test_argnum_robust.py`.

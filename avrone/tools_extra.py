@@ -74,11 +74,8 @@ def _rel(ctx: "AgentContext", p: Path) -> str:
 
 
 def _int(v: Any, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(v)
-    except (TypeError, ValueError):
-        n = default
-    return max(lo, min(hi, n))
+    from .argnum import tool_int  # round 45: int(1e999) raised OverflowError past this helper
+    return tool_int(v, default, lo, hi)
 
 
 def _emit(ctx: "AgentContext", kind: str, **data: Any) -> None:

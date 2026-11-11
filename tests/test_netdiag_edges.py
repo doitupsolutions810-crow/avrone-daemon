@@ -145,8 +145,8 @@ def test_tcp_ping_mixed_and_no_peername(monkeypatch, no_sleep):
 
 
 def test_tcp_ping_bad_port_type():
-    with pytest.raises(ValueError):
-        run(netdiag.t_tcp_ping(None, {"host": "h", "port": "https"}))
+    # round 45: a bad port is a tool error message, not a ValueError out of the tool
+    assert run(netdiag.t_tcp_ping(None, {"host": "h", "port": "https"})).startswith("ERROR: port")
 
 
 # ---------------------------------------------------------------- traceroute

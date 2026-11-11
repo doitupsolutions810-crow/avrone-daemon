@@ -281,11 +281,8 @@ async def t_log_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     d = _runs_dir(ctx)
     if d is None or not d.is_dir():
         return "log_health: no run logs on this node"
-    try:
-        n = int(args.get("runs", 50))
-    except (TypeError, ValueError):
-        n = 50
-    n = max(1, min(200, n))
+    from .argnum import tool_int
+    n = tool_int(args.get("runs"), 50, 1, 200)
     from .codex import replay_limit
     cap = replay_limit()
     # round 95: glob + stat of every log ran on the event loop (100k logs: seconds) and followed

@@ -202,11 +202,8 @@ async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: {_rel(root, p)} not found"
     if not p.is_file():
         return f"ERROR: {_rel(root, p)} is a directory; use fs_list"
-    try:
-        limit = int(args.get("max_chars", READ_DEFAULT_CHARS))
-    except (TypeError, ValueError):
-        limit = READ_DEFAULT_CHARS
-    limit = max(1, min(limit, READ_MAX_CHARS))
+    from .argnum import tool_int
+    limit = tool_int(args.get("max_chars"), READ_DEFAULT_CHARS, 1, READ_MAX_CHARS)
     from .safeio import NotRegularFile, open_read
     try:  # round 87: never block on a FIFO swapped in after the is_file() check
         f = open_read(p, follow=True)

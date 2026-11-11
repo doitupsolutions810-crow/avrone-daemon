@@ -529,10 +529,8 @@ async def t_bridge_post(ctx: Any, args: dict[str, Any]) -> str:
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_bridge_read(ctx: Any, args: dict[str, Any]) -> str:
     b = for_core(ctx.core, ctx.run_id)
-    try:
-        limit = int(args.get("limit") or 30)
-    except (TypeError, ValueError):
-        limit = 30
+    from .argnum import tool_int
+    limit = tool_int(args.get("limit") or 30, 30)
     posts = b.read(kind=args.get("kind"), agent=args.get("agent"), since=args.get("since"),
                    query=args.get("query"), limit=limit)
     return compact(posts)

@@ -234,7 +234,8 @@ def _content_length_over(headers, limit: int) -> bool:
         if key.lower() != b"content-length":
             continue
         text = value.decode("latin-1").strip()
-        if text.isdigit() and int(text) > limit:
+        # round 45: "\xb2" (superscript two) is latin-1, isdigit() is True and int() raised -> 500
+        if text.isascii() and text.isdigit() and int(text) > limit:
             over = True
     return over
 

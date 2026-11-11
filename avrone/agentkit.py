@@ -513,11 +513,8 @@ async def t_resources(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not p.exists():
         return "resource ledger empty"
     # limit: "abc" raised, 0 meant every line ([-0:]), negatives sliced from the front
-    try:
-        limit = int(args.get("limit", 30))
-    except (TypeError, ValueError, OverflowError):
-        limit = 30
-    limit = max(1, min(500, limit))
+    from .argnum import tool_int
+    limit = tool_int(args.get("limit"), 30, 1, 500)
     rows = []
     from .safeio import read_regular
     for line in (read_regular(p, LEDGER_READ_MAX) or b"").decode("utf-8", "replace").splitlines():

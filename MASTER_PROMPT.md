@@ -50,6 +50,7 @@ Avrone/
 │   ├── agentkit.py              Agent kit (v0.8): richer tooling plus better handling of tasks, resources and skills.
 │   ├── agentpack.py             Agent packs: a portable, verifiable bundle of one agent's home.
 │   ├── agentpack_tools.py       Agent-home tools (edgepack): pack, restore and migrate YOUR OWN agent home.
+│   ├── argnum.py                Integer tool arguments, one rule for every tool (hardening round 45).
 │   ├── bootstrap.py             Bootstrap: build a ready TrinityCore in one place, for the server and the CLI.
 │   ├── bridge.py                Learning bridge: a run-scoped blackboard where agents among agents conclude together.
 │   ├── capgate.py               capgate: capability-scoped tool calls + a tamper-evident receipt chain (opt-in).
@@ -110,7 +111,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 345 test files, offline by default
+├── tests/                  # 346 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py

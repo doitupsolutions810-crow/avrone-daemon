@@ -128,6 +128,13 @@ def test_scalar_junk_ignored_and_server_lives(junk):
     assert out[-1]["id"] == 99
 
 
+def test_non_object_batch_member_gets_invalid_request_response():
+    out, _, _ = serve([[17, PING]])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32600, "message": "Invalid Request"}}
+    assert out[1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
 def test_crlf_lines():
     out, _, _ = serve([json.dumps(PING) + "\r"])
     assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]

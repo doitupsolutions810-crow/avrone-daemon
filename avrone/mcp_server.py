@@ -16,7 +16,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import math
 import os
 import sys
 from typing import Any
@@ -24,8 +23,9 @@ from typing import Any
 log = logging.getLogger("avrone.mcp_server")
 
 # json.loads accepts JavaScript-style NaN/Infinity by default. Keep top-level scalar
-# junk tolerant for backwards compatibility, but never let non-JSON numbers enter
-# request objects or batches.
+# junk tolerant for backwards compatibility, but never let these non-JSON tokens enter
+# request objects or batches. Large exponent values remain valid JSON and are validated
+# by the downstream argument/schema boundary.
 _INVALID_JSON_CONSTANT = object()
 
 
@@ -39,13 +39,11 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _has_non_json_number(value: Any) -> bool:
+def _has_non_json_constant(value: Any) -> bool:
     stack = [value]
     while stack:
         item = stack.pop()
         if item is _INVALID_JSON_CONSTANT:
-            return True
-        if isinstance(item, float) and not math.isfinite(item):
             return True
         if isinstance(item, dict):
             stack.extend(item.values())
@@ -209,7 +207,7 @@ class AvroneMCPServer:
             try:
                 msg = json.loads(line, object_pairs_hook=_unique_json_object,
                                   parse_constant=lambda _literal: _INVALID_JSON_CONSTANT)
-                if isinstance(msg, (dict, list)) and _has_non_json_number(msg):
+                if isinstance(msg, (dict, list)) and _has_non_json_constant(msg):
                     raise ValueError("non-standard JSON numeric constant")
             except (ValueError, RecursionError):
                 # ValueError covers JSONDecodeError and also an integer over Python's 4300-digit limit;

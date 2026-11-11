@@ -128,6 +128,26 @@ def test_scalar_junk_ignored_and_server_lives(junk):
     assert out[-1]["id"] == 99
 
 
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+@pytest.mark.parametrize("nested", ['"n":{value}', '"n":[0,{value}]'])
+def test_non_finite_number_inside_request_is_parse_error(literal, nested):
+    params = nested.format(value=literal)
+    raw = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{' + params + '}}'
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_non_json_number_in_batch_rejects_whole_line_and_keeps_server_alive():
+    raw = ('[{"jsonrpc":"2.0","id":1,"method":"ping","params":{"n":NaN}},'
+           + json.dumps(PING) + ']')
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
 def test_non_object_batch_member_gets_invalid_request_response():
     out, _, _ = serve([[17, PING]])
     assert out[0] == {"jsonrpc": "2.0", "id": None,

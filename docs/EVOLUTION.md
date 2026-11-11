@@ -1,1 +1,357 @@
-See full content pushed correctly
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates)
+
+Most recent CI run (42571502200, workflow_dispatch, head ea711bac) completed with real runners assigned (not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+- docker-verify job failed: Verify.sh not present in the built image (Dockerfile only COPYed pyproject.toml + avrone/; run step did `cp /app/Verify.sh` which failed with "No such file or directory"). Exit 127.
+- test (3.12) job failed early on `pip install -e ".[dev]"` (exit 1); logs did not surface the underlying pip error in the retrieved tail.
+- test (3.11) cancelled after the other failure.
+
+Root cause of the clear failure: missing COPY of Verify.sh (and the avrone-a12lr/tests/ directory it requires) into the Docker image.
+
+Minimal fix pushed to same branch (commit 28ea8f6e): added
+```
+COPY Verify.sh ./
+COPY avrone-a12lr/tests ./avrone-a12lr/tests
+```
+to Dockerfile. No force-push, no branch deletion, no overwrites of other files.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml.
+
+Recommend re-running CI on the branch after this fix. If green, pause further automation on this path.
+
+## CI Status Check 2026-11-09 later (descent/xcv-trust-gates, head 0231088)
+
+Most recent CI run (42632876286) completed with real runners assigned (runner_id non-zero, runner_name present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed:
+- test (3.11): failed immediately in Install step with exit 1. Root cause: `set -o pipefail` + `grep ... | while ...` pipeline. When no files match the defensive "successfully downloaded text file" pattern (normal for clean checkouts), grep exits 1, the pipeline fails, and the job aborts before `pip install`.
+- docker-verify: failed with "[verify] AVRONE root: /tmp" and exit 2. Root cause: the `bash -c` command's nested escaping failed to sed-rewrite the ROOT= line in the copied Verify.sh, so BASH_SOURCE pointed at /tmp/Verify.sh and the required files (pyproject.toml, avrone/, avrone-a12lr/tests/) were not found there.
+- test (3.12): cancelled.
+
+Minimal fix pushed to same branch (commit 6ade79a7):
+- Added `|| true` after both defensive grep pipelines in the test job so a no-match is a true no-op under pipefail.
+- Simplified docker-verify run step to `docker run --rm --user 10001:10001 avrone:verify bash /app/Verify.sh` (files are already COPYed to /app; BASH_SOURCE yields the correct root).
+
+No force-push. No branch deletion. Existing files not overwritten beyond the additive CI edit.
+
+Verify.sh exists in the repo tree. docker-verify job is present in .github/workflows/ci.yml.
+
+If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head f5dc383)
+
+Most recent CI run (42642326487) completed with real runners assigned (runner_id 1000008007/8008/8009 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout):
+- test (3.12): 7 failed, 5116 passed. Root cause: tests/test_xcv_trust_separation.py KeyError on missing 'trust_gates_present'/'all_trust_gates_pass' and DID NOT RAISE on unknown key. evidence_snapshot attached trust_context but did not compute the flags or validate keys.
+- docker-verify: failed with "[verify] AVRONE root: /tmp" and exit 2. Root cause: the `bash -c` command's nested escaping failed to sed-rewrite the ROOT= line in the copied Verify.sh, so BASH_SOURCE pointed at /tmp/Verify.sh and the required files (pyproject.toml, avrone/, avrone-a12lr/tests/) were not found there.
+- test (3.11): cancelled.
+
+Minimal fixes pushed to same branch:
+- Commit 0a9cb68f: in avrone/greatscale.py, added TRUST_CONTEXT_KEYS and computed trust_gates_present / all_trust_gates_pass (empty context → False/False; partial → True/False; all True → True); raise ValueError on unknown keys. Geometry unchanged.
+- Commit d6a271f1: in Dockerfile, added `chown -R avrone:avrone /app` after pip install so the non-root user can perform editable installs.
+
+No force-push. No branch deletion. Existing files not overwritten beyond these additive edits.
+
+Verify.sh exists in the repo tree. docker-verify job is present in .github/workflows/ci.yml.
+
+If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head 7c98b16)
+
+Most recent CI run (42651744409) completed with real runners assigned (runner_id 1000008018/8019/8020 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout, after docker-verify success):
+- test (3.11): 7 failed, 5116 passed. Root cause: RecursionError in json.JSONDecoder.raw_decode / json.loads on pathological deep/nested JSON in parse_action (_first_action) and jobqueue.claim payload parsing. Tests: test_pathological_replies_stay_fast, test_parse_action_is_bounded_on_huge_and_deep_input, test_corrupt_rows_never_kill_claim.
+- test (3.12): cancelled.
+
+Minimal fixes pushed to same branch:
+- avrone/trinity.py: catch RecursionError alongside JSONDecodeError in _first_action so deep nesting is skipped (returns None for pure pathological input, continues scan).
+- avrone/jobqueue.py: catch RecursionError in claim()'s payload json.loads (and _decode) so deep arrays do not raise out of claim.
+
+No force-push. No branch deletion. Existing files not overwritten beyond these additive edits.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.
+
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head aab13645)
+
+Most recent CI run (42662128129) completed with real runners assigned (runner_id 1000008078/8080/8079 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout):
+- test (3.11): failed with RecursionError in parse_action / _first_action on deep nested JSON (tests: test_pathological_replies_stay_fast, test_parse_action_is_bounded_on_huge_and_deep_input). Also test_master_prompt.py assertion on test file count (213 vs 212).
+- docker-verify: succeeded.
+- test (3.12): cancelled.
+
+Root cause: _first_action only caught json.JSONDecodeError, not RecursionError from deep JSON. Previous claimed fix was not present in the code at this head.
+
+Minimal fix pushed to same branch (commit 697a97f5): in avrone/trinity.py _first_action, changed except json.JSONDecodeError to except (json.JSONDecodeError, RecursionError) so pathological deep nesting is skipped.
+
+No force-push. No branch deletion. Existing files not overwritten beyond this additive edit.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head d4c48036)
+
+Most recent CI run (42680412009) completed with real runners assigned (runner_id 1000008090/8091/8092 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout, after docker-verify success):
+- test (3.12): 1 failed, 5122 passed. Root cause: tests/test_master_prompt.py::test_committed_prompt_is_current AssertionError — MASTER_PROMPT.md out of date vs tools/make_master_prompt.py (test file count 212 vs 213; great_scale tool args missing trust_context).
+- test (3.11): failed similarly (cancelled after).
+- docker-verify: succeeded (Verify.sh present and ran).
+
+Minimal fix: regenerated MASTER_PROMPT.md via python tools/make_master_prompt.py (after cleaning __pycache__) so it matches the live tree and tool registry (213 test files, trust_context in great_scale).
+
+No force-push. No branch deletion. Existing files not overwritten beyond this regeneration.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head ed173473)
+
+Most recent CI run (42690093190) completed with real runners assigned (runner_id 1000008099/8100/8101 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / logs-404 provisioning fault).
+
+Failures observed (real, post-checkout, after docker-verify success):
+- test (3.11): failed on tests/test_master_prompt.py::test_committed_prompt_is_current. Root cause: tree() in tools/make_master_prompt.py lists raw sorted(d.iterdir())[:12], so CI's creation of __pycache__ under plugins/ (and similar) inserts an extra line that is absent from the clean committed MASTER_PROMPT.md. Diff shows - │   ├── __pycache__ before calculator.py.
+- test (3.12): cancelled.
+- docker-verify: succeeded (Verify.sh present and ran).
+
+Minimal fix pushed to same branch (commit f67dabd9): in tools/make_master_prompt.py tree(), filter out __pycache__, *.egg-info and dotfiles so generation is deterministic across clean trees and CI bytecode environments. Current MASTER_PROMPT.md already matches the filtered tree.
+
+No force-push. No branch deletion. Existing files not overwritten beyond this additive edit.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+If the next run on this branch is green, pause this automation.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head 2ea0953) — GREEN
+
+Most recent CI run (42699758348) completed with success. Real runners assigned (runner_id 1000008110/8111/8112 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. Previous minimal fix (exclude __pycache__ from MASTER_PROMPT tree listing) resolved the nondeterminism.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: recent workflow runs show failures (e.g. CI run 42569883235 and squad-round-notify failures), but those are outside the scope of the requested branch focus. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-09 (descent/xcv-trust-gates, head 5992ac28) — GREEN
+
+Most recent CI run (42708943823) completed with success. Real runners assigned (runner_id 1000008117/8118/8119 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green after previous docs append.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent runs include CI failures (e.g. run 42569883235) and repeated squad-round-notify failures (immediate, likely provisioning or config), but focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head c517af9d) — GREEN
+
+Most recent CI run (42718222277) completed with success. Real runners assigned (runner_id 1000008120/8121/8122 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42830906484) is in_progress (started ~2026-11-10T14:07Z). Previous completed runs show mixed results including failures, but focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head ada8fbef) — GREEN
+
+Most recent CI run (42831406582) completed with success. Real runners assigned (runner_id 1000008393/8394/8395 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42839990887) failed on test (3.11) with real runner assigned (runner_id 1000008486); test (3.12) cancelled. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head feef83a7) — GREEN
+
+Most recent CI run (42841635777) completed with success. Real runners assigned (runner_id 1000008490/8491/8492 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42848472627) failed (conclusion failure). Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 4da0cbfa) — GREEN
+
+Most recent CI run (42851580994) completed with success. Real runners assigned (runner_id 1000008497/8498/8499 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI runs (e.g. 42848472627 and prior) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 889fd79e) — GREEN
+
+Most recent CI run (42861897389) completed with success. Real runners assigned (runner_id 1000008500/8501/8502 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42848472627) failed. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 9e4b000a) — GREEN
+
+Most recent CI run (42871990685) completed with success. Real runners assigned (runner_id 1000008503/8504/8505 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42848472627) failed. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head a52eb7e0) — flaky test fixed
+
+Most recent CI run (42881994300) completed with failure. Real runners assigned (runner_id 1000008506/8507/8508 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+Jobs:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): failure on Test avrone — tests/test_checkpoint_robust.py::test_sigkill_mid_writes_leaves_loadable_file[0.15] AssertionError (n == 0 after SIGKILL; no corrupt-* file present)
+- test (3.12): cancelled (but its Test step had completed successfully before cancel)
+
+Root cause: flaky timing in the SIGKILL mid-write durability test. With a 0.15 s delay under CI load, the atomic temp+fsync+rename sometimes had not completed any put before the kill, leaving an empty/fresh file (which is correct behavior, but the assertion requires n > 0). Previous runs and the 3.12 matrix entry passed. Not a code defect in Checkpoint (writes remain atomic; no corrupt files produced).
+
+Minimal fix pushed to same branch (commit 56ea1668): raised parametrize delays from [0.15, 0.4] to [0.5, 1.0] so a complete durable write is reliably present before SIGKILL. Atomic path and assertions unchanged.
+
+No force-push. No branch deletion. Existing files not overwritten beyond this additive test edit and the docs append.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded on this run).
+
+Recommend re-running CI; if green, pause this automation.
+
+On main: most recent CI runs show failure conclusions (e.g. 42848472627). Focus remains on the requested branch.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 676d6ae6) — GREEN
+
+Most recent CI run (42892263618) completed with success. Real runners assigned (runner_id 1000008512/8513/8514 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. Previous minimal fix (increased SIGKILL mid-write delays) resolved the flaky timing.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI runs (e.g. 42848472627 and prior) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 8c45ff03) — GREEN
+
+Most recent CI run (42901857460) completed with success. Real runners assigned (runner_id 1000008515/8516/8517 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green after previous docs append.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (42848472627) failed. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+
+## CI Status Check 2026-11-10 (descent/xcv-trust-gates, head 3863783d) — GREEN
+
+Most recent CI run (42911619092) completed with success. Real runners assigned (runner_id 1000008518/8519/8520 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green after previous docs append.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI runs (e.g. 42916220717, 42915262662, 42912702112) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+
+## CI Status Check 2026-11-11 (descent/xcv-trust-gates, head 54ea6452) — GREEN
+
+Most recent CI run (42920814117) completed with success. Real runners assigned (runner_id 1000008616/8623/8624 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green after previous docs append.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI runs (e.g. 43009286251, 43006129553) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.

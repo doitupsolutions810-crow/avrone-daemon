@@ -81,6 +81,27 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.152: Round 159: secret_scan checks jobs.db
+
+Job results and errors written before v0.148 are stored raw in `jobs.db`, and `/api/fleet/jobs`
+returned them unchanged. `secret_scan` never read the database, so these secrets went unreported.
+
+- **What the scan reports.** In scope `data`, `secret_scan` now reads every row of `jobs.db`. It
+  reports jobs whose stored result or error holds a secret, and job payloads that hold one.
+- **What `fix=true` changes.** It masks secrets in results and errors only:
+  - A result is masked value by value and stays valid JSON.
+  - A result that is not valid JSON is stored as one masked string.
+- **What `fix=true` leaves alone.** Payloads are never rewritten, because a queued job must still
+  run as it was submitted. Clean those by hand.
+- **New function `jobqueue.scrub_db(path, fix)`.**
+  - It works in batches of 500 rows, each inside `BEGIN IMMEDIATE`, so it is safe while workers run
+    in other processes.
+  - It opens the database read-only unless fixing.
+  - It never creates a missing `jobs.db` and skips symlinks.
+- **Unreadable database.** A corrupt `jobs.db` is reported as "NOT scanned" and does not count as
+  a finding.
+- **Tests.** `tests/test_round159_jobs_db_scrub.py` has 3 tests. Two of them fail on v0.151.
+
 ## v0.151: Round 158: secret_scan fix scrubs bridge journals
 
 - Bridge journals written before v0.147 hold posts unredacted. v0.150 could report them, but

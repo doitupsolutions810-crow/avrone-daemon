@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.151.0)
+# AVRONE MASTER PROMPT (v0.152.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~4 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~3 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -110,7 +110,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 334 test files, offline by default
+├── tests/                  # 335 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -325,6 +325,27 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_ADMIN_TOKEN_PREVIOUS`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_FUSION_STATE_PATH`, `AVRONE_FUSION_WATCH_PATH`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.152: Round 159: secret_scan checks jobs.db
+
+Job results and errors written before v0.148 are stored raw in `jobs.db`, and `/api/fleet/jobs`
+returned them unchanged. `secret_scan` never read the database, so these secrets went unreported.
+
+- **What the scan reports.** In scope `data`, `secret_scan` now reads every row of `jobs.db`. It
+  reports jobs whose stored result or error holds a secret, and job payloads that hold one.
+- **What `fix=true` changes.** It masks secrets in results and errors only:
+  - A result is masked value by value and stays valid JSON.
+  - A result that is not valid JSON is stored as one masked string.
+- **What `fix=true` leaves alone.** Payloads are never rewritten, because a queued job must still
+  run as it was submitted. Clean those by hand.
+- **New function `jobqueue.scrub_db(path, fix)`.**
+  - It works in batches of 500 rows, each inside `BEGIN IMMEDIATE`, so it is safe while workers run
+    in other processes.
+  - It opens the database read-only unless fixing.
+  - It never creates a missing `jobs.db` and skips symlinks.
+- **Unreadable database.** A corrupt `jobs.db` is reported as "NOT scanned" and does not count as
+  a finding.
+- **Tests.** `tests/test_round159_jobs_db_scrub.py` has 3 tests. Two of them fail on v0.151.
+
 ## v0.151: Round 158: secret_scan fix scrubs bridge journals
 
 - Bridge journals written before v0.147 hold posts unredacted. v0.150 could report them, but
@@ -364,47 +385,6 @@ landed and the suite is green. End with what is still open.
 - Tests: `tests/test_round157_secret_scan_whole.py` (6 tests, all fail on v0.149).
   `test_cov14_a` now expects the `partial` key.
 
-## v0.149: Round 156: 27 more secret shapes (vendor tokens, signed URLs, webhooks, Discord)
-
-- A probe of 57 real-world secret formats found 31 that `ctxspawn.redact` passed through and
-  `secret_scan` reported CLEAN. This round masks 27 shapes covering all 31 samples.
-- `secretshapes.TOKEN_PREFIX_RE` (also used by `research_note` and `env_report`) gains 23 vendor
-  prefixes:
-  - Docker `dckr_pat_`
-  - Shopify `shpat_`, `shpss_`, `shpca_`, `shppa_`
-  - Square `sq0atp-`, `sq0csp-`
-  - Grafana `glsa_`, `glc_`
-  - Linear `lin_api_`
-  - PyPI `pypi-AgEIcHlwaS5vcmc…`
-  - DigitalOcean `doo_`, `dop_`, `dor_v1_`
-  - Tailscale `tskey-`
-  - Vercel Blob
-  - Facebook `EAA…`
-  - Mailgun `key-` + 32 hex
-  - Razorpay `rzp_live_`, `rzp_test_`
-  - Figma `figd_`
-  - Notion `ntn_` and `secret_` + 43 characters
-  - Flutterwave `FLWSECK-`
-  - age `AGE-SECRET-KEY-1`
-  - Vault `hvs.`, `hvb.`
-  - HubSpot `pat-na1-`
-  - Atlassian `ATATT3`, `ATCTT3`
-  - Supabase `sbp_`
-  - Twilio API keys `SK` + 32 hex
-- New `CONTEXT_RULES`, which `secret_scan` reports by name:
-  - `url-query-secret`: signed-URL and OAuth query values (`?sig=`, `X-Amz-Signature=`,
-    `X-Goog-Signature=`, `?code=`, `?key=`, `?client_secret=` …). Only the value is masked, so
-    the rest of the URL stays readable.
-  - `slack-webhook` and `discord-webhook`: the secret path of incoming-webhook URLs.
-  - `discord-token`: bot tokens in the three-part base64 form.
-- Known over-match: `?code=` is masked in any URL (`?code=python`).
-- Cost: redacting 1.6 MB of mixed text went from 0.17 s to 0.29 s. Literal gates still skip rules
-  whose prefixes are absent.
-- Fleet hop counts were probed too: they are already validated at the gateway (`_parse_hops`), so
-  that path needed no change.
-- Tests: `tests/test_round156_more_secret_shapes.py` (41 tests). 30 fail on v0.148; the 11 that
-  check ordinary text passes through untouched pass on both.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -416,4 +396,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.151.0 checked out: 4 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.152.0 checked out: 3 passed, 99% coverage. Next: round <N+1> on <angle>."

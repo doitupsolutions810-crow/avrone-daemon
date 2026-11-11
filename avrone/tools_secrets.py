@@ -284,6 +284,22 @@ def _tsesc(x: Any) -> str:
     return escape(str(x))
 
 
+async def _jobs_db_report(path: Path, fix: bool) -> list[str]:
+    import sqlite3
+    from .jobqueue import scrub_db
+    try:
+        r = await asyncio.to_thread(scrub_db, path, fix)
+    except sqlite3.Error as e:
+        return [f"- jobs.db: NOT scanned ({_tsesc(type(e).__name__)}: {_tsesc(str(e)[:120])})"]
+    out = []
+    if r["flagged"]:
+        out.append(f"- jobs.db: {r['flagged']} job(s) with a secret in the stored result or error"
+                   + (f"; fixed {r['fixed']}" if fix else " (fix=true masks them)"))
+    if r["payloads"]:
+        out.append(f"- jobs.db: {r['payloads']} job payload(s) hold a secret (task input; never rewritten, fix by hand)")
+    return out
+
+
 async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = args.get("scope", "runs")
     if scope not in ("runs", "data", "workspace"):
@@ -306,6 +322,10 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     lines = [head] + [f"- {_tsesc(h['path'])}:{h['line']} {', '.join(h['kinds'])}" for h in hits[:MAX_SHOWN]]
     if len(hits) > MAX_SHOWN:
         lines.append(f"... {len(hits) - MAX_SHOWN} more")
+    if scope == "data":  # round 159: jobs.db rows (results/errors stored raw before v0.148)
+        lines += await _jobs_db_report(root / "jobs.db", args.get("fix") is True)
+        if any(ln.startswith("- jobs.db:") and "NOT scanned" not in ln for ln in lines) and not hits:
+            lines[0] = lines[0].replace(": CLEAN -", ": FOUND -", 1)
     if hits and args.get("fix") is True:
         lock = getattr(getattr(getattr(ctx, "core", None), "codex", None), "_write_lock", None)
         paths = {h["path"] for h in hits}

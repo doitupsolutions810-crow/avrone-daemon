@@ -524,3 +524,56 @@ class Worker:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+
+def scrub_db(path: Path | str, fix: bool = False, batch: int = 500) -> dict[str, int]:
+    """Round 158/159: find (and with fix=True mask) secrets in stored job results and errors.
+
+    Results stored before v0.148 and errors stored before v0.148 were written raw, and every
+    `/api/fleet/jobs` read served them back. Uses its own connection with BEGIN IMMEDIATE per
+    batch, so it is safe beside running workers in other processes. Payloads (the task input)
+    are counted but never rewritten: a queued job must still run as submitted. The file is
+    opened read-write only if it exists (a scan never creates an empty jobs.db)."""
+    from .ctxspawn import redact
+    p = Path(path)
+    out = {"rows": 0, "flagged": 0, "fixed": 0, "payloads": 0}
+    if p.is_symlink() or not p.is_file():
+        return out
+    db = sqlite3.connect(f"file:{p}?mode={'rw' if fix else 'ro'}", uri=True, isolation_level=None)
+    try:
+        db.execute("PRAGMA busy_timeout=10000")
+        last = ""
+        while True:
+            if fix:
+                db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = db.execute("SELECT id, payload, result, error FROM jobs WHERE id > ? ORDER BY id LIMIT ?",
+                                  (last, int(batch))).fetchall()
+                for jid, payload, result, error in rows:
+                    out["rows"] += 1
+                    if isinstance(payload, str) and redact(payload) != payload:
+                        out["payloads"] += 1
+                    new_err = redact(error) if isinstance(error, str) else error
+                    new_res = result
+                    if isinstance(result, str) and result and redact(result) != result:
+                        try:
+                            new_res = json.dumps(_redact_result(_jloads(result)), default=str, allow_nan=False)
+                        except (TypeError, ValueError, RecursionError):
+                            new_res = json.dumps(redact(result))  # unreadable JSON: keep it as one masked string
+                    if new_err != error or new_res != result:
+                        out["flagged"] += 1
+                        if fix:
+                            db.execute("UPDATE jobs SET result=?, error=? WHERE id=?", (new_res, new_err, jid))
+                            out["fixed"] += 1
+            except BaseException:
+                if fix:
+                    db.execute("ROLLBACK")
+                raise
+            if fix:
+                db.execute("COMMIT")
+            if len(rows) < batch:
+                break
+            last = rows[-1][0]
+    finally:
+        db.close()
+    return out

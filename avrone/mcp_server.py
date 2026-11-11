@@ -29,6 +29,16 @@ log = logging.getLogger("avrone.mcp_server")
 _INVALID_JSON_CONSTANT = object()
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate member names instead of silently accepting the last value."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
 def _has_non_json_number(value: Any) -> bool:
     stack = [value]
     while stack:
@@ -197,7 +207,8 @@ class AvroneMCPServer:
             if not line:
                 continue
             try:
-                msg = json.loads(line, parse_constant=lambda _literal: _INVALID_JSON_CONSTANT)
+                msg = json.loads(line, object_pairs_hook=_unique_json_object,
+                                  parse_constant=lambda _literal: _INVALID_JSON_CONSTANT)
                 if isinstance(msg, (dict, list)) and _has_non_json_number(msg):
                     raise ValueError("non-standard JSON numeric constant")
             except (ValueError, RecursionError):

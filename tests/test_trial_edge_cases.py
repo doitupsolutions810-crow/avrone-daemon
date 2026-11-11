@@ -991,3 +991,55 @@ def test_sqlite_full_error_on_receipt_rolls_back_staged_trial(tmp_path, monkeypa
     finally:
         recovered.close()
     assert store.pool_snapshot()["runs"] == 0
+
+
+
+@pytest.mark.parametrize("transport", [None, [], {}, 0, True])
+def test_store_rejects_non_string_transport_without_type_errors(tmp_path, transport):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+
+    with pytest.raises(ValueError, match="transport"):
+        store.ingest_many([sample()], sender="peer-a", transport=transport)
+
+    assert store.pool_snapshot()["runs"] == 0
+
+
+@pytest.mark.parametrize(
+    "bridge_run_id",
+    ["bridge\u0085run", "bridge\u009frun", "\ud800", "\udfff"],
+)
+def test_store_rejects_unicode_control_and_invalid_utf8_bridge_metadata(tmp_path, bridge_run_id):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+
+    with pytest.raises(ValueError, match="bridge run_id"):
+        store.ingest_many(
+            [sample()],
+            sender="peer-a",
+            transport="bridge",
+            bridge_run_id=bridge_run_id,
+        )
+
+    assert store.pool_snapshot()["runs"] == 0
+
+
+def test_store_preserves_valid_unicode_bridge_run_id_exactly(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    bridge_run_id = "桥接-🚀-café"
+
+    result = store.ingest_many(
+        [sample()],
+        sender="peer-a",
+        transport="bridge",
+        bridge_run_id=bridge_run_id,
+    )
+
+    assert result["results"][0]["status"] == "accepted"
+    db = store._connect()
+    try:
+        row = db.execute(
+            "SELECT bridge_run_id FROM trials WHERE trial_id=?",
+            (sample()["trial_id"],),
+        ).fetchone()
+    finally:
+        db.close()
+    assert row["bridge_run_id"] == bridge_run_id

@@ -37,8 +37,17 @@ def _data_dir(ctx: "AgentContext") -> Any:
 
 @off_loop
 async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    key = str(args.get("key") or "").strip()
-    reason = _textsafe.UNSAFE_ONE.sub(" ", str(args.get("reason") or "")).strip()
+    raw_key, raw_reason = args.get("key"), args.get("reason")
+    # round 49: a dict/list/number key or reason was str()-ed ("{'a': 1}" became the reason)
+    if not isinstance(raw_key, str):
+        return "ERROR: key must look like l-<16 hex> (see lesson_recall)"
+    if raw_reason is not None and not isinstance(raw_reason, str):
+        return "ERROR: reason must be text"
+    key = raw_key.strip()
+    # round 49: invisible-only reasons (zero-width, BOM, bidi) passed the "required" check
+    reason = " ".join(_textsafe.UNSAFE_RUN.sub(" ", raw_reason or "").split())
+    if not reason.strip("\u200b\u200c\u200d\u2060\ufeff\u00ad"):
+        reason = ""
     if not KEY_RE.match(key):
         return "ERROR: key must look like l-<16 hex> (see lesson_recall)"
     if not reason:
@@ -60,7 +69,10 @@ async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
             store.delete(bridgemod.LESSONS_NS, key)
     except OSError as e:
         return f"ERROR: could not update lessons ({type(e).__name__})"
-    text = redact_text(str(old.get("value", "")))[:200]
+    # round 49: a corrupt entry (a string or list, not a dict) raised AttributeError here, AFTER
+    # the delete, so the agent was told the forget failed when it had happened
+    value = old.get("value", "") if isinstance(old, dict) else old
+    text = _flat(redact_text(value if isinstance(value, str) else type(value).__name__))[:200]
     note = f"retracted lesson {key}: {text} | reason: {reason}"
     posted = ""
     try:
@@ -78,6 +90,17 @@ async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return f"forgot lesson {key}{posted}"
 
 
+def _flat(s: Any) -> str:
+    """One display line: stored bridge text stays raw; display paths flatten it (round 44 rule)."""
+    return " ".join(_textsafe.UNSAFE_RUN.sub(" ", s if isinstance(s, str) else str(s)).split())
+
+
+def _name(s: Any) -> str:
+    """An agent name, kind or id shown in a listing: escaped, so two names that differ only in a
+    control character stay apart and "a\nFORGED" can not print a row of its own."""
+    return _textsafe.escape(s if isinstance(s, str) else type(s).__name__)[:80]
+
+
 def bridge_status(ctx: "AgentContext") -> dict[str, Any]:
     b = bridgemod.for_core(ctx.core, ctx.run_id)
     posts = b.posts()
@@ -85,20 +108,28 @@ def bridge_status(ctx: "AgentContext") -> dict[str, Any]:
     agents: dict[str, int] = {}
     remote = 0
     replied: set[str] = set()
+    # round 49: posts are read defensively. A post with a missing kind/agent raised KeyError, a
+    # refs string "q1" marked "q" and "1" as answered, and an unhashable ref raised TypeError
+    posts = [p for p in posts if isinstance(p, dict)]
     for p in posts:
-        kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1
-        agents[p["agent"]] = agents.get(p["agent"], 0) + 1
+        k, a = _name(p.get("kind", "?")), _name(p.get("agent", "?"))
+        kinds[k] = kinds.get(k, 0) + 1
+        agents[a] = agents.get(a, 0) + 1
         if p.get("origin_node") not in (None, "", b.node_id):
             remote += 1
-        replied.update(p.get("refs") or [])
-    open_q = [p for p in posts if p["kind"] == "question" and p["id"] not in replied]
+        refs = p.get("refs")
+        if isinstance(refs, (list, tuple)):
+            replied.update(r for r in refs if isinstance(r, str))
+    open_q = [p for p in posts if p.get("kind") == "question" and p.get("id") not in replied]
     return {"run_id": b.run_id, "posts": len(posts), "limit": b.limit, "kinds": kinds,
             "agents": dict(sorted(agents.items(), key=lambda x: -x[1])[:STATUS_MAX_AGENTS]),
             "more_agents": max(0, len(agents) - STATUS_MAX_AGENTS), "remote": remote,
-            "open_questions": [{"id": p["id"], "agent": p["agent"], "text": redact_text(p["text"])[:120]}
+            "open_questions": [{"id": _name(p.get("id", "?")), "agent": _name(p.get("agent", "?")),
+                                "text": _flat(redact_text(p.get("text") if isinstance(p.get("text"), str)
+                                                          else ""))[:120]}
                                for p in open_q[-5:]],
             "open_question_count": len(open_q),
-            "conclusions": sum(1 for p in posts if p["kind"] == "conclusion")}
+            "conclusions": sum(1 for p in posts if p.get("kind") == "conclusion")}
 
 
 async def t_bridge_status(ctx: "AgentContext", args: dict[str, Any]) -> str:

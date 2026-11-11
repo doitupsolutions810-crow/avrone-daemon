@@ -707,3 +707,29 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - **Error reasons:** the reason used to be `str(body["error"])`. It was unbounded, multi-line, could call a hostile `__str__`, and an error spelled `plane_succeeded` came back as that reason code. **Behaviour change:** the reason is now `error`, and a clean single-line `detail` of at most 200 characters is added.
 
 - Tests: `tests/test_fusion_seams_robust.py`.
+
+## Hardening round 49 (Hark edge-case series): searchproc + tools_lessonforget
+
+### searchproc (search_files' child scan)
+- **Line numbers:** lines were split with `str.splitlines()`, which also breaks on `\x0c`, `\x0b`, `\x1c`-`\x1e`, NEL, U+2028/9 and a lone `\r`. After a form feed in a Python file every reported line number was off, and a pattern could not match across one.
+  - Lines now split on `\n` only, the same rule as grep, editors and `textsafe.lines_keepends`.
+  - A CRLF's `\r` is dropped.
+  - A leading UTF-8 BOM is dropped, so `^` anchors match line 1.
+- **Deep trees:** `os.walk` is recursive on Python 3.11, the oldest version pyproject allows. A tree about 1000 directories deep raised RecursionError, and search_files returned nothing. The walk now uses an explicit stack. It keeps the same sorted depth-first order, and symlinked directories are still not entered.
+- **Limits:**
+  - `max_files` was off by one: the scan read one file past it.
+  - cap, max_files and max_bytes are bounded and must be ints.
+  - The matched line is cut before it is stripped.
+  - diff_main's `n` is clamped to 0..10000.
+
+### tools_lessonforget
+- **lesson_forget args:**
+  - A dict, list or number key or reason was converted with `str()`. It is now refused.
+  - A reason made only of invisible characters (ZWSP, BOM, bidi, soft hyphen) passed the "required" check. It is now refused.
+  - The reason is flattened to one line.
+- **Corrupt store entries:** an entry that was a string or a list raised AttributeError *after* the delete, so the agent was told the forget failed when it had actually happened. The value shown in the correction post is now flattened.
+- **bridge_status:**
+  - Question text with `\n` or U+2028 forged rows of the status output. It is now flattened, following the round 44 rule: store raw, flatten on display.
+  - Agent names, kinds and ids are escaped.
+  - A post missing kind or agent raised KeyError. A string refs value `"q1"` answered questions `q` and `1`, and an unhashable ref raised TypeError. Posts are now read defensively.
+- Tests: `tests/test_searchproc_lessonforget_robust.py`.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import os
 import shutil
+import shlex
 import signal
 import socket
 import stat
@@ -194,7 +195,11 @@ class Env:
         shutil.rmtree(self.repo / ".venv", ignore_errors=True)
         venv.mkdir(parents=True)
         (venv / "activate").write_text("")
-        (venv / "python").symlink_to(sys.executable)
+        # A nested symlink to a venv's interpreter loses that venv's pyvenv.cfg
+        # and can fall back to the base Python without pytest/dependencies.
+        interpreter = venv / "python"
+        interpreter.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        interpreter.chmod(0o755)
         self.drive = tmp / drive_name
         self.drive.mkdir()
         self.stub = tmp / "stub"; self.stub.mkdir()

@@ -61,3 +61,30 @@ python -m pytest -q tests/test_evidence_pool*.py tests/test_fusion*.py \
 
 No production configuration, credentials, deployment or main-branch publication
 is changed by this candidate.
+
+## Pinned main-line refresh and portable offline fixture
+
+A second bounded refresh includes main commit
+[096f562841e797c50b4117387511d735016270b4](https://github.com/doitupsolutions810-crow/avrone-daemon/commit/096f562841e797c50b4117387511d735016270b4)
+on top of published integration commit
+[592ae044fd7b7dcb43a65abf1f8a2a15a2144bb3](https://github.com/doitupsolutions810-crow/avrone-daemon/commit/592ae044fd7b7dcb43a65abf1f8a2a15a2144bb3).
+It adds the newer search/lesson-forget hardening and associated tests. The
+scanner conflict preserves the existing zero/negative-budget no-I/O boundary
+and exclusion of symlink directories while retaining strict typed limits,
+newline-only line numbers, BOM/CRLF handling and bounded previews.
+
+The initial merged-tree full run completed with **8,269 passed, one failed,
+two skipped**, 69 warnings, in 823.46 seconds. The sole failure was
+`test_offline_rerun_with_deps_installed_continues`: the test's fake virtual
+environment used a nested symlink to the running interpreter. That lost its
+actual virtual-environment identity and selected the base interpreter without
+pytest, so the production dependency preflight correctly refused to continue.
+
+The test fixture now uses a shell-quoted exec wrapper for the actual
+`sys.executable`. Production offline dependency checking is unchanged.
+The offline-positive, missing-dependency-negative, broken-environment rebuild,
+new-main scanner/lesson-forget and handoff checks passed together:
+**110 passed**, zero failures, 16.91 seconds.
+
+These refreshed sources have focused verification; the earlier full run is
+recorded with its one fixture failure and is not relabeled as a clean full pass.

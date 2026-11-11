@@ -46,12 +46,19 @@ def test_cyclic_result_is_serialized_without_recursion_escape():
     cyclic.append(cyclic)
     encoded = _encode_result(cyclic)
     decoded = json.loads(encoded)
-    assert isinstance(decoded, str)
-    assert "[...]" in decoded
+    assert "OMITTED: result nesting limit" in encoded
+    depth = 0
+    while isinstance(decoded, list) and len(decoded) == 1:
+        decoded = decoded[0]
+        depth += 1
+        assert depth <= 65
+    assert decoded == "[OMITTED: result nesting limit]"
 
 
 def test_oversized_result_is_truncated_to_valid_json():
-    value = _token() + ("x" * (RESULT_MAX + 4096))
+    # Separate the credential from the payload: when concatenated directly, the
+    # redactor correctly treats the whole token-like run as one secret value.
+    value = ("x" * (RESULT_MAX + 4096)) + " " + _token()
     encoded = _encode_result(value)
     decoded = json.loads(encoded)
     assert decoded["truncated"] is True

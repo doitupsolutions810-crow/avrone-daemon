@@ -22,6 +22,35 @@ from typing import Any
 
 log = logging.getLogger("avrone.mcp_server")
 
+# json.loads accepts JavaScript-style NaN/Infinity by default. Keep top-level scalar
+# junk tolerant for backwards compatibility, but never let these non-JSON tokens enter
+# request objects or batches. Large exponent values remain valid JSON and are validated
+# by the downstream argument/schema boundary.
+_INVALID_JSON_CONSTANT = object()
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject duplicate member names instead of silently accepting the last value."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _has_non_json_constant(value: Any) -> bool:
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if item is _INVALID_JSON_CONSTANT:
+            return True
+        if isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
+
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 from . import __version__ as _AVRONE_VERSION  # noqa: E402
@@ -176,7 +205,10 @@ class AvroneMCPServer:
             if not line:
                 continue
             try:
-                msg = json.loads(line)
+                msg = json.loads(line, object_pairs_hook=_unique_json_object,
+                                  parse_constant=lambda _literal: _INVALID_JSON_CONSTANT)
+                if isinstance(msg, (dict, list)) and _has_non_json_constant(msg):
+                    raise ValueError("non-standard JSON numeric constant")
             except (ValueError, RecursionError):
                 # ValueError covers JSONDecodeError and also an integer over Python's 4300-digit limit;
                 # RecursionError is very deep nesting. Both used to escape and kill the whole server.
@@ -186,19 +218,20 @@ class AvroneMCPServer:
                 await self.send({"jsonrpc": "2.0", "id": None,
                                  "error": {"code": -32600, "message": "Invalid Request: empty batch"}})
                 continue
-            items = msg if isinstance(msg, list) else [msg]
+            is_batch = isinstance(msg, list)
+            items = msg if is_batch else [msg]
             cap = max_batch()
             if len(items) > cap:
                 await self.send({"jsonrpc": "2.0", "id": None, "error": {
                     "code": -32600, "message": f"Invalid Request: batch of {len(items)} exceeds {cap} (AVRONE_MCP_MAX_BATCH)"}})
                 continue
             for m in items:
-                self._dispatch(m)
+                self._dispatch(m, batch=is_batch)
         if self._tasks:
             await self._drain()
         await self.shutdown()
 
-    def _dispatch(self, m: Any) -> None:
+    def _dispatch(self, m: Any, *, batch: bool = False) -> None:
         if isinstance(m, dict) and m.get("method") == "notifications/cancelled":
             self._cancel(m.get("params"))
             return
@@ -210,11 +243,11 @@ class AvroneMCPServer:
                 self._tasks.add(t)
                 t.add_done_callback(self._tasks.discard)
                 return
-            t = asyncio.create_task(self._handle_safe(m))
+            t = asyncio.create_task(self._handle_safe(m, batch=batch))
             self._by_id[key] = t
             t.add_done_callback(lambda _t, k=key: self._by_id.pop(k, None) if self._by_id.get(k) is _t else None)
         else:
-            t = asyncio.create_task(self._handle_safe(m))
+            t = asyncio.create_task(self._handle_safe(m, batch=batch))
         self._tasks.add(t)
         t.add_done_callback(self._tasks.discard)
 
@@ -276,9 +309,20 @@ class AvroneMCPServer:
                 with contextlib.suppress(Exception):
                     await runner.stop()
 
-    async def _handle_safe(self, m: Any) -> None:
-        if not isinstance(m, dict) or "method" not in m:
-            return  # responses to requests we never send, or junk
+    async def _handle_safe(self, m: Any, *, batch: bool = False) -> None:
+        if not isinstance(m, dict):
+            if batch:
+                await self.send({"jsonrpc": "2.0", "id": None,
+                                 "error": {"code": -32600, "message": "Invalid Request"}})
+            return  # preserve the existing single-line scalar-junk tolerance
+        if "method" not in m:
+            # Ignore response messages from the client, but malformed request-shaped objects
+            # still need the JSON-RPC Invalid Request response (with a null id).
+            if "result" in m or "error" in m:
+                return
+            await self.send({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32600, "message": "Invalid Request"}})
+            return
         rid = m.get("id")
         is_request = "id" in m
         try:

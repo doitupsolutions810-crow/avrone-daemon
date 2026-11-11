@@ -100,7 +100,7 @@ def learn(data_dir: Any, text: str, run_id: str, topic: str = "", kind: str = "f
 
 def _no_surrogates(s: str) -> str:
     """Lone surrogates -> U+FFFD, so the lesson store (UTF-8) can hold every note that was posted."""
-    return re.sub("[\ud800-\udfff]", "\ufffd", s)
+    return re.sub(r"[\ud800-\udfff]", "\ufffd", s)
 
 
 async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:

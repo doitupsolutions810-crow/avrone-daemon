@@ -422,7 +422,10 @@ class JobQueue:
         """Fence for writes from a claimer: a worker whose lease ran out (and whose job another
         worker re-claimed) must not mark that job done, requeue it, or overwrite its result."""
         if token is None:
-            return "", ()
+            # Preserve legacy tokenless callers, but never let a tokenless write mutate a
+            # queued, terminal, or otherwise non-running row. This prevents repeated
+            # tokenless completion/failure calls from overwriting a recorded terminal result.
+            return " AND status='running'", ()
         return " AND status='running' AND token=?", (token,)
 
     async def complete(self, jid: str, result: Any, token: str | None = None) -> bool:

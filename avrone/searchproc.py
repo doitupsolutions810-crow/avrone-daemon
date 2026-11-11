@@ -21,14 +21,37 @@ from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
+    """Iterative, deterministic walk: os.walk recurses once per directory level."""
     if root.is_file():
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
+
+    # Keep path strings in the stack. Besides avoiding Python recursion, this keeps
+    # deep trees below Python's call-stack limit while preserving os.walk's sorted
+    # depth-first order and its default refusal to follow symlinked directories.
+    stack = [os.fspath(root)]
+    while stack:
+        directory = stack.pop()
+        try:
+            with os.scandir(directory) as scan:
+                entries = sorted(scan, key=lambda entry: entry.name)
+        except OSError:
+            continue
+
+        child_dirs: list[str] = []
+        files: list[Path] = []
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in skip_names and entry.path not in skip_paths:
+                        child_dirs.append(entry.path)
+                else:
+                    files.append(Path(entry.path))
+            except OSError:
+                continue
+
+        yield from files
+        stack.extend(reversed(child_dirs))
 
 
 def run(req: dict, out) -> None:

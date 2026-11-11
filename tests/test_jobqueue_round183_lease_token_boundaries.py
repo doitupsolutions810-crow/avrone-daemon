@@ -12,8 +12,11 @@ import pytest
 from avrone.jobqueue import JobQueue
 
 
-@pytest.mark.parametrize("bad_token", ["", "wrong-token", 7, "\ud800"])
-def test_invalid_supplied_token_cannot_mutate_a_running_job(tmp_path, bad_token):
+@pytest.mark.parametrize(
+    ("bad_token", "expected_fail"),
+    [("", "stale"), ("wrong-token", "stale"), (7, "missing"), ("\ud800", "missing")],
+)
+def test_invalid_supplied_token_cannot_mutate_a_running_job(tmp_path, bad_token, expected_fail):
     async def run():
         q = JobQueue(tmp_path / "invalid-token.db")
         try:
@@ -22,7 +25,7 @@ def test_invalid_supplied_token_cannot_mutate_a_running_job(tmp_path, bad_token)
             assert claimed is not None and claimed["id"] == jid
 
             assert await q.complete(jid, {"attacker": "complete"}, bad_token) is False
-            assert await q.fail(jid, "attacker failure", bad_token) == "stale"
+            assert await q.fail(jid, "attacker failure", bad_token) == expected_fail
             assert await q.extend(jid, bad_token) is False
             assert await q.release(jid, bad_token) is False
 

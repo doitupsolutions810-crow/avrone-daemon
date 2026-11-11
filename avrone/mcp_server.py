@@ -284,7 +284,13 @@ class AvroneMCPServer:
                                  "error": {"code": -32600, "message": "Invalid Request"}})
             return  # preserve the existing single-line scalar-junk tolerance
         if "method" not in m:
-            return  # responses to requests we never send
+            # Ignore response messages from the client, but malformed request-shaped objects
+            # still need the JSON-RPC Invalid Request response (with a null id).
+            if "result" in m or "error" in m:
+                return
+            await self.send({"jsonrpc": "2.0", "id": None,
+                             "error": {"code": -32600, "message": "Invalid Request"}})
+            return
         rid = m.get("id")
         is_request = "id" in m
         try:

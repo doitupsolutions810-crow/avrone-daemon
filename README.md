@@ -81,6 +81,17 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.147: Round 154: bridge journal and server log redacted
+
+- **Before:** only CodeX events went through `ctxspawn.redact`.
+  - `Bridge.post` stored the raw text in the journal, and the journal is relayed to every peer and to the fusion evidence bus. A finding that quoted a config (`token=...`, `curl -u admin:pw`) shipped verbatim.
+  - A peer's post that was never redacted was merged here and then exported again.
+  - `avrone.*` log records (MCP stderr, peer error bodies, exceptions that quote URLs with credentials) were escaped in round 150 but not redacted.
+- **Bridge fix:** `bridge._clip` now redacts, and it runs before the text is cut. That covers `post`, `merge_remote` and fusion blackboard POST validation. Journal replay skips redaction (`redact=False`) because those lines were redacted when they were written and a replay runs on every blackboard poll. A 5,000-line replay takes about 6 ms.
+- **Log fix:** `logsafe` redacts string and exception args, and messages built with f-strings, before escaping them. Third-party loggers are untouched.
+- **Not redacted:** journals written before v0.147 stay as they are on disk. Clear them, or let compaction rotate them out.
+- **Tests:** `tests/test_round154_redact_sinks.py` (5). 3 fail on v0.146. The replay and third-party tests are guards.
+
 ## v0.146: Round 153: secrets identified by the words around them
 
 - **Gap:** `ctxspawn.redact` (applied to every CodeX event) let these through unmasked. They appear whenever an agent echoes a shell command or an HTTP exchange:

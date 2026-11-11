@@ -21,11 +21,24 @@ from .textsafe import UNSAFE_ONE, escape
 _installed = False
 
 
+def _redact(s: str) -> str:
+    """Round 154: secrets are masked too. MCP stderr ("using token ghp_..."), a peer's error body
+    or an exception quoting a URL with credentials went to the server log verbatim, which is the
+    one sink CodeX redaction never covered."""
+    try:
+        from .ctxspawn import redact
+        return redact(s)
+    except Exception:  # noqa: BLE001  (import cycle at startup, or anything else: keep the text)
+        return s
+
+
 def _clean(a: Any) -> Any:
     if isinstance(a, BaseException):
         a = f"{a}"
-    if isinstance(a, str) and UNSAFE_ONE.search(a):
-        return escape(a)
+    if isinstance(a, str):
+        a = _redact(a)
+        if UNSAFE_ONE.search(a):
+            return escape(a)
     return a
 
 
@@ -49,9 +62,11 @@ def install() -> None:
             if rec.name == "avrone" or rec.name.startswith("avrone."):
                 if rec.args:
                     rec.args = clean_args(rec.args)
-                elif isinstance(rec.msg, str) and UNSAFE_ONE.search(rec.msg.rstrip("\n")):
-                    # a message built with an f-string: no template to keep, so all of it is escaped
-                    rec.msg = escape(rec.msg)
+                elif isinstance(rec.msg, str):
+                    rec.msg = _redact(rec.msg)  # round 154
+                    if UNSAFE_ONE.search(rec.msg.rstrip("\n")):
+                        # a message built with an f-string: no template to keep, so all of it is escaped
+                        rec.msg = escape(rec.msg)
         except Exception:  # noqa: BLE001  logging must never raise from here
             pass
         return rec

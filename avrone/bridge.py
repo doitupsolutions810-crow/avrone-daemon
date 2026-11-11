@@ -90,8 +90,19 @@ def safe_run_id(run_id: Any) -> str:
     return (rid or "run") + "-" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
-def _clip(text: Any) -> str:
-    t = str(text if text is not None else "").strip()
+def _clip(text: Any, redact: bool = True) -> str:
+    """Round 154: the text is redacted before it is kept. The bridge journal is relayed to every
+    peer (fleet relay, the fusion evidence bus), and only the CodeX copy of a post was redacted, so
+    a finding that quoted a config ("token=...", "curl -u admin:pw") was shipped verbatim. Merged
+    remote posts go through here too, so a peer that did not redact is not re-exported as is.
+    Redacting before the cut keeps a token from being cut into a shape no rule knows. Journal
+    replay passes redact=False: those lines were redacted when they were written, and a replay
+    runs on every blackboard poll."""
+    t = str(text if text is not None else "")
+    if redact:
+        from .ctxspawn import redact as _redact
+        t = _redact(t)
+    t = t.strip()
     return t if len(t) <= MAX_TEXT else t[: MAX_TEXT - 3] + "..."
 
 
@@ -220,7 +231,7 @@ class Bridge:
         if rec.get("kind") not in KINDS or not isinstance(rec.get("text"), str):
             return None
         rec["refs"] = _refs(rec.get("refs"))
-        rec["text"] = _clip(rec["text"])
+        rec["text"] = _clip(rec["text"], redact=False)
         return rec
 
     @contextlib.contextmanager
@@ -348,7 +359,8 @@ class Bridge:
                     stats["skipped"] += 1
                     continue
                 rec = {"id": rec["id"], "run_id": self.run_id, "agent": str(rec.get("agent") or "agent")[:80],
-                       "role": str(rec.get("role") or "")[:60], "kind": rec["kind"], "text": rec["text"],
+                       "role": str(rec.get("role") or "")[:60], "kind": rec["kind"],
+                       "text": _clip(rec["text"]),  # round 154: a peer's post is redacted before we keep it
                        "refs": rec["refs"], "ts": _remote_ts(rec.get("ts")),
                        "origin_node": str(rec.get("origin_node") or origin)[:80]}
                 self._posts[rec["id"]] = rec

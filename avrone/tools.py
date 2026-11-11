@@ -589,7 +589,7 @@ def write_content(raw: Any) -> str:
         text = raw.decode("utf-8", "replace")
     else:
         text = str(raw)
-    return re.sub(rr"[\ud800-\udfff]", "\ufffd", text)
+    return re.sub(r"[\ud800-\udfff]", "\ufffd", text)
 
 
 def atomic_write_bytes(p: Path, data: bytes) -> None:

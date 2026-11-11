@@ -155,6 +155,19 @@ CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(status, updated);
 """
 
 
+
+def _id_ok(jid: Any, token: Any = None) -> bool:
+    """round 166: a job id / lease token sqlite cannot bind (lone surrogate, non-str) names no job.
+    get() raised UnicodeEncodeError for such an id (queue_status job_id="\ud800")."""
+    for v in (jid,) if token is None else (jid, token):
+        if not isinstance(v, str):
+            return False
+        try:
+            v.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+    return True
+
 class JobQueue:
     def __init__(self, path: Path, lease_s: float = 900):
         self.path = Path(path)
@@ -358,6 +371,8 @@ class JobQueue:
 
     async def complete(self, jid: str, result: Any, token: str | None = None) -> bool:
         """True when the result was recorded; False when the lease was lost (someone else owns it)."""
+        if not _id_ok(jid, token):
+            return False
         text = _encode_result(result)
         clause, extra = self._owner(token)
         cur = await self._run(lambda: self._db.execute(
@@ -368,6 +383,8 @@ class JobQueue:
     async def fail(self, jid: str, error: Any, token: str | None = None, permanent: bool = False) -> str:
         """'dead', 'requeued', 'missing' (no such job) or 'stale' (the lease was lost).
         permanent=True: dead now, whatever attempts remain."""
+        if not _id_ok(jid, token):
+            return "missing"
         err = _err_text(error)
         clause, extra = self._owner(token)
 
@@ -388,6 +405,8 @@ class JobQueue:
 
     async def extend(self, jid: str, token: str, seconds: float | None = None) -> bool:
         """Heartbeat: push a running job's lease out. False when the lease is already lost."""
+        if not _id_ok(jid, token):
+            return False
         # seconds=inf (or "1e400", 1e300) used to write an infinite lease: the job could never be
         # reaped again if its worker then died. NaN/junk now means "one normal lease".
         try:
@@ -405,12 +424,16 @@ class JobQueue:
     async def release(self, jid: str, token: str) -> bool:
         """Give a claimed job back untouched (worker shutting down): queued again right away and
         the attempt is not counted. Before, a cancelled job sat 'running' for the whole lease."""
+        if not _id_ok(jid, token):
+            return False
         cur = await self._run(lambda: self._db.execute(
             "UPDATE jobs SET status='queued', attempts=MAX(attempts-1,0), lease_until=0, token=NULL, updated=? "
             "WHERE id=? AND status='running' AND token=?", (time.time(), jid, token)))
         return cur.rowcount > 0
 
     async def get(self, jid: str) -> dict[str, Any] | None:
+        if not _id_ok(jid):
+            return None
         def _g() -> dict[str, Any] | None:
             cols = ["id", "kind", "payload", "status", "attempts", "max_attempts", "created", "updated", "result", "error"]
             r = self._db.execute(f"SELECT {','.join(cols)} FROM jobs WHERE id=?", (jid,)).fetchone()

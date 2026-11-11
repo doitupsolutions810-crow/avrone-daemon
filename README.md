@@ -81,6 +81,12 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.159: Round 166: Job ids that sqlite cannot bind
+
+- **Before:** `JobQueue.get("\ud800")` raised `UnicodeEncodeError`, and `queue_status` passed `job_id` straight through to it.
+- **Now:** `get`, `complete`, `fail`, `extend` and `release` treat an id or token that is not a str, or that holds a lone surrogate, as naming no job. `get` returns `None`, `fail` returns `"missing"`, and the others return `False`.
+- **Tests:** `tests/test_round166_job_ids.py` (4). 2 fail on v0.158.
+
 ## v0.158: Round 165: Job payload size limit
 
 - **Before:** `JobQueue.enqueue` had no size limit, so a single 50 MB payload was stored. Every later `claim`, `get` and `list` loaded it in full.

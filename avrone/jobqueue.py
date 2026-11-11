@@ -196,6 +196,8 @@ class JobQueue:
             # instead of failing with "database is locked".
             self._db.execute("PRAGMA busy_timeout=10000")
             self._db.execute("PRAGMA journal_mode=WAL")
+            # round 162: a pruned job's payload/result was left readable in the file's free pages
+            self._db.execute("PRAGMA secure_delete=ON")
             self._db.executescript(SCHEMA)
         except BaseException:
             self._db.close()
@@ -542,6 +544,8 @@ def scrub_db(path: Path | str, fix: bool = False, batch: int = 500) -> dict[str,
     db = sqlite3.connect(f"file:{p}?mode={'rw' if fix else 'ro'}", uri=True, isolation_level=None)
     try:
         db.execute("PRAGMA busy_timeout=10000")
+        if fix:  # round 162: freed cells are zeroed, not left holding the old raw value
+            db.execute("PRAGMA secure_delete=ON")
         last = ""
         while True:
             if fix:
@@ -574,6 +578,12 @@ def scrub_db(path: Path | str, fix: bool = False, batch: int = 500) -> dict[str,
             if len(rows) < batch:
                 break
             last = rows[-1][0]
+        if fix and out["fixed"]:
+            # round 162: the raw values still sat in jobs.db-wal (every page version written since
+            # the last checkpoint) for as long as any queue kept the file open, which on a running
+            # daemon is always. Copy the WAL into the file and truncate it to zero bytes.
+            busy, _log, _done = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            out["wal_cleared"] = int(not busy)
     finally:
         db.close()
     return out

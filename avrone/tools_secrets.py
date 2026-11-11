@@ -294,7 +294,9 @@ async def _jobs_db_report(path: Path, fix: bool) -> list[str]:
     out = []
     if r["flagged"]:
         out.append(f"- jobs.db: {r['flagged']} job(s) with a secret in the stored result or error"
-                   + (f"; fixed {r['fixed']}" if fix else " (fix=true masks them)"))
+                   + (f"; fixed {r['fixed']}" if fix else " (fix=true masks them)")
+                   + ("" if not fix or r.get("wal_cleared", 1) else
+                      "; the old values are still in jobs.db-wal (a reader held it), run fix again"))
     if r["payloads"]:
         out.append(f"- jobs.db: {r['payloads']} job payload(s) hold a secret (task input; never rewritten, fix by hand)")
     return out

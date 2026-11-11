@@ -81,6 +81,18 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.155: Round 162: jobs.db scrub leaves no raw copy on disk
+
+- **Bug:** v0.152's `scrub_db(fix=True)` masked the rows, but the raw values stayed readable on disk in two places:
+  - **Freed cells in `jobs.db`:** a probe found 100 raw copies after the fix.
+  - **`jobs.db-wal`:** every page version since the last checkpoint stays there for as long as a queue keeps the file open, which a running daemon always does.
+- **Fix in `scrub_db`:**
+  - Updates now run with `PRAGMA secure_delete=ON`, so freed cells are zeroed.
+  - It ends with `PRAGMA wal_checkpoint(TRUNCATE)`.
+  - It reports `wal_cleared`. When a reader blocks the truncate, `secret_scan` says to run fix again.
+- **Fix in `JobQueue`:** its connection now also uses `secure_delete`, so a pruned job's payload and result no longer linger in free pages.
+- **Tests:** `tests/test_round162_jobs_db_residue.py` (3). 2 fail on v0.154. The probe is `/workspace/work/jobsresid2.py`.
+
 ## v0.154: Round 161: key=value redaction keeps quotes, spares token counts
 
 - **Usage numbers were masked.** The key=value rule hid the value of any key that holds "token". So `max_tokens=4096`, `"prompt_tokens": 12` and `"token_count": 3` were masked in every model usage line.

@@ -139,6 +139,30 @@ def exc_text(e: BaseException) -> str:
     return f"{type(e).__name__}: {msg}"
 
 
+def _validate_payload_depth(value: Any, max_depth: int = 64) -> None:
+    """Reject pathological JSON nesting consistently across Python versions.
+
+    Do not rely on json.dumps raising RecursionError: its effective recursion limit varies
+    across interpreter versions. An explicit stack avoids consuming the Python call stack.
+    Cycles are left for json.dumps to reject with its normal circular-reference ValueError.
+    """
+    stack = [(value, 0, frozenset())]
+    while stack:
+        node, depth, ancestors = stack.pop()
+        if not isinstance(node, (dict, list, tuple)):
+            continue
+        if depth > max_depth:
+            raise ValueError("job payload is nested too deeply")
+        identity = id(node)
+        if identity in ancestors:
+            continue
+        next_ancestors = ancestors | {identity}
+        children = node.values() if isinstance(node, dict) else node
+        for child in children:
+            if isinstance(child, (dict, list, tuple)):
+                stack.append((child, depth + 1, next_ancestors))
+
+
 def _redact_result(v: Any, depth: int = 0) -> Any:
     """Mask secrets at every traversed depth; never return an uninspected deep subtree."""
     from .ctxspawn import redact
@@ -292,6 +316,8 @@ class JobQueue:
             raise ValueError("job payload must be a JSON object")
         jid = uuid.uuid4().hex[:12]
         now = time.time()
+        # Enforce a stable nesting bound: encoder recursion limits differ by Python version.
+        _validate_payload_depth(payload)
         # Strict JSON rejects NaN/Infinity, which are accepted by Python's encoder by default.
         try:
             body = json.dumps(payload, allow_nan=False)

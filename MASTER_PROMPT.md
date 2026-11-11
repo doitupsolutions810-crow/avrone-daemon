@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.155.0)
+# AVRONE MASTER PROMPT (v0.156.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~16 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~3 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -110,7 +110,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 338 test files, offline by default
+├── tests/                  # 339 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -325,6 +325,16 @@ landed and the suite is green. End with what is still open.
 `AVRONE_ADMIN_TOKEN`, `AVRONE_ADMIN_TOKEN_PREVIOUS`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_FUSION_STATE_PATH`, `AVRONE_FUSION_WATCH_PATH`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
+## v0.156: Round 163: secret_scan fix masks memory values
+
+- **The gap:** `memory_save` stored values raw, and fleet memory sync sent them to the parent node. `secret_scan` flagged `memory.jsonl`, but `fix` refused to change it.
+- **The fix:** `secret_scan {"scope":"data","fix":true}` now calls the new `MemoryStore.scrub()`.
+  - It masks each stored value under the store's own lock.
+  - It rewrites the file, which drops superseded records, so no older raw line stays behind.
+- **Sync safety:** every masked value gets a newer LWW timestamp (`_next_ts`). A peer still holding the raw copy at the old timestamp loses on the next merge. Without the bump, it could win the equal-timestamp tie-break and bring the raw value back.
+- **Keys are not rewritten:** a key is the record's identity, so a secret inside a key is counted and reported, and you remove it by hand.
+- **Tests:** `tests/test_round163_memory_scrub.py` has 3 tests. All 3 fail on v0.155.
+
 ## v0.155: Round 162: jobs.db scrub leaves no raw copy on disk
 
 - **Bug:** v0.152's `scrub_db(fix=True)` masked the rows, but the raw values stayed readable on disk in two places:
@@ -350,25 +360,6 @@ landed and the suite is green. End with what is still open.
 - **Updated test oracle.** `test_round63_redact_redos` now models both changes.
 - **Tests.** `tests/test_round161_kv_values.py` has 16 tests, and 10 of them fail on v0.153.
 
-## v0.153: Round 160: more context secrets, nested key=value fix
-
-- A probe of 44 config and CLI forms found 13 that `redact` and `secret_scan` let through. All 13 are fixed.
-- Nine new `secretshapes.CONTEXT_RULES`:
-  - `netrc`: the host must contain a dot, or the line starts with `default`.
-  - `pgpass`: matches a whole line. The user field must contain a non-hex letter, so IPv6 addresses and dotted times are not matched.
-  - `docker-auth`: `"auth"`, `"identitytoken"` and `"registrytoken"`.
-  - `ps-securestring`: `ConvertTo-SecureString "x"`.
-  - `kube-client-key`: `client-key-data`.
-  - `putty-key`: the `Private-Lines` block, in raw or JSON-escaped form.
-  - `dsn-key`: a 32-hex DSN user, as in Sentry.
-  - `conn-string-secret`: `Pwd=`, `AccountKey=`, `SharedAccessKey=` and `SharedAccessSignature=`.
-  - `password-hash`: crypt hashes such as `$apr1$`, `$2y$` and `$6$` after a colon.
-- The CLI flag rule now covers any `--x-...-SECRETWORD` flag, such as `--client-secret`, `--db-password` and `--secret-key`. A flag whose last part is not a secret word, like `--token-file PATH`, is left alone.
-- Key=value bug: for `{"credentials": {"secret": "x"}}`, the rule masked the `{` and the nested secret went out raw. An unquoted value may no longer open `{`.
-- Left alone on purpose: prose such as "machine learning password reset", `--api-key-file`, and `a:1:b:c:d`.
-- Known behavior, not changed: the key=value rule also masks numeric values (`{"tokens": 3}`). A quoted value loses its quotes, so JSON lines are redacted value by value wherever that matters, as `secret_scan fix` already does.
-- Tests: `tests/test_round160_more_context_secrets.py` (27). 16 fail on v0.152.
-
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
   a persistent volume (fleet replay cache lives there).
@@ -380,4 +371,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.155.0 checked out: 16 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.156.0 checked out: 3 passed, 99% coverage. Next: round <N+1> on <angle>."

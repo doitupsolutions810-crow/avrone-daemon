@@ -81,6 +81,16 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.156: Round 163: secret_scan fix masks memory values
+
+- **The gap:** `memory_save` stored values raw, and fleet memory sync sent them to the parent node. `secret_scan` flagged `memory.jsonl`, but `fix` refused to change it.
+- **The fix:** `secret_scan {"scope":"data","fix":true}` now calls the new `MemoryStore.scrub()`.
+  - It masks each stored value under the store's own lock.
+  - It rewrites the file, which drops superseded records, so no older raw line stays behind.
+- **Sync safety:** every masked value gets a newer LWW timestamp (`_next_ts`). A peer still holding the raw copy at the old timestamp loses on the next merge. Without the bump, it could win the equal-timestamp tie-break and bring the raw value back.
+- **Keys are not rewritten:** a key is the record's identity, so a secret inside a key is counted and reported, and you remove it by hand.
+- **Tests:** `tests/test_round163_memory_scrub.py` has 3 tests. All 3 fail on v0.155.
+
 ## v0.155: Round 162: jobs.db scrub leaves no raw copy on disk
 
 - **Bug:** v0.152's `scrub_db(fix=True)` masked the rows, but the raw values stayed readable on disk in two places:

@@ -307,7 +307,7 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if scope not in ("runs", "data", "workspace"):
         return "ERROR: scope must be runs, data or workspace"
     if args.get("fix") is True and scope not in ("runs", "data"):
-        return "ERROR: fix is only allowed for scope runs or data (run logs, bridge journals); fix other files by hand"
+        return "ERROR: fix is only allowed for scope runs or data (run logs, bridge journals, memory, jobs.db); fix other files by hand"
     root = _roots(ctx, scope)
     if root is None:
         return f"secret_scan: no {scope} directory configured on this node"
@@ -340,6 +340,15 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
             from .bridge import fix_journal
             core = getattr(ctx, "core", None)
             nb = 0
+            if "memory.jsonl" in paths:  # round 163: memory values (the store's own lock and rewrite)
+                from .memstore import MemoryStore
+                try:
+                    mr = await asyncio.to_thread(MemoryStore(root / "memory.jsonl").scrub)
+                    lines.append(f"memory: masked {mr['values']} value(s)"
+                                 + (f"; {mr['keys']} key(s) hold a secret (keys are not rewritten, "
+                                    "fix them by hand)" if mr["keys"] else ""))
+                except OSError as e:
+                    lines.append(f"memory: NOT fixed ({type(e).__name__})")
             for x in sorted(paths):
                 if x.startswith("bridge/") and "/" not in x[7:]:
                     try:

@@ -250,9 +250,13 @@ class JobQueue:
             kind.encode("utf-8")
         except UnicodeEncodeError:
             raise ValueError("job kind must be valid text (no lone surrogates)") from None
+        if not isinstance(payload, dict):
+            raise ValueError("job payload must be a JSON object")
         jid = uuid.uuid4().hex[:12]
         now = time.time()
-        body = json.dumps(payload)  # an unserializable payload fails HERE, to the caller, not in a worker
+        # Reject NaN/Infinity: Python's default encoder emits these non-standard JSON tokens,
+        # which downstream strict-JSON consumers cannot reliably parse.
+        body = json.dumps(payload, allow_nan=False)  # unserializable values fail before a row is inserted
         try:
             prio = int(priority)
         except (TypeError, ValueError, OverflowError):

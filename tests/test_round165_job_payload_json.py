@@ -63,3 +63,63 @@ def test_extreme_nesting_is_rejected_without_insert(tmp_path):
         finally:
             await q.close()
     asyncio.run(go())
+
+
+
+def test_payload_depth_limit_is_explicit_and_cross_version(tmp_path):
+    async def enqueue_depth(depth):
+        payload = {}
+        cursor = payload
+        for _ in range(depth):
+            cursor["nested"] = {}
+            cursor = cursor["nested"]
+        q = JobQueue(tmp_path / f"depth-{depth}.db")
+        try:
+            return await q.enqueue("depth", payload)
+        finally:
+            await q.close()
+
+    async def run():
+        await enqueue_depth(64)
+        with pytest.raises(ValueError, match="nested too deeply"):
+            await enqueue_depth(65)
+
+    asyncio.run(run())
+
+
+def test_circular_payload_is_rejected_without_poisoning_queue(tmp_path):
+    async def run():
+        q = JobQueue(tmp_path / "circular.db")
+        try:
+            payload = {}
+            payload["self"] = payload
+            with pytest.raises(ValueError, match="Circular reference"):
+                await q.enqueue("cycle", payload)
+            assert await q.stats() == {}
+            jid = await q.enqueue("after-cycle", {"valid": True})
+            assert await q.get(jid) is not None
+        finally:
+            await q.close()
+
+    asyncio.run(run())
+
+
+def test_shared_nested_object_is_checked_at_each_depth(tmp_path):
+    async def run():
+        q = JobQueue(tmp_path / "shared-depth.db")
+        try:
+            shared = {"leaf": True}
+            shallow = {"shared": shared}
+            deep = {}
+            cursor = deep
+            for _ in range(64):
+                cursor["next"] = {}
+                cursor = cursor["next"]
+            cursor["shared"] = shared
+            with pytest.raises(ValueError, match="nested too deeply"):
+                await q.enqueue("shared-depth", {"shallow": shallow, "deep": deep})
+            assert await q.stats() == {}
+        finally:
+            await q.close()
+
+    asyncio.run(run())

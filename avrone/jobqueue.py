@@ -128,19 +128,25 @@ def exc_text(e: BaseException) -> str:
 
 
 def _redact_result(v: Any, depth: int = 0) -> Any:
-    """Round 155: secrets in a job's result are masked before it is stored and served, as they are
-    in the run's CodeX log (a fleet job's answer reached the requesting peer verbatim)."""
+    """Mask secrets at every traversed depth; never return an uninspected deep subtree."""
     from .ctxspawn import redact
-    if depth > 64:
-        return v
     if isinstance(v, str):
         return redact(v)
+    if depth > 64:
+        # Returning the original subtree here leaked secrets nested beyond the traversal limit.
+        # Replace containers with a marker, while still redacting scalar strings above.
+        if isinstance(v, (dict, list, tuple)):
+            return "[OMITTED: result nesting limit]"
+        return v
     if isinstance(v, list):
         return [_redact_result(x, depth + 1) for x in v]
     if isinstance(v, tuple):
         return tuple(_redact_result(x, depth + 1) for x in v)
     if isinstance(v, dict):
-        return {k: _redact_result(x, depth + 1) for k, x in v.items()}
+        return {
+            redact(k) if isinstance(k, str) else k: _redact_result(x, depth + 1)
+            for k, x in v.items()
+        }
     return v
 
 SCHEMA = """

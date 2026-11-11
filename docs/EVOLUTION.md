@@ -355,3 +355,20 @@ Verify.sh exists in the repo tree (root). docker-verify job is present in .githu
 CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
 
 On main: most recent CI runs (e.g. 43009286251, 43006129553) show failure conclusions. Focus remains on the requested branch. No force-push, no branch deletion performed.
+
+## CI Status Check 2026-11-11 (descent/xcv-trust-gates, head b2cd74d3) — GREEN
+
+Most recent CI run (43036576996) completed with success. Real runners assigned (runner_id 1000009632/9633/9634 non-zero, runner_name "GitHub Actions ..." present; not the known account-wide no-runner / runner-id-zero / logs-404 provisioning fault).
+
+All jobs succeeded:
+- docker-verify: success (Verify.sh ran inside image)
+- test (3.11): success
+- test (3.12): success
+
+No code failures. CI remains green after previous docs appends.
+
+Verify.sh exists in the repo tree (root). docker-verify job is present in .github/workflows/ci.yml (and succeeded).
+
+CI is green on descent/xcv-trust-gates. Recommend pausing this automation.
+
+On main: most recent CI run (43009286251) failed on test (3.11) with real runner assigned (runner_id 1000009625); test (3.12) succeeded. Focus remains on the requested branch. No force-push, no branch deletion performed.

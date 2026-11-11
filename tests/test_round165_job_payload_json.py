@@ -45,3 +45,21 @@ def test_valid_nested_payload_still_round_trips(tmp_path):
         finally:
             await q.close()
     asyncio.run(go())
+
+
+def test_extreme_nesting_is_rejected_without_insert(tmp_path):
+    payload = {}
+    cursor = payload
+    for _ in range(1500):
+        cursor["nested"] = {}
+        cursor = cursor["nested"]
+
+    async def go():
+        q = JobQueue(tmp_path / "jobs.db")
+        try:
+            with pytest.raises(ValueError, match="nested too deeply"):
+                await q.enqueue("run", payload)
+            assert await q.stats() == {}
+        finally:
+            await q.close()
+    asyncio.run(go())

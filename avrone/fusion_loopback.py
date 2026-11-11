@@ -18,7 +18,12 @@ from urllib.parse import urlsplit
 
 
 def host_text(host: str | None) -> str:
-    name = str(host or "").strip().lower()
+    raw = str(host or "")
+    # Peer identities are not presentation text: normalization must not erase
+    # disguising whitespace/C0/C1 controls and turn them into loopback.
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in raw):
+        return ""
+    name = raw.lower()
     if "[" in name or "]" in name:
         # Only one balanced IPv6 literal wrapper is legitimate. strip("[]")
         # silently promoted malformed peer strings to trusted loopback hosts.
@@ -88,6 +93,10 @@ def origin_key(base: str) -> str:
     the access policy would treat both hosts as loopback. Other hosts keep
     their own key, so 10.0.0.1 is not folded into loopback.
     """
+    # urlsplit silently strips leading C0 and embedded CR/LF/TAB. Reject
+    # those before parsing so malformed source URLs cannot alias real origins.
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in base or ""):
+        return "invalid:"
     try:
         parts = urlsplit(base or "")
         # urlsplit defers malformed or out-of-range port errors until .port

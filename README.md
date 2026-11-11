@@ -81,6 +81,22 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.148: Round 155: job errors always recorded, job results and errors redacted
+
+- `JobQueue.fail` raised in two cases. One was an error containing a lone surrogate (a hostile
+  file name or model text inside an exception), which made sqlite raise UnicodeEncodeError. The
+  other was an exception whose `__str__` raised. The failure was then never saved: the job stayed
+  `running` until its lease ran out and then ran again, and a `PermanentJobError` was retried
+  instead of going dead. `_err_text` now always returns storable text: unprintable exceptions
+  become `<Type: unprintable>`, and surrogates are kept as backslash escapes. The Worker builds its
+  error text with `jobqueue.exc_text`.
+- Job results and errors are masked with `ctxspawn.redact` before they are stored. They are served
+  by `/api/fleet/jobs`, and before this a fleet job's answer reached the requesting peer verbatim.
+  Strings are redacted value by value, so numbers and structure are kept. Payloads (the task input)
+  are not changed.
+- Results stored before v0.148 are still raw in the jobs database.
+- Tests: `tests/test_round155_job_errors.py` (6 tests, all fail on v0.147).
+
 ## v0.147: Round 154: bridge journal and server log redacted
 
 - **Before:** only CodeX events went through `ctxspawn.redact`.

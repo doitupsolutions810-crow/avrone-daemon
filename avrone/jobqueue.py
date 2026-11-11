@@ -74,6 +74,10 @@ def _encode_result(result: Any) -> str:
     result (the finished job was then failed and RE-RUN) and cut long results mid-token, so get()
     crashed on the stored text forever after."""
     try:
+        result = _redact_result(result)
+    except Exception:  # noqa: BLE001  (a cyclic or odd object: json.dumps below reports it)
+        pass
+    try:
         text = json.dumps(result, default=str, allow_nan=False)
     except (TypeError, ValueError):
         text = json.dumps(repr(result))
@@ -92,7 +96,52 @@ def _decode(text: Any) -> Any:
 
 
 def _err_text(error: Any) -> str:
-    return (error if isinstance(error, str) else str(error))[:ERROR_MAX]
+    """Round 155: always storable. A lone surrogate in an error (a hostile file name or model
+    text inside an exception) made sqlite raise UnicodeEncodeError, and so did an exception whose
+    __str__ raised: fail() itself failed, the job stayed 'running' until its lease ran out and
+    then ran again, and a PermanentJobError was retried instead of going dead. The text is also
+    redacted, since /api/fleet/jobs returns it and it is kept on disk ("could not reach
+    https://user:pw@host")."""
+    if isinstance(error, str):
+        text = error
+    else:
+        try:
+            text = str(error)
+        except Exception:  # noqa: BLE001
+            text = f"<{type(error).__name__}: unprintable>"
+    text = text[:ERROR_MAX]
+    try:
+        from .ctxspawn import redact
+        text = redact(text)
+    except Exception:  # noqa: BLE001
+        pass
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")[:ERROR_MAX]
+
+
+def exc_text(e: BaseException) -> str:
+    """'Type: message' for any exception, even one whose __str__ raises."""
+    try:
+        msg = str(e)
+    except Exception:  # noqa: BLE001
+        msg = "<unprintable>"
+    return f"{type(e).__name__}: {msg}"
+
+
+def _redact_result(v: Any, depth: int = 0) -> Any:
+    """Round 155: secrets in a job's result are masked before it is stored and served, as they are
+    in the run's CodeX log (a fleet job's answer reached the requesting peer verbatim)."""
+    from .ctxspawn import redact
+    if depth > 64:
+        return v
+    if isinstance(v, str):
+        return redact(v)
+    if isinstance(v, list):
+        return [_redact_result(x, depth + 1) for x in v]
+    if isinstance(v, tuple):
+        return tuple(_redact_result(x, depth + 1) for x in v)
+    if isinstance(v, dict):
+        return {k: _redact_result(x, depth + 1) for k, x in v.items()}
+    return v
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -425,7 +474,7 @@ class Worker:
                     raise
                 except Exception as e:  # noqa: BLE001
                     try:
-                        await self.q.fail(jid, f"{type(e).__name__}: {e}", token,
+                        await self.q.fail(jid, exc_text(e), token,
                                           permanent=isinstance(e, PermanentJobError))
                     except asyncio.CancelledError:
                         raise

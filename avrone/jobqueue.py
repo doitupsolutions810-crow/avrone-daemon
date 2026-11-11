@@ -255,11 +255,18 @@ class JobQueue:
         self._db.execute("BEGIN IMMEDIATE")
         try:
             out = fn()
+            self._db.execute("COMMIT")
+            return out
         except BaseException:
-            self._db.execute("ROLLBACK")
+            # A failed COMMIT (disk-full, I/O error, deferred constraint, authorizer denial)
+            # can leave SQLite's transaction active. Roll it back before this connection is
+            # reused; otherwise later queue operations may run inside the failed transaction.
+            if self._db.in_transaction:
+                try:
+                    self._db.execute("ROLLBACK")
+                except sqlite3.Error:
+                    log.exception("job queue rollback failed after transaction error")
             raise
-        self._db.execute("COMMIT")
-        return out
 
     async def _run(self, fn: Callable[[], Any]) -> Any:
         def guarded() -> Any:

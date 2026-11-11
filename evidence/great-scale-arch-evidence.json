@@ -1,0 +1,15 @@
+{
+  "schema": "great-scale-evidence/v61",
+  "finding": "The script warns when the machine is Darwin but not arm64. This environment is Linux x86_64, so the check is present but not reachable. Linux does not warn. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "platform": "Linux",
+  "arch": "x86_64",
+  "warned": false,
+  "soft": true,
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The architecture-warn check holds. It is Darwin-only."
+}

@@ -81,6 +81,319 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.159: Round 166: Job ids that sqlite cannot bind
+
+- **Before:** `JobQueue.get("\ud800")` raised `UnicodeEncodeError`, and `queue_status` passed `job_id` straight through to it.
+- **Now:** `get`, `complete`, `fail`, `extend` and `release` treat an id or token that is not a str, or that holds a lone surrogate, as naming no job. `get` returns `None`, `fail` returns `"missing"`, and the others return `False`.
+- **Tests:** `tests/test_round166_job_ids.py` (4). 2 fail on v0.158.
+
+## v0.158: Round 165: Job payload size limit
+
+- **Before:** `JobQueue.enqueue` had no size limit, so a single 50 MB payload was stored. Every later `claim`, `get` and `list` loaded it in full.
+- **Now:** serialized payloads over `PAYLOAD_MAX_BYTES` (16 MiB) raise `ValueError`, and nothing is stored. `queue_submit` reports it as `ERROR: job not queued`.
+- **Tests:** `test_oversized_payload_refused`, which fails on v0.157.
+
+## v0.157: Round 164: JobQueue.enqueue validates kind
+
+- **Before:** a `kind` containing a lone surrogate raised a raw `UnicodeEncodeError` out of sqlite. `None` and other objects were saved as their repr.
+- **Now:** these cases raise a `ValueError` that says what is wrong:
+  - an empty kind
+  - a kind longer than 64 characters
+  - a non-printable kind, including a newline
+  - a kind with a surrogate
+  - a bool
+  - `None` and other objects
+- **Unchanged:** a numeric kind is still saved as its text (`123` becomes `"123"`).
+- **Tests:** `tests/test_round164_enqueue_kind.py` (9). 5 fail on v0.156.
+
+## v0.156: Round 163: secret_scan fix masks memory values
+
+- **The gap:** `memory_save` stored values raw, and fleet memory sync sent them to the parent node. `secret_scan` flagged `memory.jsonl`, but `fix` refused to change it.
+- **The fix:** `secret_scan {"scope":"data","fix":true}` now calls the new `MemoryStore.scrub()`.
+  - It masks each stored value under the store's own lock.
+  - It rewrites the file, which drops superseded records, so no older raw line stays behind.
+- **Sync safety:** every masked value gets a newer LWW timestamp (`_next_ts`). A peer still holding the raw copy at the old timestamp loses on the next merge. Without the bump, it could win the equal-timestamp tie-break and bring the raw value back.
+- **Keys are not rewritten:** a key is the record's identity, so a secret inside a key is counted and reported, and you remove it by hand.
+- **Tests:** `tests/test_round163_memory_scrub.py` has 3 tests. All 3 fail on v0.155.
+
+## v0.155: Round 162: jobs.db scrub leaves no raw copy on disk
+
+- **Bug:** v0.152's `scrub_db(fix=True)` masked the rows, but the raw values stayed readable on disk in two places:
+  - **Freed cells in `jobs.db`:** a probe found 100 raw copies after the fix.
+  - **`jobs.db-wal`:** every page version since the last checkpoint stays there for as long as a queue keeps the file open, which a running daemon always does.
+- **Fix in `scrub_db`:**
+  - Updates now run with `PRAGMA secure_delete=ON`, so freed cells are zeroed.
+  - It ends with `PRAGMA wal_checkpoint(TRUNCATE)`.
+  - It reports `wal_cleared`. When a reader blocks the truncate, `secret_scan` says to run fix again.
+- **Fix in `JobQueue`:** its connection now also uses `secure_delete`, so a pruned job's payload and result no longer linger in free pages.
+- **Tests:** `tests/test_round162_jobs_db_residue.py` (3). 2 fail on v0.154. The probe is `/workspace/work/jobsresid2.py`.
+
+## v0.154: Round 161: key=value redaction keeps quotes, spares token counts
+
+- **Usage numbers were masked.** The key=value rule hid the value of any key that holds "token". So `max_tokens=4096`, `"prompt_tokens": 12` and `"token_count": 3` were masked in every model usage line.
+- **Empty and literal values were masked too.** `password: null`, `api_key: true`, `secret=""` and `[]` were all hidden, though none can be a secret.
+- **New `ctxspawn._kv_not_secret` leaves these alone:**
+  - empty values;
+  - the literals true, false, null, none, nil, undefined and `[]`;
+  - numbers of up to 9 digits, but only under a token-count key whose name has no other secret word.
+- **What stays masked.** `password=123456`, `access_token=12345`, `api_key=99` and any number of 10 or more digits are still hidden.
+- **Quotes are kept.** A quoted value is masked inside its quotes (`"password": "[REDACTED]"`), so a redacted JSON line still parses.
+- **Updated test oracle.** `test_round63_redact_redos` now models both changes.
+- **Tests.** `tests/test_round161_kv_values.py` has 16 tests, and 10 of them fail on v0.153.
+
+## v0.153: Round 160: more context secrets, nested key=value fix
+
+- A probe of 44 config and CLI forms found 13 that `redact` and `secret_scan` let through. All 13 are fixed.
+- Nine new `secretshapes.CONTEXT_RULES`:
+  - `netrc`: the host must contain a dot, or the line starts with `default`.
+  - `pgpass`: matches a whole line. The user field must contain a non-hex letter, so IPv6 addresses and dotted times are not matched.
+  - `docker-auth`: `"auth"`, `"identitytoken"` and `"registrytoken"`.
+  - `ps-securestring`: `ConvertTo-SecureString "x"`.
+  - `kube-client-key`: `client-key-data`.
+  - `putty-key`: the `Private-Lines` block, in raw or JSON-escaped form.
+  - `dsn-key`: a 32-hex DSN user, as in Sentry.
+  - `conn-string-secret`: `Pwd=`, `AccountKey=`, `SharedAccessKey=` and `SharedAccessSignature=`.
+  - `password-hash`: crypt hashes such as `$apr1$`, `$2y$` and `$6$` after a colon.
+- The CLI flag rule now covers any `--x-...-SECRETWORD` flag, such as `--client-secret`, `--db-password` and `--secret-key`. A flag whose last part is not a secret word, like `--token-file PATH`, is left alone.
+- Key=value bug: for `{"credentials": {"secret": "x"}}`, the rule masked the `{` and the nested secret went out raw. An unquoted value may no longer open `{`.
+- Left alone on purpose: prose such as "machine learning password reset", `--api-key-file`, and `a:1:b:c:d`.
+- Known behavior, not changed: the key=value rule also masks numeric values (`{"tokens": 3}`). A quoted value loses its quotes, so JSON lines are redacted value by value wherever that matters, as `secret_scan fix` already does.
+- Tests: `tests/test_round160_more_context_secrets.py` (27). 16 fail on v0.152.
+
+## v0.152: Round 159: secret_scan checks jobs.db
+
+Job results and errors written before v0.148 are stored raw in `jobs.db`, and `/api/fleet/jobs`
+returned them unchanged. `secret_scan` never read the database, so these secrets went unreported.
+
+- **What the scan reports.** In scope `data`, `secret_scan` now reads every row of `jobs.db`. It
+  reports jobs whose stored result or error holds a secret, and job payloads that hold one.
+- **What `fix=true` changes.** It masks secrets in results and errors only:
+  - A result is masked value by value and stays valid JSON.
+  - A result that is not valid JSON is stored as one masked string.
+- **What `fix=true` leaves alone.** Payloads are never rewritten, because a queued job must still
+  run as it was submitted. Clean those by hand.
+- **New function `jobqueue.scrub_db(path, fix)`.**
+  - It works in batches of 500 rows, each inside `BEGIN IMMEDIATE`, so it is safe while workers run
+    in other processes.
+  - It opens the database read-only unless fixing.
+  - It never creates a missing `jobs.db` and skips symlinks.
+- **Unreadable database.** A corrupt `jobs.db` is reported as "NOT scanned" and does not count as
+  a finding.
+- **Tests.** `tests/test_round159_jobs_db_scrub.py` has 3 tests. Two of them fail on v0.151.
+
+## v0.151: Round 158: secret_scan fix scrubs bridge journals
+
+- Bridge journals written before v0.147 hold posts unredacted. v0.150 could report them, but
+  `fix=true` was refused outside scope `runs`.
+- `secret_scan {"scope": "data", "fix": true}` now fixes run logs under `runs/` and bridge
+  journals under `bridge/`. Other files are still refused, so they have to be fixed by hand.
+- New `bridge.fix_journal(path, core)`:
+  - Redacts flagged lines value by value, so the journal stays valid JSONL. Bytes that are not
+    UTF-8 are kept.
+  - Takes the same thread lock and cross-process file lock as append and compaction, and writes
+    with an atomic fsync.
+  - Reloads any open Bridge for that journal, because its in-memory ring still served the raw text.
+  - Refuses symlinks and journals over 64 MiB.
+- Caveat: the reload drops a post that exists only in memory because its write failed (a journal
+  lock timeout).
+- The jobs database (`jobs.db`, results stored before v0.148) is still not scrubbed.
+- Tests: `tests/test_round158_bridge_scrub.py` (4 tests). 3 fail on v0.150; the 4th checks that
+  fix stays refused for the workspace. `test_tool_secrets` now checks the workspace refusal.
+
+## v0.150: Round 157: secret_scan reads whole run logs
+
+- `scan()` read only the first 2 MiB of each file and reported the rest CLEAN. Run logs rotate at
+  64 MiB, so a secret logged after the first 2 MiB was never flagged, and `fix` (which rewrites
+  only flagged logs) never removed it.
+  - Run logs and their archives are now streamed whole, up to `FIX_MAX_BYTES` (256 MiB). Other
+    files keep the 2 MiB cap.
+  - One scan reads at most 2 GiB in total.
+  - Long lines are examined in 4 MiB pieces that overlap by 4 KiB.
+  - A file that is only partly read is named in the report ("only partly read (size cap), the
+    rest NOT scanned"), never reported silently CLEAN. `scan()` returns it under `partial`.
+- Lines are now split on `\n` only, the same split `fix` uses. Before, `splitlines()` also split
+  on U+2028, `\x0b`, `\x1c` and other separators, so the reported line numbers were wrong.
+- Hit paths are escaped (`textsafe.escape`). A run log with a newline in its name could forge
+  report lines.
+- `_kinds` first checks whether gated `redact()` changes the line, and skips the line when it
+  does not. A 64 MiB log now scans in 4.4 s instead of 27.7 s.
+- Tests: `tests/test_round157_secret_scan_whole.py` (6 tests, all fail on v0.149).
+  `test_cov14_a` now expects the `partial` key.
+
+## v0.149: Round 156: 27 more secret shapes (vendor tokens, signed URLs, webhooks, Discord)
+
+- A probe of 57 real-world secret formats found 31 that `ctxspawn.redact` passed through and
+  `secret_scan` reported CLEAN. This round masks 27 shapes covering all 31 samples.
+- `secretshapes.TOKEN_PREFIX_RE` (also used by `research_note` and `env_report`) gains 23 vendor
+  prefixes:
+  - Docker `dckr_pat_`
+  - Shopify `shpat_`, `shpss_`, `shpca_`, `shppa_`
+  - Square `sq0atp-`, `sq0csp-`
+  - Grafana `glsa_`, `glc_`
+  - Linear `lin_api_`
+  - PyPI `pypi-AgEIcHlwaS5vcmc…`
+  - DigitalOcean `doo_`, `dop_`, `dor_v1_`
+  - Tailscale `tskey-`
+  - Vercel Blob
+  - Facebook `EAA…`
+  - Mailgun `key-` + 32 hex
+  - Razorpay `rzp_live_`, `rzp_test_`
+  - Figma `figd_`
+  - Notion `ntn_` and `secret_` + 43 characters
+  - Flutterwave `FLWSECK-`
+  - age `AGE-SECRET-KEY-1`
+  - Vault `hvs.`, `hvb.`
+  - HubSpot `pat-na1-`
+  - Atlassian `ATATT3`, `ATCTT3`
+  - Supabase `sbp_`
+  - Twilio API keys `SK` + 32 hex
+- New `CONTEXT_RULES`, which `secret_scan` reports by name:
+  - `url-query-secret`: signed-URL and OAuth query values (`?sig=`, `X-Amz-Signature=`,
+    `X-Goog-Signature=`, `?code=`, `?key=`, `?client_secret=` …). Only the value is masked, so
+    the rest of the URL stays readable.
+  - `slack-webhook` and `discord-webhook`: the secret path of incoming-webhook URLs.
+  - `discord-token`: bot tokens in the three-part base64 form.
+- Known over-match: `?code=` is masked in any URL (`?code=python`).
+- Cost: redacting 1.6 MB of mixed text went from 0.17 s to 0.29 s. Literal gates still skip rules
+  whose prefixes are absent.
+- Fleet hop counts were probed too: they are already validated at the gateway (`_parse_hops`), so
+  that path needed no change.
+- Tests: `tests/test_round156_more_secret_shapes.py` (41 tests). 30 fail on v0.148; the 11 that
+  check ordinary text passes through untouched pass on both.
+
+## v0.148: Round 155: job errors always recorded, job results and errors redacted
+
+- `JobQueue.fail` raised in two cases. One was an error containing a lone surrogate (a hostile
+  file name or model text inside an exception), which made sqlite raise UnicodeEncodeError. The
+  other was an exception whose `__str__` raised. The failure was then never saved: the job stayed
+  `running` until its lease ran out and then ran again, and a `PermanentJobError` was retried
+  instead of going dead. `_err_text` now always returns storable text: unprintable exceptions
+  become `<Type: unprintable>`, and surrogates are kept as backslash escapes. The Worker builds its
+  error text with `jobqueue.exc_text`.
+- Job results and errors are masked with `ctxspawn.redact` before they are stored. They are served
+  by `/api/fleet/jobs`, and before this a fleet job's answer reached the requesting peer verbatim.
+  Strings are redacted value by value, so numbers and structure are kept. Payloads (the task input)
+  are not changed.
+- Results stored before v0.148 are still raw in the jobs database.
+- Tests: `tests/test_round155_job_errors.py` (6 tests, all fail on v0.147).
+
+## v0.147: Round 154: bridge journal and server log redacted
+
+- **Before:** only CodeX events went through `ctxspawn.redact`.
+  - `Bridge.post` stored the raw text in the journal, and the journal is relayed to every peer and to the fusion evidence bus. A finding that quoted a config (`token=...`, `curl -u admin:pw`) shipped verbatim.
+  - A peer's post that was never redacted was merged here and then exported again.
+  - `avrone.*` log records (MCP stderr, peer error bodies, exceptions that quote URLs with credentials) were escaped in round 150 but not redacted.
+- **Bridge fix:** `bridge._clip` now redacts, and it runs before the text is cut. That covers `post`, `merge_remote` and fusion blackboard POST validation. Journal replay skips redaction (`redact=False`) because those lines were redacted when they were written and a replay runs on every blackboard poll. A 5,000-line replay takes about 6 ms.
+- **Log fix:** `logsafe` redacts string and exception args, and messages built with f-strings, before escaping them. Third-party loggers are untouched.
+- **Not redacted:** journals written before v0.147 stay as they are on disk. Clear them, or let compaction rotate them out.
+- **Tests:** `tests/test_round154_redact_sinks.py` (5). 3 fail on v0.146. The replay and third-party tests are guards.
+
+## v0.146: Round 153: secrets identified by the words around them
+
+- **Gap:** `ctxspawn.redact` (applied to every CodeX event) let these through unmasked. They appear whenever an agent echoes a shell command or an HTTP exchange:
+  - `curl -u user:pass`, `--user user:pass`
+  - `--password X`, `--token X`, `--api-key X`
+  - `mysql -pX`, `sshpass -p X`
+  - `Cookie:` and `Set-Cookie:` headers
+  - `redis://:pw@host` (a URL with an empty user)
+  - `<password>x</password>`
+- **Fix:** `secretshapes.CONTEXT_RULES` adds 6 gated rules, which `secret_scan` reports by name. Values stop at whitespace, quotes and backslashes, so a raw JSON line stays valid. Rules also match right after a JSON `\n` escape.
+- **Key=value rule:** it now treats `=>` and `:=` as separators. `password => 'x'` used to mask only the `>`.
+- **Unchanged:** `ls -a`, `git log -u`, `tar -a x:y`, `--password-file f` and `--password -x`. Hostile 100k-repeat inputs run in well under a second.
+- **Still not covered:** `?sig=` query values, a bare `Token x`, and `passwd x`.
+- **Tests:** `tests/test_round153_context_secrets.py` (24). 16 fail on v0.145. The round 63 old-regex equivalence fuzz now skips `:=` and `=>`.
+
+## v0.145: Round 152: vendor-prefixed tokens redacted everywhere
+
+- **Gap:** I tested 23 credential formats against `ctxspawn.redact`, which masks every CodeX event. 14 of them got through unmasked: Stripe `sk_/rk_/pk_live|test_`, GitLab `glpat-`, Hugging Face `hf_`, npm `npm_`, Groq `gsk_`, Replicate `r8_`, Perplexity `pplx-`, Slack app `xapp-`, Google OAuth `ya29.`, SendGrid `SG.x.y`, AWS temporary `ASIA…`, Azure `AccountKey=`, and Telegram bot tokens. `secret_scan` reported those runs as CLEAN.
+- **Fix:** new `avrone/secretshapes.py`, with `TOKEN_PREFIX_RE` (fixed prefix plus a long body) and a substring `PREFIX_GATE`. It is the 12th `ctxspawn` rule, and `secret_scan` names its matches `vendor-token`. `research_note` and `env_report` use it too, since each of them had its own, different list.
+- **Unchanged:** ordinary identifiers (`hf_cache_dir`, `npm_config_prefix`, `SG.items`, `ASIAN`, timestamps) are left alone. The cost stays linear: 400 KB of gate-matching text takes about 20 ms.
+- **Still not covered:** bare AWS secret keys, Discord tokens and Twilio `SK…`. Without a key name next to them they are too ambiguous; the key=value rule still masks them when one is there.
+- **Tests:** `tests/test_round152_vendor_tokens.py` (36). 23 of them fail on v0.144. `test_round82` now expects 12 rules.
+
+## v0.144: Round 151: secret_scan fix keeps run logs valid; xAI keys redacted
+
+- **xAI keys:** `xai-` keys (Grok) matched no redaction pattern, so they were neither masked when events were emitted nor flagged by `secret_scan`. They now share the `sk-`/`pk-`/`rk-` rule and its gate.
+- **`secret_scan fix=true`:** it used to redact each flagged line as raw text. A private key with no END marker (for example, tool output cut at a cap) was masked to the end of the line. That removed the line's closing quotes and braces, and readers then skipped the event. Flagged JSON lines are now redacted value by value and dumped again. Lines that are not JSON are still redacted as text.
+- **Bytes kept:** the log is decoded with `surrogateescape`, so bytes that are not UTF-8 in other lines are kept exactly. `newline=""` keeps CRLF. The temp file is fsynced before the swap.
+- Tests: `tests/test_round151_secret_fix.py` (4). 3 fail on v0.143. The CRLF test is a guard.
+
+## v0.143: Round 150: text from outside in log arguments can't forge server log lines. 6,722 tests + 19 integration
+
+The `avrone.*` modules log outside text directly into their messages. That text includes:
+
+- an MCP server's name, its protocol version, its tool names and its stderr
+- a fleet peer's error
+- a plugin's exception
+- checkpoint and queue file names
+
+A `\n` in any of it wrote a fake log line, such as `WARNING avrone.fleet node trusted`. ESC, `\r` and U+202E reached the operator's terminal through the stderr handler.
+
+The new `avrone/logsafe.py` is installed when `avrone` is imported. It chains the existing log-record factory and, for `avrone.*` records only, escapes string and exception arguments with `textsafe.escape`. A message built with an f-string and no arguments is escaped whole. These are left alone:
+
+- message templates (so a template's own line breaks stay)
+- tracebacks from `exc_info`
+- loggers from other libraries
+
+The plugin `register()` failure now logs its traceback through `exc_info` instead of as a string argument.
+
+Tests: `tests/test_round150_log_injection.py` has 7 tests. Five fail on v0.142. The other two guard what must not change: tracebacks, and loggers from other libraries.
+
+## v0.142: Round 149: the CLI never writes raw controls to the operator's terminal. 6,715 tests + 19 integration
+
+`avrone-cli`'s live event lines replaced only `\n`. A tool's output, a model's role name, or an error message could still put ESC sequences on stderr: clear screen, OSC 0 window title, OSC 52 clipboard writes. They could also carry `\r` line overwrites and U+202E. The same raw printing applied to three commands:
+
+- `runs` printed HTTP clients' prompts raw.
+- `tools` printed MCP servers' descriptions raw.
+- `evolve` printed model-written goals raw.
+
+All of these now go through `cli._one`, which turns any run of characters from the `textsafe` unsafe class into a space. The final answer is escaped only when stdout is a terminal, with line breaks and tabs kept. A pipe still gets the text unchanged.
+
+Web UI audit: every `innerHTML` value is escaped, except the HUD's agent status, which is a constant. The HUD's `agents` map was a plain `{}`, so an agent named `__proto__` or `constructor` landed on `Object.prototype`. It is now `Object.create(null)`.
+
+The every-argument probe (`forgeprobe3.py`) now also tries each enum value. It comes back clean.
+
+Tests: `tests/test_round149_cli_terminal.py` (10). All 10 fail on v0.141.
+
+## v0.141: Round 148: errors that echo an argument show it escaped. 6,705 tests + 19 integration
+
+A third probe (`forgeprobe3.py`) passes `"q\nFORGED x \u202eR"` as each string argument of every tool. On v0.140, 26 error lines echoed that argument raw:
+
+- the path in 23 lines like `ERROR: <path> not found`, in `read_file`, `list_files`, `search_files`, `edit_file`, `diff_files` and the `fs_*` tools
+- the regex in `search_files` "No matches for /…/"
+- the loop id in the `evolve_cancel` and `evolve_status` errors
+
+A bad argument could print a line of its own, and U+202E reversed the rest of the error line. All of these now use `textsafe.escape`. The probe comes back clean.
+
+Tests: `tests/test_round148_error_echo.py` (7). Six of them fail on v0.140.
+
+## v0.140: Round 147: memory listings, artifact names and diffs can't forge rows or split lines. 6,698 tests + 19 integration
+
+A second probe (`forgeprobe2.py`) writes hostile text through the tools (memory, the task board, research notes, artifacts, git), then reads it back through 24 tool calls. On v0.139 it found these:
+
+- **`memory_list`, `memory_recall`, `memory_save`:** keys and values printed raw. A key holding `\n- other: ...` read as another memory. Peers can merge entries in over `memory_sync`. Keys are now escaped, and so are values (tabs kept).
+- **`artifact_save`:** the agent-chosen name was echoed raw. It is now escaped.
+- **`diff_files`:** lines were split with `str.splitlines()`, which also breaks on `\r`, VT, FF, `\x1c`–`\x1e`, NEL, U+2028 and U+2029. One source line came out as two, and the first half was marked `\ No newline at end of file`. The fix is a new `textsafe.lines_keepends` that splits on `\n` only, in both the inline and the child-process path. Controls and bidi characters inside a changed line are escaped (Trojan Source in review). File names in the header are escaped too.
+
+Left as is: `git` output, which is raw like `shell`. `json_tool get` prints U+202E inside a JSON string.
+
+Tests: `tests/test_round147_memory_diff_display.py` (9). All 9 fail on v0.139.
+
+## v0.139: Round 146: names in listings are shown escaped, so they can't forge rows. 6,689 tests + 19 integration
+
+A new probe (`forgeprobe.py`) plants files with hostile names and starts a child process with hostile arguments, then calls every read-only tool. On v0.138, four tools printed those names raw:
+
+- `list_files`
+- `search_files`, for both file names and matched lines
+- the "is a directory" hint from `read_file`
+- `proc_status`, for the process command line
+
+A file named `a\nFORGED` printed a line of its own that read as another entry. U+202E reversed the rest of its row (Trojan Source).
+
+`textsafe.escape` now writes each unsafe character as a visible escape (`\x0a`, `\u202e`). It escapes rather than blanks, so two names that differ only in a control character stay distinct. In `search_files` matches, tabs are kept. The cost is that an agent sees the escaped form, not the name it can type back.
+
+Tests: `tests/test_round146_listing_names.py` (5). Four of them fail on v0.138.
+
 ## v0.138: Round 145: a corrupt fleet.json that can't be set aside is never overwritten. 6,684 tests + 19 integration
 
 - **Bug** (`FleetManager._load_saved`):

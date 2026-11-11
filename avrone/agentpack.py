@@ -419,7 +419,7 @@ def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict
     if not isinstance(aid, str) or agentfs.sanitize_agent_id(aid) != aid:
         raise PackError("bad agent_id in manifest")
     for k in ("origin", "home"):
-        if not isinstance(manifest.get(k), str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}$", manifest[k]):
+        if not isinstance(manifest.get(k), str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}\Z", manifest[k]):
             raise PackError(f"bad {k} in manifest")
     if not isinstance(manifest.get("created"), int) or isinstance(manifest.get("created"), bool):
         raise PackError("bad created in manifest")

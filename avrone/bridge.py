@@ -45,7 +45,7 @@ MAX_REFS = 20
 DEFAULT_MAX_POSTS, HARD_MAX_POSTS = 500, 5000
 DEFAULT_ROUNDS, HARD_MAX_ROUNDS = 1, 3
 _RUN_RE = re.compile(r"[^A-Za-z0-9_.-]")
-_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}\Z")
 
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -90,8 +90,19 @@ def safe_run_id(run_id: Any) -> str:
     return (rid or "run") + "-" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
-def _clip(text: Any) -> str:
-    t = str(text if text is not None else "").strip()
+def _clip(text: Any, redact: bool = True) -> str:
+    """Round 154: the text is redacted before it is kept. The bridge journal is relayed to every
+    peer (fleet relay, the fusion evidence bus), and only the CodeX copy of a post was redacted, so
+    a finding that quoted a config ("token=...", "curl -u admin:pw") was shipped verbatim. Merged
+    remote posts go through here too, so a peer that did not redact is not re-exported as is.
+    Redacting before the cut keeps a token from being cut into a shape no rule knows. Journal
+    replay passes redact=False: those lines were redacted when they were written, and a replay
+    runs on every blackboard poll."""
+    t = str(text if text is not None else "")
+    if redact:
+        from .ctxspawn import redact as _redact
+        t = _redact(t)
+    t = t.strip()
     return t if len(t) <= MAX_TEXT else t[: MAX_TEXT - 3] + "..."
 
 
@@ -220,7 +231,7 @@ class Bridge:
         if rec.get("kind") not in KINDS or not isinstance(rec.get("text"), str):
             return None
         rec["refs"] = _refs(rec.get("refs"))
-        rec["text"] = _clip(rec["text"])
+        rec["text"] = _clip(rec["text"], redact=False)
         return rec
 
     @contextlib.contextmanager
@@ -348,7 +359,8 @@ class Bridge:
                     stats["skipped"] += 1
                     continue
                 rec = {"id": rec["id"], "run_id": self.run_id, "agent": str(rec.get("agent") or "agent")[:80],
-                       "role": str(rec.get("role") or "")[:60], "kind": rec["kind"], "text": rec["text"],
+                       "role": str(rec.get("role") or "")[:60], "kind": rec["kind"],
+                       "text": _clip(rec["text"]),  # round 154: a peer's post is redacted before we keep it
                        "refs": rec["refs"], "ts": _remote_ts(rec.get("ts")),
                        "origin_node": str(rec.get("origin_node") or origin)[:80]}
                 self._posts[rec["id"]] = rec
@@ -517,10 +529,8 @@ async def t_bridge_post(ctx: Any, args: dict[str, Any]) -> str:
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_bridge_read(ctx: Any, args: dict[str, Any]) -> str:
     b = for_core(ctx.core, ctx.run_id)
-    try:
-        limit = int(args.get("limit") or 30)
-    except (TypeError, ValueError):
-        limit = 30
+    from .argnum import tool_int
+    limit = tool_int(args.get("limit") or 30, 30)
     posts = b.read(kind=args.get("kind"), agent=args.get("agent"), since=args.get("since"),
                    query=args.get("query"), limit=limit)
     return compact(posts)
@@ -728,3 +738,50 @@ def parse_revise(reply: Any) -> tuple[list[dict[str, Any]], str]:
             break
     revised = obj.get("revised")
     return posts, revised.strip() if isinstance(revised, str) else ""
+
+
+# --------------------------------------------------------------------------- journal scrub
+class _JournalRef:
+    """Just enough of a Bridge for _file_lock: the journal path."""
+    def __init__(self, path: Path):
+        self.path = path
+
+
+def fix_journal(path: Path | str, core: Any = None) -> bool:
+    """Round 158: redact a bridge journal written before v0.147 (posts were stored raw: a finding
+    quoting "token=..." went to every peer and the fusion bus). Lines are redacted value by value
+    and dumped again, so the journal stays valid JSONL; bytes that are not UTF-8 are kept. Runs
+    under the same thread lock and cross-process file lock as append and compaction, then
+    reloads any open Bridge for this journal, whose ring still held the raw text in memory.
+    True when the journal was rewritten. A journal over JOURNAL_READ_MAX is left alone."""
+    from .safeio import atomic_write, read_regular
+    from .tools_secrets import _redact_line, _kinds, _line_hides_secret
+    p = Path(path)
+    if p.is_symlink() or not p.is_file() or p.suffix != ".jsonl":
+        return False
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(str(p.resolve()), threading.RLock())
+    with lock:
+        with Bridge._file_lock(_JournalRef(p)):  # type: ignore[arg-type]
+            try:
+                if p.stat().st_size > JOURNAL_READ_MAX:
+                    return False
+            except OSError:
+                return False
+            raw = read_regular(p, JOURNAL_READ_MAX)
+            if raw is None:
+                return False
+            text = raw.decode("utf-8", errors="surrogateescape")
+            out = [(_redact_line(ln) if _kinds(ln) or _line_hides_secret(ln) else ln) for ln in text.split("\n")]
+            new = "\n".join(out)
+            if new == text:
+                return False
+            atomic_write(p, new.encode("utf-8", errors="surrogateescape"), fsync=True)
+        cache = getattr(core, "_bridges", None) if core is not None else None
+        for b in list(cache.values()) if cache else []:
+            try:
+                if b.path is not None and b.path.resolve() == p.resolve():
+                    b._load()
+            except OSError:
+                pass
+    return True

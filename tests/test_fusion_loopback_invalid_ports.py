@@ -37,7 +37,7 @@ def test_loopback_bucket_isolation(url, expected):
 @pytest.mark.parametrize("url,expected", [
     ("http://127.0.0.1:0", "loopback:0"),
     ("http://[::1]:65535/v1/events", "loopback:65535"),
-    ("http://localhost", "loopback:None"),
+    ("http://localhost", "loopback:80"),
     ("http://10.0.0.1:65535/health", "10.0.0.1:65535"),
 ])
 def test_valid_port_bounds(url, expected):

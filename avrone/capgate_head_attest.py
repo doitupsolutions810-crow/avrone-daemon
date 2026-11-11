@@ -60,7 +60,29 @@ def history_path(data_dir: str | Path) -> Path:
 
 
 def _canon(obj: Any) -> bytes:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str).encode()
+    # round 46: allow_nan=False. A NaN anywhere in an entry was written as bare NaN, which is not
+    # JSON: other attested-history readers refuse the line, and this reader now does too.
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str,
+                      allow_nan=False).encode()
+
+
+def _no_constants(name: str) -> Any:
+    raise ValueError(f"non-JSON constant {name}")
+
+
+def _no_dup_keys(pairs: list) -> dict:
+    """A repeated key: Python keeps the last value and other readers (jq, Go, JS) may keep the
+    first, so one line could verify here and say something else elsewhere. Refused."""
+    out: dict = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError(f"duplicate key {k!r}")
+        out[k] = v
+    return out
+
+
+def _strict_loads(ln: bytes) -> Any:
+    return json.loads(ln, object_pairs_hook=_no_dup_keys, parse_constant=_no_constants)
 
 
 def _digest(obj: Any) -> str:
@@ -105,9 +127,14 @@ def _log_lock(p: Path):
         os.close(fd)
 
 
-def _check_entry(e: Any, prev_digest: str | None, where: str) -> None:
+def _check_entry(e: Any, prev_digest: str | None, where: str, want_seq: int = 0) -> None:
     if not isinstance(e, dict):
         raise OSError(f"history log {where}: not an entry object — append-only, never rewritten")
+    # round 46: seq was never checked. A digest-valid line with seq "x", true, 1.5 or Infinity made
+    # the next append raise ValueError/OverflowError out of int(); a skipped or repeated seq passed.
+    seq = e.get("seq")
+    if type(seq) is not int or seq != want_seq:
+        raise OSError(f"history log {where}: seq {seq!r} where {want_seq} was due — append-only, never rewritten")
     if _digest({k: v for k, v in e.items() if k != "digest"}) != e.get("digest"):
         raise OSError(f"history log {where}: digest mismatch (entry edited) — append-only, never rewritten")
     if e.get("prev_hash") != prev_digest:
@@ -138,16 +165,16 @@ def _last_good(p: Path) -> dict | None:
         raise OSError(f"history log over {MAX_LOG_BYTES} bytes — refuse, name it, never guess")
     raw_lines = data.split(NL.encode())
     torn = b"" if data.endswith(NL.encode()) else (raw_lines.pop() if raw_lines else b"")
-    prev_digest, last = None, None
+    prev_digest, last, n = None, None, 0
     for i, ln in enumerate(raw_lines, 1):
         if not ln.strip():
             continue
         try:
-            e = json.loads(ln)
+            e = _strict_loads(ln)
         except (ValueError, RecursionError):
-            raise OSError(f"history log line {i} unreadable — append-only, never rewritten")
-        _check_entry(e, prev_digest, f"line {i}")
-        prev_digest, last = e["digest"], e
+            raise OSError(f"history log line {i} unreadable — append-only, never rewritten") from None
+        _check_entry(e, prev_digest, f"line {i}", n)
+        prev_digest, last, n = e["digest"], e, n + 1
     if torn and torn.strip():
         _cut_torn(p, torn)
     return last
@@ -166,6 +193,18 @@ def _residual(ok: bool) -> dict:
     return {"S": 0.1875, "orientation": "fail", "cone": False}
 
 
+def _short(v: Any, empty: str, n: int = 200) -> str:
+    """A note or error as text: bytes decoded, at most n characters, never cut inside a
+    surrogate pair (a lone half is not encodable as UTF-8 by strict readers)."""
+    if v is None or v == "":
+        return empty
+    if isinstance(v, (bytes, bytearray)):
+        v = bytes(v).decode("utf-8", "replace")
+    t = str(v)
+    t = t.encode("utf-16", "surrogatepass").decode("utf-16", "replace")  # lone surrogates -> U+FFFD
+    return t[:n]
+
+
 def attest_head(data_dir: str | Path, *, note: str = "") -> dict:
     """Append one attested-history entry carrying capgate's signed head state. Zero-heat:
     deterministic checks only. The entry MINTS its second-cause status only when an
@@ -176,13 +215,13 @@ def attest_head(data_dir: str | Path, *, note: str = "") -> dict:
     ok = bool(walk.get("ok"))
     residual = _residual(ok)
     raw = {"count": int(walk.get("count") or 0), "head": str(walk.get("head") or GENESIS),
-           "verify_ok": ok, "verify_error": (walk.get("error") if not ok else None),
+           "verify_ok": ok, "verify_error": (_short(walk.get("error"), "unknown") if not ok else None),
            "key_scope": ("shared" if residual["orientation"] != "unmeasured" else "per_process_unverifiable_across_restarts"),
            "head_file_present": capgate._head_path(capgate.receipts_path(dd)).exists(),
-           "note": str(note or "")[:200]}
+           "note": _short(note, "")}
     with _log_lock(p):
         prev = _last_good(p)
-        entry = {"seq": (int(prev["seq"]) + 1) if prev else 0, "ts": round(time.time(), 3),
+        entry = {"seq": (prev["seq"] + 1) if prev else 0, "ts": round(time.time(), 3),
                  "source": SOURCE, "kind": KIND, "digest": "", "provenance_depth": 1,
                  "residual": residual, "capability_id": None, "human_root": None,
                  "raw": raw, "prev_hash": (str(prev["digest"]) if prev else None)}
@@ -251,7 +290,9 @@ def _selftest() -> int:
         record("torn evidence kept", (attested / "history.jsonl.torn").exists())
 
         lines = log.read_text().splitlines()
-        lines[0] = lines[0].replace('"seq": 0', '"seq": 9')
+        # round 46: the log is compact JSON ("seq":0); '"seq": 0' never matched, so this check
+        # edited nothing and failed
+        lines[0] = lines[0].replace('"seq":0', '"seq":9')
         log.write_text(NL.join(lines) + NL)
         try:
             attest_head(dd, note="must-refuse")
@@ -317,7 +358,11 @@ def main(argv: list[str]) -> int:
     if not enabled():
         print("capgate head attestation is off (AVRONE_CAPGATE_ATTEST); nothing done, nothing implied")
         return 0
-    e = attest_head(argv[0], note=(argv[1] if len(argv) > 1 else ""))
+    try:
+        e = attest_head(argv[0], note=(argv[1] if len(argv) > 1 else ""))
+    except OSError as err:  # round 46: a refused log printed a traceback
+        print(f"capgate head attestation refused: {err}", file=sys.stderr)
+        return 1
     print(json.dumps({"seq": e["seq"], "digest": e["digest"], "residual": e["residual"], "raw": e["raw"]}, indent=2))
     return 0
 

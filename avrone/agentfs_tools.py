@@ -18,6 +18,7 @@ CodeX as agentfs.* events with the agent id, path, bytes and dir usage.
 """
 from __future__ import annotations
 
+from .textsafe import escape as _tsesc  # round 148: echoed paths shown escaped
 import errno
 import os
 import stat
@@ -201,11 +202,8 @@ async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: {_rel(root, p)} not found"
     if not p.is_file():
         return f"ERROR: {_rel(root, p)} is a directory; use fs_list"
-    try:
-        limit = int(args.get("max_chars", READ_DEFAULT_CHARS))
-    except (TypeError, ValueError):
-        limit = READ_DEFAULT_CHARS
-    limit = max(1, min(limit, READ_MAX_CHARS))
+    from .argnum import tool_int
+    limit = tool_int(args.get("max_chars"), READ_DEFAULT_CHARS, 1, READ_MAX_CHARS)
     from .safeio import NotRegularFile, open_read
     try:  # round 87: never block on a FIFO swapped in after the is_file() check
         f = open_read(p, follow=True)
@@ -280,18 +278,18 @@ async def t_fs_delete(ctx: "AgentContext", args: dict[str, Any]) -> str:
     target = parent / leaf
     rel = _rel(root, parent / leaf) if parent.is_relative_to(root) else raw
     if not target.is_symlink() and not target.exists():
-        return f"ERROR: {rel} not found"
+        return f"ERROR: {_tsesc(rel)} not found"
     with _lock_for(root):
         if target.is_symlink() or target.is_file():
             freed = target.lstat().st_size
             target.unlink()
         elif target.is_dir():
             if not bool(args.get("recursive", False)) and any(target.iterdir()):
-                return f"ERROR: {rel} is a non-empty directory; pass recursive: true"
+                return f"ERROR: {_tsesc(rel)} is a non-empty directory; pass recursive: true"
             freed = dir_usage(target)
             shutil.rmtree(target)
         else:
-            return f"ERROR: {rel} is not a file or directory"
+            return f"ERROR: {_tsesc(rel)} is not a file or directory"
     _audit(ctx, "agentfs.delete", path=rel, bytes=freed)
     return f"deleted {rel} ({freed} bytes freed)"
 

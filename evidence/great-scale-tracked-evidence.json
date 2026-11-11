@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v68",
+  "finding": "The script logs when agents/ is tracked in git. agents/ is not tracked in this repo. The check is present but the condition is not met. The script continues silently. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "tracked": false,
+  "continues": true,
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The tracked-agents check holds."
+}

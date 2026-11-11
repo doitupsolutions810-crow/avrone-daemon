@@ -424,7 +424,7 @@ _ROLES = {"system", "user", "assistant", "tool"}
 _ROLE_ALIASES = {"developer": "system", "human": "user", "ai": "assistant", "model": "assistant",
                  "bot": "assistant", "function": "tool"}
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
-_NAME_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_NAME_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
 
 
 def clean_text(text: Any) -> str:

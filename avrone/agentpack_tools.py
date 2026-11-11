@@ -22,7 +22,7 @@ from .tools import Tool, off_loop
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-PACK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}-\d{1,12}\.tar\.gz$")
+PACK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}-\d{1,12}\.tar\.gz\Z")
 
 
 def _settings(ctx: "AgentContext") -> tuple[Path, Path]:

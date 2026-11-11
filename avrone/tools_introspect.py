@@ -20,6 +20,7 @@ import re
 from . import textsafe as _textsafe
 from typing import TYPE_CHECKING, Any
 
+from . import secretshapes as _shapes
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -128,7 +129,7 @@ def redact_value(name: str, value: Any) -> str:
     if value is None:
         return "unset"
     v = str(value)
-    if _TOKENISH_RE.search(v):
+    if _TOKENISH_RE.search(v) or _shapes.TOKEN_PREFIX_RE.search(v):  # round 152
         return "***redacted (token-shaped value)***"
     v = _URL_USERINFO_RE.sub(r"\1***@", v)
     v = _SECRET_QUERY_RE.sub(r"\1***", v)

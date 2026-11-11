@@ -35,7 +35,7 @@ from .tools import Tool, _safe_path, off_loop
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?$")
+PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?\Z")
 
 
 def _ws(ctx: "AgentContext") -> Path:
@@ -200,7 +200,7 @@ async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------- skills
-SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
+SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}\Z")
 SKILL_MAX_BYTES = 256_000
 SKILL_LOAD_CHARS = 12000
 MAX_SKILLS = 500
@@ -513,11 +513,8 @@ async def t_resources(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not p.exists():
         return "resource ledger empty"
     # limit: "abc" raised, 0 meant every line ([-0:]), negatives sliced from the front
-    try:
-        limit = int(args.get("limit", 30))
-    except (TypeError, ValueError, OverflowError):
-        limit = 30
-    limit = max(1, min(500, limit))
+    from .argnum import tool_int
+    limit = tool_int(args.get("limit"), 30, 1, 500)
     rows = []
     from .safeio import read_regular
     for line in (read_regular(p, LEDGER_READ_MAX) or b"").decode("utf-8", "replace").splitlines():

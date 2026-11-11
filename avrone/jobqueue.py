@@ -26,6 +26,7 @@ log = logging.getLogger("avrone.jobqueue")
 RESULT_MAX = 100000
 ERROR_MAX = 4000
 PRIORITY_MAX = 2**62
+PAYLOAD_MAX_BYTES = 16 << 20  # serialized JSON; enqueue refuses bigger payloads
 CLOCK_SLACK_S = 5.0  # round 112: `updated` this far ahead of now means the clock stepped back
 EXTEND_MAX_S = 7 * 86400  # one heartbeat can never park a job for longer than this
 # Retention (round 65). Finished jobs (done/dead, each up to RESULT_MAX of result) were never
@@ -74,6 +75,10 @@ def _encode_result(result: Any) -> str:
     result (the finished job was then failed and RE-RUN) and cut long results mid-token, so get()
     crashed on the stored text forever after."""
     try:
+        result = _redact_result(result)
+    except Exception:  # noqa: BLE001  (a cyclic or odd object: json.dumps below reports it)
+        pass
+    try:
         text = json.dumps(result, default=str, allow_nan=False)
     except (TypeError, ValueError):
         text = json.dumps(repr(result))
@@ -92,7 +97,52 @@ def _decode(text: Any) -> Any:
 
 
 def _err_text(error: Any) -> str:
-    return (error if isinstance(error, str) else str(error))[:ERROR_MAX]
+    """Round 155: always storable. A lone surrogate in an error (a hostile file name or model
+    text inside an exception) made sqlite raise UnicodeEncodeError, and so did an exception whose
+    __str__ raised: fail() itself failed, the job stayed 'running' until its lease ran out and
+    then ran again, and a PermanentJobError was retried instead of going dead. The text is also
+    redacted, since /api/fleet/jobs returns it and it is kept on disk ("could not reach
+    https://user:pw@host")."""
+    if isinstance(error, str):
+        text = error
+    else:
+        try:
+            text = str(error)
+        except Exception:  # noqa: BLE001
+            text = f"<{type(error).__name__}: unprintable>"
+    text = text[:ERROR_MAX]
+    try:
+        from .ctxspawn import redact
+        text = redact(text)
+    except Exception:  # noqa: BLE001
+        pass
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")[:ERROR_MAX]
+
+
+def exc_text(e: BaseException) -> str:
+    """'Type: message' for any exception, even one whose __str__ raises."""
+    try:
+        msg = str(e)
+    except Exception:  # noqa: BLE001
+        msg = "<unprintable>"
+    return f"{type(e).__name__}: {msg}"
+
+
+def _redact_result(v: Any, depth: int = 0) -> Any:
+    """Round 155: secrets in a job's result are masked before it is stored and served, as they are
+    in the run's CodeX log (a fleet job's answer reached the requesting peer verbatim)."""
+    from .ctxspawn import redact
+    if depth > 64:
+        return v
+    if isinstance(v, str):
+        return redact(v)
+    if isinstance(v, list):
+        return [_redact_result(x, depth + 1) for x in v]
+    if isinstance(v, tuple):
+        return tuple(_redact_result(x, depth + 1) for x in v)
+    if isinstance(v, dict):
+        return {k: _redact_result(x, depth + 1) for k, x in v.items()}
+    return v
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -104,6 +154,19 @@ CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status, priority DESC, created);
 CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(status, updated);
 """
 
+
+
+def _id_ok(jid: Any, token: Any = None) -> bool:
+    """round 166: a job id / lease token sqlite cannot bind (lone surrogate, non-str) names no job.
+    get() raised UnicodeEncodeError for such an id (queue_status job_id="\ud800")."""
+    for v in (jid,) if token is None else (jid, token):
+        if not isinstance(v, str):
+            return False
+        try:
+            v.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+    return True
 
 class JobQueue:
     def __init__(self, path: Path, lease_s: float = 900):
@@ -147,6 +210,8 @@ class JobQueue:
             # instead of failing with "database is locked".
             self._db.execute("PRAGMA busy_timeout=10000")
             self._db.execute("PRAGMA journal_mode=WAL")
+            # round 162: a pruned job's payload/result was left readable in the file's free pages
+            self._db.execute("PRAGMA secure_delete=ON")
             self._db.executescript(SCHEMA)
         except BaseException:
             self._db.close()
@@ -189,9 +254,22 @@ class JobQueue:
             return await asyncio.to_thread(guarded)
 
     async def enqueue(self, kind: str, payload: dict[str, Any], priority: int = 0, max_attempts: int = 3) -> str:
+        # round 164: None/objects were stored as their repr, and a lone surrogate in it raised a raw
+        # UnicodeEncodeError out of sqlite; both are now a ValueError naming the problem
+        if isinstance(kind, (int, float)) and not isinstance(kind, bool):
+            kind = str(kind)  # a numeric kind was always stored as its text (test_bad_priority_and_kind)
+        if not isinstance(kind, str) or not kind or len(kind) > 64 or not kind.isprintable():
+            raise ValueError("job kind must be a short printable string")
+        try:
+            kind.encode("utf-8")
+        except UnicodeEncodeError:
+            raise ValueError("job kind must be valid text (no lone surrogates)") from None
         jid = uuid.uuid4().hex[:12]
         now = time.time()
         body = json.dumps(payload)  # an unserializable payload fails HERE, to the caller, not in a worker
+        # round 164b: no size cap let one enqueue store a 50 MB row that every claim/get/list then loaded
+        if len(body) > PAYLOAD_MAX_BYTES:
+            raise ValueError(f"job payload is {len(body)} bytes, over the {PAYLOAD_MAX_BYTES} byte limit")
         try:
             prio = int(priority)
         except (TypeError, ValueError, OverflowError):
@@ -293,6 +371,8 @@ class JobQueue:
 
     async def complete(self, jid: str, result: Any, token: str | None = None) -> bool:
         """True when the result was recorded; False when the lease was lost (someone else owns it)."""
+        if not _id_ok(jid, token):
+            return False
         text = _encode_result(result)
         clause, extra = self._owner(token)
         cur = await self._run(lambda: self._db.execute(
@@ -303,6 +383,8 @@ class JobQueue:
     async def fail(self, jid: str, error: Any, token: str | None = None, permanent: bool = False) -> str:
         """'dead', 'requeued', 'missing' (no such job) or 'stale' (the lease was lost).
         permanent=True: dead now, whatever attempts remain."""
+        if not _id_ok(jid, token):
+            return "missing"
         err = _err_text(error)
         clause, extra = self._owner(token)
 
@@ -323,6 +405,8 @@ class JobQueue:
 
     async def extend(self, jid: str, token: str, seconds: float | None = None) -> bool:
         """Heartbeat: push a running job's lease out. False when the lease is already lost."""
+        if not _id_ok(jid, token):
+            return False
         # seconds=inf (or "1e400", 1e300) used to write an infinite lease: the job could never be
         # reaped again if its worker then died. NaN/junk now means "one normal lease".
         try:
@@ -340,12 +424,16 @@ class JobQueue:
     async def release(self, jid: str, token: str) -> bool:
         """Give a claimed job back untouched (worker shutting down): queued again right away and
         the attempt is not counted. Before, a cancelled job sat 'running' for the whole lease."""
+        if not _id_ok(jid, token):
+            return False
         cur = await self._run(lambda: self._db.execute(
             "UPDATE jobs SET status='queued', attempts=MAX(attempts-1,0), lease_until=0, token=NULL, updated=? "
             "WHERE id=? AND status='running' AND token=?", (time.time(), jid, token)))
         return cur.rowcount > 0
 
     async def get(self, jid: str) -> dict[str, Any] | None:
+        if not _id_ok(jid):
+            return None
         def _g() -> dict[str, Any] | None:
             cols = ["id", "kind", "payload", "status", "attempts", "max_attempts", "created", "updated", "result", "error"]
             r = self._db.execute(f"SELECT {','.join(cols)} FROM jobs WHERE id=?", (jid,)).fetchone()
@@ -425,7 +513,7 @@ class Worker:
                     raise
                 except Exception as e:  # noqa: BLE001
                     try:
-                        await self.q.fail(jid, f"{type(e).__name__}: {e}", token,
+                        await self.q.fail(jid, exc_text(e), token,
                                           permanent=isinstance(e, PermanentJobError))
                     except asyncio.CancelledError:
                         raise
@@ -475,3 +563,64 @@ class Worker:
             except asyncio.CancelledError:
                 pass
             self._task = None
+
+
+def scrub_db(path: Path | str, fix: bool = False, batch: int = 500) -> dict[str, int]:
+    """Round 158/159: find (and with fix=True mask) secrets in stored job results and errors.
+
+    Results stored before v0.148 and errors stored before v0.148 were written raw, and every
+    `/api/fleet/jobs` read served them back. Uses its own connection with BEGIN IMMEDIATE per
+    batch, so it is safe beside running workers in other processes. Payloads (the task input)
+    are counted but never rewritten: a queued job must still run as submitted. The file is
+    opened read-write only if it exists (a scan never creates an empty jobs.db)."""
+    from .ctxspawn import redact
+    p = Path(path)
+    out = {"rows": 0, "flagged": 0, "fixed": 0, "payloads": 0}
+    if p.is_symlink() or not p.is_file():
+        return out
+    db = sqlite3.connect(f"file:{p}?mode={'rw' if fix else 'ro'}", uri=True, isolation_level=None)
+    try:
+        db.execute("PRAGMA busy_timeout=10000")
+        if fix:  # round 162: freed cells are zeroed, not left holding the old raw value
+            db.execute("PRAGMA secure_delete=ON")
+        last = ""
+        while True:
+            if fix:
+                db.execute("BEGIN IMMEDIATE")
+            try:
+                rows = db.execute("SELECT id, payload, result, error FROM jobs WHERE id > ? ORDER BY id LIMIT ?",
+                                  (last, int(batch))).fetchall()
+                for jid, payload, result, error in rows:
+                    out["rows"] += 1
+                    if isinstance(payload, str) and redact(payload) != payload:
+                        out["payloads"] += 1
+                    new_err = redact(error) if isinstance(error, str) else error
+                    new_res = result
+                    if isinstance(result, str) and result and redact(result) != result:
+                        try:
+                            new_res = json.dumps(_redact_result(_jloads(result)), default=str, allow_nan=False)
+                        except (TypeError, ValueError, RecursionError):
+                            new_res = json.dumps(redact(result))  # unreadable JSON: keep it as one masked string
+                    if new_err != error or new_res != result:
+                        out["flagged"] += 1
+                        if fix:
+                            db.execute("UPDATE jobs SET result=?, error=? WHERE id=?", (new_res, new_err, jid))
+                            out["fixed"] += 1
+            except BaseException:
+                if fix:
+                    db.execute("ROLLBACK")
+                raise
+            if fix:
+                db.execute("COMMIT")
+            if len(rows) < batch:
+                break
+            last = rows[-1][0]
+        if fix and out["fixed"]:
+            # round 162: the raw values still sat in jobs.db-wal (every page version written since
+            # the last checkpoint) for as long as any queue kept the file open, which on a running
+            # daemon is always. Copy the WAL into the file and truncate it to zero bytes.
+            busy, _log, _done = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            out["wal_cleared"] = int(not busy)
+    finally:
+        db.close()
+    return out

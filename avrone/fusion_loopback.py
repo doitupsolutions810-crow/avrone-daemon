@@ -17,8 +17,18 @@ import re
 from urllib.parse import urlsplit
 
 
+_HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
 def host_text(host: str | None) -> str:
-    raw = str(host or "")
+    if isinstance(host, (bytes, bytearray)):
+        try:
+            host = bytes(host).decode("ascii")
+        except UnicodeDecodeError:
+            return ""
+    if not isinstance(host, str):
+        return ""
+    raw = host
     # Peer identities are not presentation text: normalization must not erase
     # disguising whitespace/C0/C1 controls and turn them into loopback.
     if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in raw):
@@ -51,6 +61,8 @@ def host_text(host: str | None) -> str:
         except ValueError:
             return ""
         name = address
+    if not name or not all(ch in _HOST_CHARS for ch in name):
+        return ""
     return name
 
 
@@ -80,7 +92,10 @@ def is_access_loopback(host: str | None) -> bool:
 def is_any_loopback(host: str | None) -> bool:
     """True for localhost, any 127.0.0.0/8 address, ::1, and their mapped forms."""
     name = host_text(host)
-    if name == "localhost" or name.endswith(".localhost"):
+    if name.endswith(".") and not name.endswith(".."):
+        name = name[:-1]  # one trailing root dot: "localhost." is localhost
+    if name == "localhost" or (name.endswith(".localhost") and ".." not in name
+                               and not name.startswith(".")):
         return True
     ip = unwrap_ip(name)
     return bool(ip is not None and ip.is_loopback)
@@ -95,7 +110,9 @@ def origin_key(base: str) -> str:
     """
     # urlsplit silently strips leading C0 and embedded CR/LF/TAB. Reject
     # those before parsing so malformed source URLs cannot alias real origins.
-    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in base or ""):
+    if not isinstance(base, str):
+        return "invalid:"
+    if any(ch.isspace() or ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in base):
         return "invalid:"
     try:
         parts = urlsplit(base or "")
@@ -112,9 +129,13 @@ def origin_key(base: str) -> str:
     # "https-" aliases the legal hostname "https-10.0.0.1". Retain existing
     # HTTP keys except for the remote hostname "loopback", which previously
     # collided with every actual loopback spelling on the same port.
+    if port is None:
+        port = _DEFAULT_PORTS[parts.scheme]
     prefix = "https://" if parts.scheme == "https" else ""
     if is_access_loopback(host):
         return f"{prefix}loopback:{port}"
     if canonical == "loopback":
         canonical = "host:loopback"
+    elif ":" in canonical:
+        canonical = f"[{canonical}]"
     return f"{prefix}{canonical}:{port}"

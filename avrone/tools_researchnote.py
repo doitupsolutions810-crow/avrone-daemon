@@ -28,6 +28,7 @@ from . import textsafe as _textsafe
 from typing import TYPE_CHECKING, Any
 
 from . import bridge as bridgemod
+from . import secretshapes as _shapes
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ _TOKEN_RES = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+)?"),
     re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]+@"),
+    _shapes.TOKEN_PREFIX_RE,  # round 152
 )
 _BLOB_RE = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 REDACTED = "***redacted***"

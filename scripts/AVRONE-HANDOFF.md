@@ -568,3 +568,142 @@ merge without his word.
   - Children inherited the real stdout, so a lingering child held the client's pipe open.
   - Fixes: `shutdown()` waits up to the grace period (at least 1 s), then cancels the core build, and stops the runner and MCP of a core that finished during shutdown. `protocol_stdout()` gives JSON-RPC a private, non-inheritable dup of fd 1 and points fd 1 at stderr, so a stray child print can't corrupt the protocol either.
   - Six new tests in tests/test_mcp_server_robust.py. The subprocess test then passed 6 of 6 runs.
+
+## Hardening round 41 (Hark edge-case series; not the v0.x "round 1xx" series): fsunify on case-insensitive filesystems
+- **Agent-isolation bypass on macOS and Windows.** `shared/Agents/<other>/...`, `shared/AGENTS/...`, `shared/agents./...` and `shared/agents::$INDEX_ALLOCATION/...` resolved to paths that `is_relative_to(ws/agents)` called outside. On APFS, HFS+ and NTFS they are the same directory, so one agent could read or overwrite another agent's dir and dodge its own quota through `shared/`. A symlink whose target names the agents root in another case slipped past the same way.
+  - `_touches_agents()` now also compares the first component casefolded, with NTFS `:stream` syntax and trailing dots and spaces removed.
+  - Names that only look similar stay allowed: `agents-notes`, `my-agents`, `x/agents`, and an `Agents/` folder inside your own dir.
+  - On Linux this refuses `shared/Agents/` even though it would be a separate dir. That is deliberate: the same tree has to behave the same on a Mac.
+- **Unusable agent dir.**
+  - `agent_root()` used to leak a raw `OSError` with the host's absolute path when mkdir failed (read-only disk, permissions). It now raises an audited `AgentFSError`.
+  - A file sitting where the dir should be is refused.
+  - A symlink loop gives a plain refusal.
+- **`display()`** no longer raises on a symlink loop or a broken agent dir.
+- Tests: `tests/test_fsunify_robust.py`.
+
+## Hardening round 42 (Hark edge-case series): logsafe against every argument shape
+- **Non-string arguments went into the server log raw.** Round 150 cleaned only `str` and exception arguments. A `Path("ckpt\nWARNING avrone.fleet ... trusted")`, an object whose `__str__` or `__repr__` held outside text, or a list or dict holding ESC or U+202E could all forge a line or reach the operator's terminal.
+  - They are now wrapped in `_Shown`, so `%s`, `%r` and format specs all render the cleaned and redacted text.
+  - Numbers (`numbers.Number`: int, float, bool, Decimal, Fraction, numpy scalars) and `None` pass through, so `%d`, `%x`, `%.2f` and `%c` keep working.
+  - bytes are left alone, because their repr already escapes control bytes.
+- **Template injection.** With arguments present, the template was never checked, so `log.warning(f"peer {name}: %s", err)` put ESC, `\r` or U+202E from `name` straight through. Templates now keep `\n` and `\t` only; everything else in the unsafe class is escaped.
+- **Non-str messages.** `log.warning(exc)` or `log.info(obj)` with no arguments was rendered by `str(msg)` unescaped. It is now converted, redacted and escaped.
+- **One raising `__str__` disabled cleaning for the whole record**, because the outer `except` swallowed it and left every argument raw. Each argument is now cleaned on its own, and a bad one renders as `<unprintable T: E>`.
+- **Size.** A 50 MB MCP stderr line went into one log line, and every redaction regex ran over it.
+  - Arguments are capped by `AVRONE_LOG_ARG_MAX_CHARS` (default 65536, clamped 256..4 MiB), with a `...[log arg truncated: N chars]` marker.
+  - Redaction sees at most 4x the cap.
+- Tests: `tests/test_logsafe_robust.py`.
+
+## Hardening round 43 (Hark edge-case series): evidence_pool identity canonicalisation
+- **Duplicate relays in disguise.** `pool_trials` exists so one outcome relayed twice can't count as two confirmations, but it compared raw strings. All of these were "distinct" trial_ids and were counted twice:
+  - NFC vs NFD (`trial-é`), a zero-width space or joiner, a BOM, a soft hyphen, and bidi marks
+  - fullwidth digits, ligatures, and no-break or ideographic spaces
+  - Identity fields are now NFKC-normalised, Unicode format characters (Cf) are removed, and whitespace runs collapse to one space.
+- **Fake silos.** `Node-A`, `node-a` and `node-a\u200b` were separate sources, so one node could fake an orientation conflict. Sources are now grouped case-insensitively after canonicalisation, the first spelling seen is reported, and the source cap counts canonical names. Trial ids stay case-sensitive.
+- **Control characters and lone surrogates** in either field are refused. They used to pass into the report and break JSON encoding.
+- **Lengths are checked on the canonical form.** Padding no longer rejects a valid id, and NFKC expansion (U+FDFA becomes 18 characters) can't get past the limits. A raw bound of 4x the limit comes first.
+- **Duplicate error messages** quote the id escaped to ASCII and cut to 64 characters.
+- **Input checks:**
+  - A lone dict, a string, bytes or None as `trials` gets a clear refusal.
+  - A Mapping whose `.get` raises becomes a ValueError.
+- Tests: `tests/test_evidence_pool_robust.py`.
+
+## Hardening round 44 (Hark edge-case series): `$` anchors and blackboard field hygiene
+- **Trailing-newline ids, repo-wide.** In Python, `$` also matches just before a final `\n`. So every `^...$` whole-string validator accepted `"id\n"`. 19 validators in 12 modules now end in `\Z`:
+  - bridge `_ID_RE`. Proven: `p1` and `p1\n` were stored as two blackboard posts, a duplicate-relay bypass.
+  - fleet node id, ts, nonce and sig
+  - memstore namespace
+  - checkpoint id and key, and the sender check
+  - agentpack manifest names and pack file name
+  - agentkit package and skill name
+  - evolve skill name
+  - gateway name
+  - netdiag host
+  - recon label and TLD
+  - lessonforget key
+- **Regression guard:** `test_no_dollar_anchored_validators_left` scans `avrone/*.py` and fails on any new `^...$` pattern. `(?m)` line scans are allowed.
+- **`fusion_blackboard.normalize_blackboard_post`:**
+  - **Text** must be a string. A JSON object, list or number used to be stored as its Python repr.
+  - **agent, role and origin_node:** strings only, trimmed and cut to their limits. A blank or non-string value takes the default.
+  - **Characters are still stored as written.** The board keeps them and display paths (`bridge.compact`, `tools.one_line`) flatten them, per the existing fusion tests. An attempt to escape on store broke that contract, and the gate caught it, so it was reverted.
+  - **run_id** is trimmed.
+- **Fan-in order file:** an unreadable file (permissions, EIO) used to make every `GET /api/blackboard` return a 500. It is now rebuilt by ts, the same as a missing file.
+- Tests: `tests/test_fusion_blackboard_robust.py`.
+
+## Hardening round 45 (Hark edge-case series): integer tool arguments
+- **inf from model JSON.** `gateway._parse_args` uses Python's json, which turns `1e999` (valid JSON) and the `Infinity` and `NaN` extensions into floats. `int(inf)` raises OverflowError, and these helpers caught only `(TypeError, ValueError)`, so the tool call failed instead of falling back to its default:
+  - `tools_extra._int`, which is used by about 8 tools
+  - fs_read `max_chars`, bridge_read, log_health `runs`, lesson_recall `limit`
+  - the netdiag tcp_ping and traceroute args. These had no guard at all, so `"abc"` raised too.
+- **Digit look-alikes.** `str.isdigit()` is True for `"²"`, but `int()` refuses it:
+  - lesson_recall raised on it.
+  - `server._content_length_over` raised on a `Content-Length: \xb2` header (latin-1 superscript): an unauthenticated 500 from the body-cap middleware. It now requires ASCII.
+  - `int()` also accepted `"1_000"`, Arabic-Indic and full-width digits.
+- **New `avrone/argnum.py`, `tool_int(v, default, lo, hi, bad=default)`:**
+  - Accepts ints (not bool), finite floats (truncated as before), and ASCII integer or float text.
+  - `+inf` and `-inf` clamp to the bound when one exists.
+  - NaN, bools, Unicode digits, underscores and other types return `bad`.
+- **Wired in:** tools_extra, codexstats, fleetstatus and mempeek (`bad=None`, so junk still reports an error), agentfs_tools, agentkit resources, bridge, tools_limits, lessonrecall, netdiag (bad port gives `ERROR: port must be an integer`).
+- **Behaviour change:** `True` as a count now gives the default instead of 1.
+- Tests: `tests/test_argnum_robust.py`.
+
+## Hardening round 46 (Hark edge-case series): capgate_head_attest
+This is the attested-history bridge from daemon main. No test in the suite imported it.
+- **Its own `--selftest` failed: 25 passed, 1 failed.** The "middle corruption" check replaced `'"seq": 0'`, but the log is compact JSON (`"seq":0`), so nothing was edited. The check is fixed and now really tampers with the line.
+- **seq was never validated.** On a digest-valid line, the next append behaved like this:
+  - `"seq": "x"` raised ValueError.
+  - `true` attested as seq 2.
+  - `1.5` was truncated.
+  - `Infinity` raised OverflowError.
+  - A missing seq raised KeyError.
+  - Skipped or repeated seqs passed.
+  - Fix: every line's seq must be an int equal to its position. A bad one raises OSError, so the log fails closed as designed.
+- **Strict JSON reads:**
+  - Duplicate keys are refused. Python keeps the last value while other readers may keep the first, so one line could verify here and mean something else elsewhere.
+  - `NaN` and `Infinity` are refused.
+  - Writes use `allow_nan=False`.
+- **Note and verify_error** are text: bytes are decoded, lone surrogates become U+FFFD, and the length is capped at 200. A non-string error, such as a dict holding NaN, could otherwise write a non-JSON line and brick the log.
+- **CLI:** a refused log prints one line to stderr and exits 1 instead of a traceback.
+- Tests: `tests/test_capgate_head_attest_robust.py`, which also runs the module selftest.
+
+## Hardening round 47 (Hark edge-case series): flake_probe
+- **`runs`:**
+  - `1e999` raised OverflowError out of the tool.
+  - `2.7` ran 2 times and `"1_0"` ran 10.
+  - NaN, inf, non-integral floats, Unicode digits and bools are now refused. The value goes through `argnum.tool_int`.
+- **Timeout sentinel forgery:** a timed-out run was marked with a string, so a tool returning those exact characters counted as a timeout. The sentinel is now an object compared by identity, and str-subclass outputs are converted to plain str.
+- **One raising run sank the whole probe** (duck-typed registries; the real Registry already catches). It is now an `ERROR: <Type> raised` output.
+- **Other output and counting fixes:**
+  - bytes are decoded.
+  - A hostile `__str__` becomes an error output.
+  - `ARG ERROR` refusals are counted as errors.
+- **Budget:** a run started near the end of the budget could overrun it by a full `run_timeout` (20 s). Later runs now get only what is left.
+- **first_diff_line:**
+  - `"x"` vs `"x\n"` and `"x\r\n"` vs `"x\n"` used to name a line past the end of both outputs. Ending-only differences now name the first line whose ending differs.
+  - Extra lines still name the first extra line.
+- **args:** `allow_nan=False`. Args must survive a JSON round trip, so non-str keys at any depth are refused; `{1: "a"}` used to probe the same as `{"1": "a"}`.
+- **format:** `" json "` is accepted.
+- Tests: `tests/test_flakeprobe_robust.py`.
+
+## Hardening round 48 (Hark edge-case series): fusion_loopback + fusion_plane
+
+### fusion_loopback (the HTTP access policy's loopback test, proxy bypass, doctor, breaker buckets)
+- **Brackets:** `host_text` called `.strip("[]")`, which removed any number of brackets from either end. So `]127.0.0.1[` and `[[::1]]` counted as loopback. Only one matched `[...]` pair is removed now.
+- **Zones:** `%` cut a zone from any name, so `127.0.0.1%evil` and `localhost%x` passed `caller_allowed`. That matters behind a trusted proxy that copies X-Forwarded-For. A zone is now allowed only on an IPv6 literal.
+- **Other characters:**
+  - Control characters, NUL, zero-width and non-ASCII characters are refused.
+  - Only spaces and tabs are trimmed, so `127.0.0.1\n` is no longer loopback.
+  - Bytes are decoded as ASCII, and non-str values are refused.
+- **is_any_loopback:** accepts one trailing root dot (`localhost.`) and rejects `.localhost` and `a..localhost`.
+- **origin_key:**
+  - `parts.port` raised ValueError outside the try (`:99999`, `:abc`). It now returns `invalid:`.
+  - The default port was None, so `http://localhost` and `https://localhost` shared one breaker, while `http://localhost` and `:80` did not. Ports now default by scheme.
+  - Non-loopback IPv6 keys are bracketed.
+
+### fusion_plane.classify_execute
+- A list or dict status raised TypeError (unhashable in a set test).
+- A str subclass, or any object with an always-true `__eq__`, could pose as SUCCEEDED, and a dict subclass's `.get()` could answer anything. Only exact `str` values are read, through `dict.get`.
+- A SUCCEEDED body with an `error` key or `result: not_executed` is now `contradictory` and not executed.
+- **Error reasons:** the reason used to be `str(body["error"])`. It was unbounded, multi-line, could call a hostile `__str__`, and an error spelled `plane_succeeded` came back as that reason code. **Behaviour change:** the reason is now `error`, and a clean single-line `detail` of at most 200 characters is added.
+
+- Tests: `tests/test_fusion_seams_robust.py`.

@@ -47,6 +47,9 @@ def _boot_time() -> float | None:
     return None
 
 
+from .textsafe import escape as _escape  # noqa: E402
+
+
 def _children(root_pid: int) -> dict[int, dict[str, Any]]:
     """pid -> info for every descendant of root_pid (bounded scan of /proc)."""
     info: dict[int, dict[str, Any]] = {}
@@ -69,7 +72,7 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
         started = btime + start_ticks / tck if btime is not None else None
         info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started,
                      "rss_kb": rss_pages * (os.sysconf("SC_PAGE_SIZE") // 1024 if hasattr(os, "sysconf") else 4),
-                     "cmd": cmd[:CMD_MAX]}
+                     "cmd": _escape(cmd[:CMD_MAX])}  # round 146: argv/comm are the process's own choice
     out: dict[int, dict[str, Any]] = {}
     frontier = {root_pid}
     while frontier:

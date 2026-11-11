@@ -409,8 +409,8 @@ class Checkpoint:
 # The file always lives at <data_dir>/checkpoints/<key>.json; a client never supplies a path.
 # Fleet jobs are keyed "fleet-<sender>-<digest>-<id>" and stamped with their owner, so one sender can
 # neither collide with nor resume (read) another sender's checkpoint.
-CKPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
+CKPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}\Z")
 FLEET_PREFIX = "fleet-"
 CKPT_MODES = ("squad", "deep")
 _active: set[str] = set()  # resolved paths of checkpoints a run in this process is using
@@ -448,7 +448,7 @@ def sanitize_client_id(raw: Any) -> str:
 
 def fleet_key(sender: str, ckpt_id: Any) -> str:
     cid = sanitize_id(ckpt_id)
-    if not isinstance(sender, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}$", sender):
+    if not isinstance(sender, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}\Z", sender):
         raise CheckpointError("fleet checkpoint needs a valid sender node id")
     # sender and id may both contain "-", so "a" + "b-c" and "a-b" + "c" would collide on
     # a bare join; a short digest of the (sender, id) pair keeps keys unique per pair.

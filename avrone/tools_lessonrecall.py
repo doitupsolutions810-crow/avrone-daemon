@@ -82,9 +82,10 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     topic = args.get("topic")
     topic = "" if topic is None else str(topic)[:500]
     lim = args.get("limit", LESSON_RECALL_DEFAULT)
-    if isinstance(lim, bool) or not isinstance(lim, (int, float)) and not (isinstance(lim, str) and lim.strip().isdigit()):
+    from .argnum import tool_int  # round 45: "²".isdigit() is True and int("²") raised; so did int(inf)
+    lim = tool_int(lim, LESSON_RECALL_DEFAULT, 1, LESSON_RECALL_MAX, bad=None)
+    if lim is None:
         return "ERROR: limit must be an integer 1..50"
-    lim = max(1, min(LESSON_RECALL_MAX, int(lim)))
     if not bridgemod.lessons_enabled():
         return "lessons are off on this node (AVRONE_LESSONS); nothing is learned or recalled"
     data_dir = getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)

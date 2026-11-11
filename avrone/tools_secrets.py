@@ -35,8 +35,21 @@ TEXT_SUFFIXES = {".jsonl", ".json", ".log", ".txt", ".md", ".py", ".sh", ".env",
                  ".ini", ""}
 
 
+def _shapes_rules():
+    from .secretshapes import CONTEXT_RULES
+    return CONTEXT_RULES
+
+
 def _kinds(line: str) -> list[str]:
     from . import ctxspawn
+    # round 157: redact() skips every rule whose literals are absent (round 82 gates), so a line it
+    # leaves unchanged holds nothing to report; the ungated search below cost ~0.4 s per MB, which
+    # mattered once whole run logs (up to 64 MiB) are scanned
+    try:
+        if ctxspawn.redact(line) == line:
+            return []
+    except Exception:  # noqa: BLE001
+        pass
     found = []
     try:
         for v in ctxspawn._env_secret_values():
@@ -46,7 +59,7 @@ def _kinds(line: str) -> list[str]:
     except Exception:  # noqa: BLE001
         pass
     names = ["private-key", "auth-header", "bearer", "secret-assignment", "api-key", "github-token", "slack-token",
-             "aws-key", "google-key", "jwt", "url-credentials"]
+             "aws-key", "google-key", "jwt", "url-credentials", "vendor-token"] + [n for *_x, n in _shapes_rules()]
     for (pat, _rep), name in zip(ctxspawn._PATTERNS, names):
         if pat.search(line):
             found.append(name)
@@ -67,7 +80,9 @@ def _roots(ctx: "AgentContext", scope: str) -> Path | None:
 
 def scan(root: Path) -> dict[str, Any]:
     hits: list[dict[str, Any]] = []
-    files = scanned = 0
+    files = scanned = total = 0
+    total_cap = SCAN_TOTAL_MAX
+    partial_files: list[str] = []
     from .safeio import NotRegularFile, TreeWalk, open_read
     # round 90: sorted(rglob("*")) listed the whole workspace (node_modules, .git included) before
     # scanning 2000 files; .git is now pruned while walking and at most SCAN_ENTRIES_MAX are read.
@@ -83,18 +98,57 @@ def scan(root: Path) -> dict[str, Any]:
         except OSError:
             continue
         files += 1
+        cap = min(_file_cap(p), max(0, total_cap - total))
         try:  # O_NOFOLLOW|O_NONBLOCK: a FIFO or link swapped in after the check is not read
             with open_read(p) as f:
-                data = f.read(MAX_BYTES)
+                n, partial = _scan_stream(f, cap, str(p.relative_to(root)), hits)
         except OSError:
             continue
+        total += n
         scanned += 1
-        for i, line in enumerate(data.decode(errors="replace").splitlines(), 1):
-            k = _kinds(line)
-            if k:
-                hits.append({"path": str(p.relative_to(root)), "line": i, "kinds": sorted(set(k))})
-    return {"files": scanned, "hits": hits,
+        if partial:
+            partial_files.append(str(p.relative_to(root)))
+    return {"files": scanned, "hits": hits, "partial": partial_files,
             "truncated": files >= MAX_FILES or bool(getattr(walk, "truncated", False))}
+
+
+# Round 157 (v0.150): scan() read the first MAX_BYTES (2 MiB) of each file and reported the rest
+# CLEAN. Run logs rotate at 64 MiB, so a secret written after the first 2 MiB of a run was never
+# flagged, and `fix` (which only rewrites flagged logs) never removed it. Run logs and archives are
+# now read whole up to FIX_MAX_BYTES; other files keep the 2 MiB cap. A file read only in part is
+# reported, never silently CLEAN. Lines are split on "\n" only, the same split fix uses: the old
+# splitlines() also split on U+2028, \x0b, \x1c ... so reported line numbers were wrong.
+SCAN_TOTAL_MAX = 2 * 1024 * 1024 * 1024  # bytes read by one scan, all files together
+LINE_CHUNK = 4 * 1024 * 1024  # one line is examined in pieces of this size, overlapping
+
+
+def _file_cap(p: Path) -> int:
+    return FIX_MAX_BYTES if is_run_log(p.name) else MAX_BYTES
+
+
+def _scan_stream(f: Any, cap: int, rel: str, hits: list[dict[str, Any]]) -> tuple[int, bool]:
+    """Scan up to `cap` bytes of an open binary file line by line. Returns (bytes read, partial)."""
+    read = 0
+    lineno = 1
+    tail = b""  # the end of the previous piece of a long line, so a secret across pieces is seen
+    flagged = False
+    while read < cap:
+        chunk = f.readline(min(LINE_CHUNK, cap - read))
+        if not chunk:
+            return read, False
+        read += len(chunk)
+        ends = chunk.endswith(b"\n")
+        if not flagged:
+            k = _kinds((tail + chunk).decode("utf-8", errors="replace"))
+            if k:
+                hits.append({"path": rel, "line": lineno, "kinds": sorted(set(k))})
+                flagged = True
+        if ends:
+            lineno += 1
+            tail, flagged = b"", False
+        else:
+            tail = chunk[-4096:]
+    return read, bool(f.read(1))
 
 
 _ARCHIVE_RE = None
@@ -113,9 +167,52 @@ def is_run_log(name: str) -> bool:
 FIX_MAX_BYTES = 256 * 1024 * 1024  # a run log bigger than this is not rewritten in memory
 
 
-def _redact_text(text: str) -> str:
+def _redact_value(v: Any) -> Any:
     from .ctxspawn import redact
-    return "\n".join(redact(ln) if _kinds(ln) else ln for ln in text.split("\n"))
+    if isinstance(v, str):
+        return redact(v) if _kinds(v) else v
+    if isinstance(v, list):
+        return [_redact_value(x) for x in v]
+    if isinstance(v, dict):
+        return {(_redact_value(k) if isinstance(k, str) else k): _redact_value(x) for k, x in v.items()}
+    return v
+
+
+def _redact_line(ln: str) -> str:
+    """Round 151: a flagged JSON event line is redacted value by value and dumped again. Redacting
+    the raw line broke it: a private key without its END marker (tool output cut at a cap) is
+    masked to the end of the text, which took the line's closing quotes and braces, so every run
+    log reader skipped the event. A secret JSON-escaped in the line (an env value holding a quote
+    or backslash) was also never matched. Lines that are not JSON are redacted as text."""
+    from .ctxspawn import redact
+    s = ln.rstrip("\r")
+    if s[:1] in ("{", "["):
+        from .safeio import json_loads
+        try:
+            obj = json_loads(s)
+        except ValueError:
+            obj = None
+        if isinstance(obj, (dict, list)):
+            new = _redact_value(obj)
+            if new != obj:
+                return json.dumps(new) + ln[len(s):]
+    return redact(ln)
+
+
+def _redact_text(text: str) -> str:
+    return "\n".join(_redact_line(ln) if _kinds(ln) or _line_hides_secret(ln) else ln for ln in text.split("\n"))
+
+
+def _line_hides_secret(ln: str) -> bool:
+    """A JSON line whose decoded strings hold a secret the raw text hides (escaped quotes etc.)."""
+    if not ln.startswith("{") or "\\" not in ln:
+        return False
+    from .safeio import json_loads
+    try:
+        obj = json_loads(ln.rstrip("\r"))
+    except ValueError:
+        return False
+    return _redact_value(obj) != obj
 
 
 def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
@@ -136,14 +233,16 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
             data = read_capped(p, FIX_MAX_BYTES)
             if data is None:
                 continue
-            text = data.decode("utf-8", errors="replace")
+            # round 151: surrogateescape keeps bytes that are not UTF-8 (a torn write) exactly as
+            # they were; "replace" turned them into U+FFFD in lines that held no secret at all
+            text = data.decode("utf-8", errors="surrogateescape")
             new = _redact_text(text)
             if new == text:
                 continue
             from .safeio import mkstemp_beside
             fd, tmp = mkstemp_beside(p)  # round 116: long names; round 121: errors name p
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
                     f.write(new)
                     with (lock if lock is not None else contextlib.nullcontext()):
                         try:
@@ -159,8 +258,9 @@ def fix_runs(root: Path, paths: set[str], lock: Any = None) -> int:
                                     raise _Moved()
                                 src.seek(len(data))
                                 tail = src.read(st1.st_size - len(data))
-                            f.write(_redact_text(tail.decode("utf-8", errors="replace")))
+                            f.write(_redact_text(tail.decode("utf-8", errors="surrogateescape")))
                         f.flush()
+                        os.fsync(f.fileno())  # round 151: a crash after the swap left an empty log
                         os.chmod(tmp, st1.st_mode & 0o777)
                         os.replace(tmp, p)
             except _Moved:
@@ -179,12 +279,35 @@ class _Moved(Exception):
     pass
 
 
+def _tsesc(x: Any) -> str:
+    from .textsafe import escape
+    return escape(str(x))
+
+
+async def _jobs_db_report(path: Path, fix: bool) -> list[str]:
+    import sqlite3
+    from .jobqueue import scrub_db
+    try:
+        r = await asyncio.to_thread(scrub_db, path, fix)
+    except sqlite3.Error as e:
+        return [f"- jobs.db: NOT scanned ({_tsesc(type(e).__name__)}: {_tsesc(str(e)[:120])})"]
+    out = []
+    if r["flagged"]:
+        out.append(f"- jobs.db: {r['flagged']} job(s) with a secret in the stored result or error"
+                   + (f"; fixed {r['fixed']}" if fix else " (fix=true masks them)")
+                   + ("" if not fix or r.get("wal_cleared", 1) else
+                      "; the old values are still in jobs.db-wal (a reader held it), run fix again"))
+    if r["payloads"]:
+        out.append(f"- jobs.db: {r['payloads']} job payload(s) hold a secret (task input; never rewritten, fix by hand)")
+    return out
+
+
 async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = args.get("scope", "runs")
     if scope not in ("runs", "data", "workspace"):
         return "ERROR: scope must be runs, data or workspace"
-    if args.get("fix") is True and scope != "runs":
-        return "ERROR: fix is only allowed for scope runs (run logs); fix other files by hand"
+    if args.get("fix") is True and scope not in ("runs", "data"):
+        return "ERROR: fix is only allowed for scope runs or data (run logs, bridge journals, memory, jobs.db); fix other files by hand"
     root = _roots(ctx, scope)
     if root is None:
         return f"secret_scan: no {scope} directory configured on this node"
@@ -193,14 +316,48 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     head = (f"secret_scan [{scope}]: {'CLEAN' if not hits else 'FOUND'} - {len(hits)} line(s) in "
             f"{len({h['path'] for h in hits})} file(s); {res['files']} file(s) read"
             + (" (file cap reached)" if res["truncated"] else ""))
-    lines = [head] + [f"- {h['path']}:{h['line']} {', '.join(h['kinds'])}" for h in hits[:MAX_SHOWN]]
+    if res.get("partial"):
+        part = res["partial"]
+        head += (f"; {len(part)} file(s) only partly read (size cap), the rest NOT scanned: "
+                 + ", ".join(_tsesc(x) for x in part[:5]) + (" ..." if len(part) > 5 else ""))
+    # round 157: hit paths were printed raw; a run log named "x.jsonl\n- CLEAN" forged report lines
+    lines = [head] + [f"- {_tsesc(h['path'])}:{h['line']} {', '.join(h['kinds'])}" for h in hits[:MAX_SHOWN]]
     if len(hits) > MAX_SHOWN:
         lines.append(f"... {len(hits) - MAX_SHOWN} more")
+    if scope == "data":  # round 159: jobs.db rows (results/errors stored raw before v0.148)
+        lines += await _jobs_db_report(root / "jobs.db", args.get("fix") is True)
+        if any(ln.startswith("- jobs.db:") and "NOT scanned" not in ln for ln in lines) and not hits:
+            lines[0] = lines[0].replace(": CLEAN -", ": FOUND -", 1)
     if hits and args.get("fix") is True:
         lock = getattr(getattr(getattr(ctx, "core", None), "codex", None), "_write_lock", None)
-        n = await asyncio.to_thread(fix_runs, root, {h["path"] for h in hits}, lock)
+        paths = {h["path"] for h in hits}
+        if scope == "runs":
+            n = await asyncio.to_thread(fix_runs, root, paths, lock)
+            nb = 0
+        else:  # round 158: data scope fixes run logs under runs/ and bridge journals under bridge/
+            n = await asyncio.to_thread(fix_runs, root / "runs",
+                                        {x[5:] for x in paths if x.startswith("runs/") and "/" not in x[5:]}, lock)
+            from .bridge import fix_journal
+            core = getattr(ctx, "core", None)
+            nb = 0
+            if "memory.jsonl" in paths:  # round 163: memory values (the store's own lock and rewrite)
+                from .memstore import MemoryStore
+                try:
+                    mr = await asyncio.to_thread(MemoryStore(root / "memory.jsonl").scrub)
+                    lines.append(f"memory: masked {mr['values']} value(s)"
+                                 + (f"; {mr['keys']} key(s) hold a secret (keys are not rewritten, "
+                                    "fix them by hand)" if mr["keys"] else ""))
+                except OSError as e:
+                    lines.append(f"memory: NOT fixed ({type(e).__name__})")
+            for x in sorted(paths):
+                if x.startswith("bridge/") and "/" not in x[7:]:
+                    try:
+                        nb += await asyncio.to_thread(fix_journal, root / x, core)
+                    except OSError:
+                        pass
         after = await asyncio.to_thread(scan, root)
-        lines.append(f"fixed {n} run log(s); {len(after['hits'])} line(s) still flagged")
+        lines.append(f"fixed {n} run log(s)" + (f" and {nb} bridge journal(s)" if scope == "data" else "")
+                     + f"; {len(after['hits'])} line(s) still flagged")
     return "\n".join(lines)
 
 

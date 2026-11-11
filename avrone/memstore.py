@@ -47,7 +47,7 @@ try:  # POSIX only; on other platforms the in-process lock still serialises writ
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-NS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+NS_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}\Z")
 REMOTE_PREFIX = "fleet:"
 MAX_KEY = 200
 # merged (foreign) entries are clamped to at most this far into the future: a peer with a skewed
@@ -507,6 +507,34 @@ class MemoryStore:
                 stats["merged"] += 1
             self._commit(records, spaces, pending, evicted)
         return stats
+
+    def scrub(self) -> dict[str, int]:
+        """Round 163: mask secrets in stored memory values (secret_scan fix, scope data).
+
+        memory_save stored values raw, and fleet memory sync shipped them to the parent. Each
+        changed value gets a new LWW ts (_next_ts), so a peer still holding the raw copy at the
+        old ts loses to the masked one on the next sync instead of winning the equal-ts tie-break
+        and bringing it back. The rewrite drops superseded records, so no older raw line stays
+        in the file. Keys are left as they are (they are the record's identity) and counted."""
+        from .ctxspawn import redact
+        out = {"values": 0, "keys": 0}
+        with self._locked():
+            spaces = self._fold(self._records())
+            now = time.time()
+            for space in spaces.values():
+                for key, rec in space.items():
+                    if redact(key) != key:
+                        out["keys"] += 1
+                    v = rec.get("value")
+                    if isinstance(v, str):
+                        nv = redact(v)
+                        if nv != v:
+                            rec["ts"] = _next_ts(dict(rec), now)
+                            rec["value"] = nv
+                            out["values"] += 1
+            if out["values"]:
+                self._rewrite(spaces)
+        return out
 
     def delete(self, ns: str, key: str) -> bool:
         """Remove one key from `ns` (atomic rewrite). False when it was not there."""

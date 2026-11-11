@@ -1,4 +1,4 @@
-# AVRONE MASTER PROMPT (v0.138.0)
+# AVRONE MASTER PROMPT (v0.159.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
 AI-native, self-hosting agent orchestration system: chat/search, multi-agent "squads" (workers plus
@@ -12,7 +12,7 @@ from a command you ran.
 ```bash
 git clone https://github.com/doitupsolutions810-crow/Avrone.git avrone && cd avrone
 python -m pip install -e ".[dev]" pytest-cov websockets
-python -m pytest -q                       # full gate: expect ~6,684 passed, 1 skipped
+python -m pytest -q                       # full gate: expect ~3 passed, 1 skipped
 cd /tmp && python -m pytest -q "$OLDPWD/tests" -m integration   # real-uvicorn tests: 5 passed
 cd - && python -m pytest -q --cov=avrone  # coverage: expect 99%
 python tools/make_master_prompt.py        # regenerates this file from the code
@@ -50,6 +50,7 @@ Avrone/
 │   ├── agentkit.py              Agent kit (v0.8): richer tooling plus better handling of tasks, resources and skills.
 │   ├── agentpack.py             Agent packs: a portable, verifiable bundle of one agent's home.
 │   ├── agentpack_tools.py       Agent-home tools (edgepack): pack, restore and migrate YOUR OWN agent home.
+│   ├── argnum.py                Integer tool arguments, one rule for every tool (hardening round 45).
 │   ├── bootstrap.py             Bootstrap: build a ready TrinityCore in one place, for the server and the CLI.
 │   ├── bridge.py                Learning bridge: a run-scoped blackboard where agents among agents conclude together.
 │   ├── capgate.py               capgate: capability-scoped tool calls + a tamper-evident receipt chain (opt-in).
@@ -74,6 +75,7 @@ Avrone/
 │   ├── greatscale.py            Great Scale bridge: AVRONE peer of doitupsolutions810-crow/great-scale (public/residual.cjs).
 │   ├── jobqueue.py              Durable job queue (SQLite, WAL): work survives a restart and retries on failure.
 │   ├── llm.py                   Model client. Talks to any OpenAI-compatible /chat/completions endpoint.
+│   ├── logsafe.py               Round 150: log arguments from outside can't forge log lines.
 │   ├── mcp_client.py            Dependency-free MCP (Model Context Protocol) client.
 │   ├── mcp_server.py            Expose AVRONE itself as an MCP server over stdio.
 │   ├── memstore.py              Durable per-agent memory namespaces (Eternal CodeX memory store).
@@ -84,6 +86,7 @@ Avrone/
 │   ├── recon.py                 Advanced reconnaissance (v0.10): deeper, still bounded, authorized-only recon.
 │   ├── safeio.py                Atomic file replacement that never writes through a planted symlink (round 81).
 │   ├── searchproc.py            search_files' scan, run in a child process so a pathological regex cannot freeze the node.
+│   ├── secretshapes.py          Credential shapes known by their vendor prefix, shared by every redactor (round 152).
 │   ├── server.py                Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD).
 │   ├── sovereign.py             Sovereign OS: the environment agents live and work in.
 │   ├── telemetry.py             Telemetry + System Map: AVRONE traces its own nodes.
@@ -108,7 +111,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 338 test files, offline by default
+├── tests/                  # 367 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
@@ -321,42 +324,33 @@ landed and the suite is green. End with what is still open.
 - **toolset-hardening**: Use the self-evolve loop to harden AVRONE's own tools - audit the toolset, pick a weak tool, prove the weakness with a failing test, and land the fix through a gated prop
 
 ## 7. Environment knobs (every `AVRONE_*` the code reads)
-`AVRONE_ADMIN_TOKEN`, `AVRONE_ADMIN_TOKEN_PREVIOUS`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_FUSION_STATE_PATH`, `AVRONE_FUSION_WATCH_PATH`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
+`AVRONE_ADMIN_TOKEN`, `AVRONE_ADMIN_TOKEN_PREVIOUS`, `AVRONE_AGENTS_CAN_SHELL`, `AVRONE_AGENT_CONTAINER`, `AVRONE_AGENT_CPUS`, `AVRONE_AGENT_DIR`, `AVRONE_AGENT_DOCKER_ISOLATE`, `AVRONE_AGENT_FS`, `AVRONE_AGENT_FS_MAX_FILE_MB`, `AVRONE_AGENT_FS_QUOTA_MB`, `AVRONE_AGENT_IDLE_SECS`, `AVRONE_AGENT_MEM_MB`, `AVRONE_AGENT_MIGRATE`, `AVRONE_AGENT_MIGRATE_INTERVAL`, `AVRONE_AGENT_TIMEOUT`, `AVRONE_ALLOW_ABS_READ`, `AVRONE_ALLOW_NETWORK`, `AVRONE_ATTESTED_HISTORY_LOG`, `AVRONE_BREAKER_COOLDOWN`, `AVRONE_BREAKER_THRESHOLD`, `AVRONE_BRIDGE_MAX_POSTS`, `AVRONE_BRIDGE_ROUNDS`, `AVRONE_CAPGATE`, `AVRONE_CAPGATE_ATTEST`, `AVRONE_CAPGATE_KEY`, `AVRONE_CAPGATE_POLICY`, `AVRONE_CAPGATE_TTL`, `AVRONE_CHECKPOINT_MAX_BYTES`, `AVRONE_CODEX_ARG_CHARS`, `AVRONE_CODEX_FIELD_MAX_CHARS`, `AVRONE_CODEX_LOG_KEEP`, `AVRONE_CODEX_LOG_MAX_BYTES`, `AVRONE_CODEX_REDACT`, `AVRONE_COMMAND_TIMEOUT`, `AVRONE_CONTEXT_CHARS`, `AVRONE_DATA_DIR`, `AVRONE_DEEP_ROUNDS`, `AVRONE_DEEP_SQUAD_SIZE`, `AVRONE_DOCKER_IMAGE`, `AVRONE_DOH_URL`, `AVRONE_ENV_FILE`, `AVRONE_EVOLVE_HISTORY`, `AVRONE_EVOLVE_LONG`, `AVRONE_EVOLVE_MAX_BG`, `AVRONE_EVOLVE_MAX_ITERS`, `AVRONE_EVOLVE_SKILL_MAX_BYTES`, `AVRONE_EVOLVE_TEST_CMD`, `AVRONE_EVOLVE_TIME_BUDGET`, `AVRONE_FLEET_ALLOW`, `AVRONE_FLEET_HEARTBEAT`, `AVRONE_FLEET_MAX_HOPS`, `AVRONE_FLEET_MAX_NODES`, `AVRONE_FLEET_NONCE_LOCK_S`, `AVRONE_FLEET_OFFLOAD`, `AVRONE_FLEET_OFFLOAD_TIMEOUT`, `AVRONE_FLEET_PARENT`, `AVRONE_FLEET_PRIVILEGED`, `AVRONE_FLEET_PRIVILEGED_MAX_HOPS`, `AVRONE_FLEET_REQUIRE_ALLOW`, `AVRONE_FLEET_TOKEN`, `AVRONE_FLEET_TOKEN_PREV`, `AVRONE_FLEET_UNAUTH_AUDIT_PER_MIN`, `AVRONE_FUSION_STATE_PATH`, `AVRONE_FUSION_WATCH_PATH`, `AVRONE_GEOIP_URL`, `AVRONE_GOVERNOR`, `AVRONE_HOST`, `AVRONE_LEAD_MODEL`, `AVRONE_LESSONS`, `AVRONE_LESSONS_K`, `AVRONE_LESSONS_MAX`, `AVRONE_LLM`, `AVRONE_LLM_API_KEY`, `AVRONE_LLM_BACKOFF`, `AVRONE_LLM_BASE_URL`, `AVRONE_LLM_FALLBACKS`, `AVRONE_LLM_MODE`, `AVRONE_LLM_MODEL`, `AVRONE_LLM_RETRIES`, `AVRONE_LLM_TIMEOUT`, `AVRONE_LOCK_WAIT_S`, `AVRONE_LOG_ARG_MAX_CHARS`, `AVRONE_LOG_LEVEL`, `AVRONE_MAX_AGENTS_PER_RUN`, `AVRONE_MAX_BACKGROUND_RUNS`, `AVRONE_MAX_BODY_BYTES`, `AVRONE_MAX_CALLS_PER_TURN`, `AVRONE_MAX_MESSAGE_CHARS`, `AVRONE_MAX_PARALLEL`, `AVRONE_MAX_SPAWN_DEPTH`, `AVRONE_MAX_STEPS`, `AVRONE_MAX_WS_SUBSCRIBERS`, `AVRONE_MCP_CONFIG`, `AVRONE_MCP_MAX_BATCH`, `AVRONE_MCP_MAX_INFLIGHT`, `AVRONE_MCP_MAX_RESPONSE_BYTES`, `AVRONE_MCP_SERVER_CHILD`, `AVRONE_MCP_SHUTDOWN_GRACE`, `AVRONE_MCP_TIMEOUT`, `AVRONE_MEMORY_MAX_ENTRIES`, `AVRONE_MEMORY_MAX_NAMESPACES`, `AVRONE_MEMORY_MAX_REMOTE_NS`, `AVRONE_MEMORY_MAX_VALUE`, `AVRONE_MIN_PARALLEL`, `AVRONE_NET_MAX_NODES`, `AVRONE_NET_MAX_REMOTE_AGENTS`, `AVRONE_NET_SUBSQUAD`, `AVRONE_NET_WORKER_MODE`, `AVRONE_NODE_ID`, `AVRONE_PLUGINS_DIR`, `AVRONE_PORT`, `AVRONE_PRIVILEGED_NODES`, `AVRONE_PRIV_SHELL_ALLOW`, `AVRONE_PRIV_SHELL_TIMEOUT`, `AVRONE_PROC_LONG_S`, `AVRONE_PROVIDER`, `AVRONE_PUBLIC_ACCESS`, `AVRONE_PUBLIC_URL`, `AVRONE_QUEUE_KEEP_FINISHED`, `AVRONE_QUEUE_MAX_PENDING`, `AVRONE_QUEUE_RETAIN_S`, `AVRONE_RECON`, `AVRONE_RECON_ALLOWLIST`, `AVRONE_REPLAY_MAX_EVENTS`, `AVRONE_REPO_DIR`, `AVRONE_RUNNER`, `AVRONE_RUNS_CACHE_S`, `AVRONE_SEARCH_PROVIDER`, `AVRONE_SELF_CHANGES`, `AVRONE_SELF_EVOLVE`, `AVRONE_SHARED_WORKSPACE`, `AVRONE_SHELL_PIPE_GRACE`, `AVRONE_SKILLS_DIR`, `AVRONE_SPAWN_CONTEXT_CHARS`, `AVRONE_SQUAD_DISPATCH`, `AVRONE_SQUAD_SIZE`, `AVRONE_TELEMETRY_MAX_FILE_BYTES`, `AVRONE_THERMAL_LIMIT_HOT_PCT`, `AVRONE_THERMAL_MAX_C`, `AVRONE_TOOLS_ONLY`, `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_VERSION`, `AVRONE_WORKSPACE`, `AVRONE_WS_SEND_TIMEOUT`
 
 ## 8. Latest releases (from README)
-## v0.138: Round 145: a corrupt fleet.json that can't be set aside is never overwritten. 6,684 tests + 19 integration
+## v0.159: Round 166: Job ids that sqlite cannot bind
 
-- **Bug** (`FleetManager._load_saved`):
-  - A failed rename of the corrupt file was ignored.
-  - The node started with an empty registry, and its first save (in `__init__`) replaced the file, so nothing of it was kept.
-- **Fix:**
-  - The node remembers that the set-aside is still pending (`_pending_aside`).
-  - Every `_write_registry` tries the rename first. While it still fails, the write is skipped, `save_blocked` counts the skips, and the registry stays in memory only. The node keeps booting and serving.
-  - Once the rename works, the old file is kept as `.corrupt-<ts>` and saves resume.
-- **Tests:** `tests/test_round145_fleet_aside.py` (2). Both fail on v0.137.
+- **Before:** `JobQueue.get("\ud800")` raised `UnicodeEncodeError`, and `queue_status` passed `job_id` straight through to it.
+- **Now:** `get`, `complete`, `fail`, `extend` and `release` treat an id or token that is not a str, or that holds a lone surrogate, as naming no job. `get` returns `None`, `fail` returns `"missing"`, and the others return `False`.
+- **Tests:** `tests/test_round166_job_ids.py` (4). 2 fail on v0.158.
 
-## v0.137: Round 144: a task board that can't be read right now is never replaced. 6,682 tests + 19 integration
+## v0.158: Round 165: Job payload size limit
 
-- **Bug** (`agentkit._task_board_locked`):
-  - Any OSError reading the board (EMFILE, EIO, EACCES) counted as corrupt.
-  - The board was moved aside as `*.corrupt-<ts>`, and an add then wrote a board holding only the new task, so every agent lost the run's tasks.
-  - If the set-aside rename failed, the write replaced the unreadable board anyway.
-- **Fix:**
-  - A read error returns `ERROR: could not read the task board (...); nothing changed`.
-  - A torn or oversized board is still set aside. If that rename fails, the call returns an error and writes nothing.
-- **Noted, not fixed:** `FleetManager._load_saved` still starts empty when it cannot rename a corrupt `fleet.json` aside, so the next save overwrites that corrupt file.
-- **Tests:** `tests/test_round144_task_board_read_error.py` (3). 2 fail on v0.136.
+- **Before:** `JobQueue.enqueue` had no size limit, so a single 50 MB payload was stored. Every later `claim`, `get` and `list` loaded it in full.
+- **Now:** serialized payloads over `PAYLOAD_MAX_BYTES` (16 MiB) raise `ValueError`, and nothing is stored. `queue_submit` reports it as `ERROR: job not queued`.
+- **Tests:** `test_oversized_payload_refused`, which fails on v0.157.
 
-## v0.136: Round 143: a transient fleet.json read error never gives a node a new identity. 6,679 tests + 19 integration
+## v0.157: Round 164: JobQueue.enqueue validates kind
 
-- **Bug** (`FleetManager._load_saved`):
-  - Any OSError at boot (EMFILE, EIO, EACCES) was treated like a corrupt file.
-  - `fleet.json` was moved aside, and the node came up with a new random `node_id` and no peers. Fleet checkpoints and peer records are keyed by that id.
-- **Fix:**
-  - A read error is retried up to `FLEET_JSON_READ_TRIES` (3) times, with short backoff.
-  - If it still fails, the node raises `RuntimeError` and refuses to boot, leaving the file untouched.
-  - An oversized file is now set aside as `.toobig-<ts>`, not `.corrupt-<ts>`. `test_round85` was updated to accept either name.
-- **Tests:** `tests/test_round143_fleet_identity.py` (4). 3 fail on v0.135.
+- **Before:** a `kind` containing a lone surrogate raised a raw `UnicodeEncodeError` out of sqlite. `None` and other objects were saved as their repr.
+- **Now:** these cases raise a `ValueError` that says what is wrong:
+  - an empty kind
+  - a kind longer than 64 characters
+  - a non-printable kind, including a newline
+  - a kind with a surrogate
+  - a bool
+  - `None` and other objects
+- **Unchanged:** a numeric kind is still saved as its text (`123` becomes `"123"`).
+- **Tests:** `tests/test_round164_enqueue_kind.py` (9). 5 fail on v0.156.
 
 ## 9. Open threads (pick up here)
 - Deploy target undecided: own VPS (preferred for Ollama/GPU), fly.io, or Railway. `data_dir` must be
@@ -369,4 +363,4 @@ landed and the suite is green. End with what is still open.
 
 ## 10. First message to send the owner
 Run section 0, then reply in one line: the version, test count, coverage, and the next round's
-target. Example: "AVRONE v0.138.0 checked out: 6,684 passed, 99% coverage. Next: round <N+1> on <angle>."
+target. Example: "AVRONE v0.159.0 checked out: 3 passed, 99% coverage. Next: round <N+1> on <angle>."

@@ -1,5 +1,5 @@
 """AVRONE: a self-hosted, multi-agent chat and search system."""
-__version__ = "0.157.0"
+__version__ = "0.158.0"
 
 from . import logsafe as _logsafe  # noqa: E402
 

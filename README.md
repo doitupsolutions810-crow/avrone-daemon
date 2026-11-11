@@ -81,6 +81,12 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.158: Round 165: Job payload size limit
+
+- **Before:** `JobQueue.enqueue` had no size limit, so a single 50 MB payload was stored. Every later `claim`, `get` and `list` loaded it in full.
+- **Now:** serialized payloads over `PAYLOAD_MAX_BYTES` (16 MiB) raise `ValueError`, and nothing is stored. `queue_submit` reports it as `ERROR: job not queued`.
+- **Tests:** `test_oversized_payload_refused`, which fails on v0.157.
+
 ## v0.157: Round 164: JobQueue.enqueue validates kind
 
 - **Before:** a `kind` containing a lone surrogate raised a raw `UnicodeEncodeError` out of sqlite. `None` and other objects were saved as their repr.

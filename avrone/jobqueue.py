@@ -26,6 +26,7 @@ log = logging.getLogger("avrone.jobqueue")
 RESULT_MAX = 100000
 ERROR_MAX = 4000
 PRIORITY_MAX = 2**62
+PAYLOAD_MAX_BYTES = 16 << 20  # serialized JSON; enqueue refuses bigger payloads
 CLOCK_SLACK_S = 5.0  # round 112: `updated` this far ahead of now means the clock stepped back
 EXTEND_MAX_S = 7 * 86400  # one heartbeat can never park a job for longer than this
 # Retention (round 65). Finished jobs (done/dead, each up to RESULT_MAX of result) were never
@@ -253,6 +254,9 @@ class JobQueue:
         jid = uuid.uuid4().hex[:12]
         now = time.time()
         body = json.dumps(payload)  # an unserializable payload fails HERE, to the caller, not in a worker
+        # round 164b: no size cap let one enqueue store a 50 MB row that every claim/get/list then loaded
+        if len(body) > PAYLOAD_MAX_BYTES:
+            raise ValueError(f"job payload is {len(body)} bytes, over the {PAYLOAD_MAX_BYTES} byte limit")
         try:
             prio = int(priority)
         except (TypeError, ValueError, OverflowError):

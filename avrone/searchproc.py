@@ -21,14 +21,36 @@ from .safeio import read_capped
 
 
 def _iter_files(root: Path, skip_names: set[str], skip_paths: set[str]):
+    """Depth-first file walk without os.walk's recursive generator chain.
+
+    os.walk recurses once per directory level and raises RecursionError on a sufficiently deep
+    tree. Keep the same deterministic order (files in a directory, then sorted child dirs), but
+    use an explicit stack and do not follow symlinked directories.
+    """
     if root.is_file():
         yield root
         return
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames
-                             if d not in skip_names and os.path.join(dirpath, d) not in skip_paths)
-        for fn in sorted(filenames):
-            yield Path(dirpath) / fn
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        try:
+            with os.scandir(directory) as scan:
+                entries = sorted(scan, key=lambda entry: entry.name)
+        except OSError:
+            continue
+        child_dirs: list[Path] = []
+        files: list[Path] = []
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in skip_names and entry.path not in skip_paths:
+                        child_dirs.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(Path(entry.path))
+            except OSError:
+                continue
+        yield from files
+        stack.extend(reversed(child_dirs))
 
 
 def run(req: dict, out) -> None:

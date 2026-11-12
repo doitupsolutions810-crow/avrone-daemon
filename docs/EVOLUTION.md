@@ -119,3 +119,18 @@ Verify.sh exists at repo root. docker-verify job is present in .github/workflows
 No runs in progress or queued on this branch at check time. On main, most recent CI (run 43144249146, SHA 65187dee) also succeeded with real runners.
 
 **Recommendation: pause this automation.** CI is green on the branch with real runners and no code failures. Do not force-push. Do not delete branches.
+
+## CI Status Check 2026-11-12T15:08Z (head a15450df)
+
+Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/43234853042 (run 1033, SHA a15450df8bb99c639b64cf491d7bce45ef49c3ad) completed with conclusion **success**.
+
+Jobs (all success, real runners assigned, no zero/blank runner IDs, no provisioning faults):
+- docker-verify: runner_id 1000009937 (GitHub Actions 1000009937), ubuntu-24.04
+- test (3.11): runner_id 1000009938 (GitHub Actions 1000009938)
+- test (3.12): runner_id 1000009939 (GitHub Actions 1000009939)
+
+Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml and succeeded (checkout, docker build, Run Verify.sh inside image).
+
+No runs in progress or queued on this branch at check time. On main, most recent CI (run 43144249146, SHA 65187dee) also succeeded with real runners.
+
+**Recommendation: pause this automation.** CI is green on the branch with real runners and no code failures. Do not force-push. Do not delete branches.

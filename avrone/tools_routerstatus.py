@@ -34,6 +34,15 @@ if TYPE_CHECKING:
 ROUTER_STATUS_MAX_UPSTREAMS = 20
 ROUTER_STATUS_MAX_CHARS = 6000
 _UNSAFE_RE = re.compile(r"[^A-Za-z0-9_.:/@+\-]")
+# round 53: an invisible char inside a configured key ("sk-ab" + U+200B + "cd...") defeated the
+# exact-match mask, then _UNSAFE_RE turned it into "?" and printed the rest of the key
+_INVISIBLE_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
+
+
+def _text(v: Any) -> str:
+    if isinstance(v, (bytes, bytearray)):  # round 53: a bytes key was masked as "b'...'" and missed
+        return bytes(v).decode("utf-8", "replace")
+    return "" if v is None else str(v)
 
 
 def _num(v: Any) -> float | None:
@@ -47,7 +56,7 @@ def _num(v: Any) -> float | None:
 
 
 def _label(v: Any, secrets: list[str], n: int = 96) -> str:
-    s = str(v or "")
+    s = _INVISIBLE_RE.sub("", _text(v) if v else "")
     for sec in secrets:
         if sec:
             s = s.replace(sec, "***")
@@ -70,14 +79,17 @@ def route_of(base_url: str) -> str:
     import urllib.request
     from urllib.parse import urlsplit
     from .gateway import is_loopback_url
-    if is_loopback_url(base_url):
-        return "direct"
     try:
+        if is_loopback_url(base_url):
+            return "direct"
         parts = urlsplit(str(base_url or ""))
         host = parts.hostname or ""
-    except ValueError:
+    except (ValueError, TypeError):
         return "direct"
-    proxies = urllib.request.getproxies()
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:  # noqa: BLE001 - round 53: an odd proxy env never breaks a read-only report
+        return "direct"
     if not proxies.get(parts.scheme or "https") or not host:
         return "direct"
     try:
@@ -107,9 +119,15 @@ def router_status(ctx: "AgentContext") -> dict[str, Any]:
                            "last_route": [], "summary": None}
     if gw is None:
         return rep
-    ups = [u for u in list(getattr(gw, "upstreams", []) or []) if u is not None]
-    secrets = sorted({str(getattr(u, attr, "") or "") for u in ups for attr in ("api_key", "base_url")
-                      if getattr(u, attr, "")}, key=len, reverse=True)  # keys AND urls are masked
+    raw = getattr(gw, "upstreams", None)
+    try:  # round 53: a non-iterable upstreams (a misconfigured Gateway) raised TypeError
+        ups = [u for u in list(raw or []) if u is not None] if not isinstance(raw, (str, bytes)) else []
+    except TypeError:
+        ups = []
+    secrets = sorted({_INVISIBLE_RE.sub("", _text(getattr(u, attr, ""))) for u in ups
+                      for attr in ("api_key", "base_url") if getattr(u, attr, "")},
+                     key=len, reverse=True)  # keys AND urls are masked
+    secrets = [x for x in secrets if x]
     threshold = int(_num(getattr(gw, "threshold", 3)) or 3)
     cooldown = _num(getattr(gw, "cooldown", 30))
     s = getattr(gw, "s", None)
@@ -134,7 +152,9 @@ def router_status(ctx: "AgentContext") -> dict[str, Any]:
     rep["chain"] = chain[:ROUTER_STATUS_MAX_UPSTREAMS]
     rep["upstreams"] = rows[:ROUTER_STATUS_MAX_UPSTREAMS]
     rep["more"] = max(0, len(rows) - ROUTER_STATUS_MAX_UPSTREAMS)
-    rep["last_route"] = [_label(x, secrets, 48) for x in list(getattr(gw, "last_route", []) or [])[:10]]
+    lr = getattr(gw, "last_route", None)
+    lr = list(lr)[:10] if isinstance(lr, (list, tuple)) else []  # round 53: a str was split per char
+    rep["last_route"] = [_label(x, secrets, 48) for x in lr]
     counts: dict[str, int] = {}
     for r in rows:
         counts[r["state"]] = counts.get(r["state"], 0) + 1
@@ -177,17 +197,26 @@ def render_text(rep: dict[str, Any]) -> str:
 
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_router_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    fmt = str(args.get("format", "text") or "text").lower()
+    fmt = args.get("format", "text") or "text"
+    fmt = fmt.strip().lower() if isinstance(fmt, str) else ""  # round 53: " JSON " was refused
     if fmt not in {"text", "json"}:
         return 'ERROR: format must be "text" or "json"'
     rep = router_status(ctx)
     if fmt == "json":
         text = json.dumps(rep, indent=1, sort_keys=True)
+        if len(text) > ROUTER_STATUS_MAX_CHARS:  # round 53: chain+fallbacks alone could pass the cap,
+            # and _cap then cut the dump into JSON that did not parse
+            text = json.dumps(rep, sort_keys=True, separators=(",", ":"))
         while len(text) > ROUTER_STATUS_MAX_CHARS and rep["upstreams"]:
             rep["upstreams"] = rep["upstreams"][:-1]
             rep["more"] += 1
-            text = json.dumps(rep, indent=1, sort_keys=True)
-        return _cap(text)
+            text = json.dumps(rep, sort_keys=True, separators=(",", ":"))
+        while len(text) > ROUTER_STATUS_MAX_CHARS and len(rep["chain"]) > 1:
+            rep["chain"] = rep["chain"][:-1]
+            rep["fallbacks"] = rep["fallbacks"][:max(0, len(rep["chain"]) - 1)]
+            rep["chain_truncated"] = True
+            text = json.dumps(rep, sort_keys=True, separators=(",", ":"))
+        return text
     return render_text(rep)
 
 

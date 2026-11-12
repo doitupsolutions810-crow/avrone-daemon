@@ -799,3 +799,23 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - peer_audit: non-dict nodes, mixed key types and non-string urls no longer raise.
 - **Behavior change:** an unknown pack size now prints "size unknown" instead of "-1 bytes". test_cov17_a was updated to match.
 - Tests: `tests/test_mempeek_packpeer_robust.py`.
+
+## Hardening round 53 (Hark edge-case series): tools_routerstatus + tools_fleetstatus
+
+### router_status
+- A zero-width character inside the configured API key, as it appeared in a model or lead label, defeated the exact-match mask. `_UNSAFE_RE` then printed the rest of the key with `?` in place of the invisible character.
+- Invisible characters are now dropped from both the labels and the secrets before masking. A bytes key is decoded before masking (it used to be masked as the text `b'...'`).
+- format=json: chain plus fallbacks alone could pass the cap, and `_cap` then cut the dump into JSON that did not parse. It now falls back to compact JSON, drops upstream rows, then trims the chain (`chain_truncated: true`). It never cuts.
+- A non-iterable or string `upstreams`, and a string `last_route` (which was split per character), are handled.
+- `route_of` never raises, whether from a malformed url or a `getproxies` error.
+- Format is matched trimmed and case-insensitive. A format that isn't a string is refused.
+
+### fleet_status
+- One record that made `status_of`, `node_state`, `health_score` or `sanitize_health` raise used to fail the whole view. That node now reads `unknown`, and a NaN score shows as none.
+- A `local_health` error now reads as "no governor reading".
+- A registry that isn't a dict is treated as empty.
+- A record without a text node_id was listed and allow-checked as "None". The registry key is used instead.
+- Status and state are label-sanitized. A 10**400 last_seen is safe.
+- A non-text `need` is refused. A format that isn't a string gives text output.
+- format=json is never cut. It falls back to compact JSON, then to an error object.
+- Tests: `tests/test_fleetstatus_routerstatus_robust.py`.

@@ -191,7 +191,6 @@ class TrialStore:
         )
 
     def ingest_many(
-    def ingest_many(
         self, envelopes: Any, *, sender: str, transport: str, bridge_run_id: str | None = None,
     ) -> dict[str, Any]:
         if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):

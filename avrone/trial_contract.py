@@ -26,13 +26,17 @@ def _identity(
     """Canonicalize identity text consistently with evidence_pool source grouping."""
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string")
-    value = unicodedata.normalize("NFKC", value)
-    if any(unicodedata.category(ch) in {"Cc", "Zl", "Zp", "Cs"} for ch in value):
-        raise ValueError(f"{field} must not contain control or separator characters")
-    value = "".join(ch for ch in value if unicodedata.category(ch) != "Cf")
-    value = " ".join(value.split())
     if source_component:
-        value = value.casefold()
+        value = unicodedata.normalize("NFKC", value)
+        if any(unicodedata.category(ch) in {"Cc", "Zl", "Zp", "Cs"} for ch in value):
+            raise ValueError(f"{field} must not contain control or separator characters")
+        value = "".join(ch for ch in value if unicodedata.category(ch) != "Cf")
+        value = " ".join(value.split()).casefold()
+    else:
+        # Preserve the original v2 semantics for run/check/version/attempt identifiers.
+        value = unicodedata.normalize("NFC", value).strip()
+        if any(unicodedata.category(ch) == "Cc" for ch in value):
+            raise ValueError(f"{field} must not contain control characters")
     if not value or len(value) > max_chars:
         raise ValueError(f"{field} must contain 1..{max_chars} characters")
     try:

@@ -43,6 +43,8 @@ _BLOB_RE = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 
 
 def _secretish(v: str) -> bool:
+    from .tools_introspect import _detect_form
+    v = _detect_form(v)  # round 52: a zero-width char inside a token hid it from both checks
     if _EMBEDDED_TOKEN_RE.search(v):
         return True
     for m in _BLOB_RE.finditer(v):
@@ -67,7 +69,14 @@ def _iso(ts: Any) -> str:
 
 def _clean(s: str, n: int) -> str:
     s = _textsafe.UNSAFE_ONE.sub("?", s)
+    s = re.sub("[\ud800-\udfff]", "\ufffd", s)  # round 52: a lone surrogate broke UTF-8 transports
     return s if len(s) <= n else s[:n] + "..."
+
+
+def _nbytes(v: Any) -> int:
+    """UTF-8 size of a stored value. Round 52: a lone surrogate (a hand-edited or peer-synced
+    memory.jsonl holding "\\ud800") raised UnicodeEncodeError and failed the whole peek."""
+    return len(str(v).encode("utf-8", "surrogatepass"))
 
 
 def _preview(key: str, value: Any, n: int) -> str:
@@ -91,15 +100,18 @@ def memory_peek(ctx: "AgentContext", limit: int = 10, prefix: str = "", value_ch
     if not memstore.is_local(ns):  # defence in depth: _mem_ns only ever returns a local namespace
         raise PermissionError("not a local namespace")
     mem = memstore.MemoryStore(_mem_file(ctx)).load(ns)
-    recs = [r for r in mem.values() if str(r.get("key", "")).startswith(prefix)]
+    if not isinstance(mem, dict):
+        mem = {}
+    # round 52: a non-dict record raised AttributeError out of the tool
+    recs = [r for r in mem.values() if isinstance(r, dict) and str(r.get("key", "")).startswith(prefix)]
     recs.sort(key=lambda r: memstore._ts(r.get("ts")), reverse=True)
     stamps = [memstore._ts(r.get("ts")) for r in recs]
-    total_bytes = sum(len(str(r.get("value", "")).encode()) for r in recs)
+    total_bytes = sum(_nbytes(r.get("value", "")) for r in recs)
     entries = []
     for r in recs[:limit]:
         k = str(r.get("key", ""))
         e = {"key": _clean(k, PEEK_MAX_KEY_CHARS), "saved": _iso(r.get("ts")),
-             "bytes": len(str(r.get("value", "")).encode())}
+             "bytes": _nbytes(r.get("value", ""))}
         if value_chars:
             e["value"] = _preview(k, r.get("value", ""), value_chars)
         entries.append(e)
@@ -119,12 +131,23 @@ async def t_memory_peek(ctx: "AgentContext", args: dict[str, Any]) -> str:
     value_chars = _int(args.get("value_chars"), 120, 0, PEEK_MAX_VALUE_CHARS)
     if limit is None or value_chars is None:
         return "ERROR: limit and value_chars must be integers"
-    prefix = str(args.get("prefix") or "")
+    raw_prefix = args.get("prefix")
+    if raw_prefix is not None and not isinstance(raw_prefix, str):
+        return "ERROR: prefix must be text"  # round 52: {"a": 1} was str()-ed into a prefix
+    prefix = raw_prefix or ""
     if len(prefix) > PEEK_MAX_PREFIX:
         return f"ERROR: prefix is longer than {PEEK_MAX_PREFIX} chars"
     rep = memory_peek(ctx, limit, prefix, value_chars)
-    if str(args.get("format", "text")).lower() == "json":
-        return _cap(json.dumps(rep, indent=1, sort_keys=True))
+    fmt = args.get("format", "text")
+    if isinstance(fmt, str) and fmt.strip().lower() == "json":
+        out = json.dumps(rep, indent=1, sort_keys=True)
+        if len(out) > PEEK_MAX_CHARS:  # round 52: a cut indented dump was not parseable JSON
+            out = json.dumps(rep, sort_keys=True, separators=(",", ":"))
+        while len(out) > PEEK_MAX_CHARS and rep["shown"]:
+            rep["shown"] = rep["shown"][:-1]
+            rep["more"] += 1
+            out = json.dumps(rep, sort_keys=True, separators=(",", ":"))
+        return out
     head = (f"memory_peek namespace {rep['namespace']} (your own; read-only, secrets redacted): "
             f"{rep['entries_total']}/{rep['cap']} entries")
     if not rep["entries_total"]:

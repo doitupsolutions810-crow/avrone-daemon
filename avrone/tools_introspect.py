@@ -107,7 +107,17 @@ ENV_REPORT_MAX_CHARS = 8000
 ENV_SECRET_MARKERS = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL",
                       "AUTH", "PRIVATE", "COOKIE", "SESSION", "SIGNING", "CERT")
 _PREFIX_RE = re.compile(r"[A-Z0-9_]{0,64}")
-_URL_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]*@")
+# round 52: up to the LAST @ before the host; "u:p@ss@host" showed "ss@host"
+_URL_USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/\s]*@")
+# zero-width / joiner / soft hyphen / BOM: invisible, so one inside a token or a secret NAME
+# ("TOK\u200bEN", "ghp_A1\u200bb2...") hid it from every check while reading the same (round 52)
+_INVISIBLE_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
+
+
+def _detect_form(s: str) -> str:
+    """The form secret checks run on: invisibles dropped, NFKC (fullwidth 'ＴＯＫＥＮ' -> 'TOKEN')."""
+    import unicodedata
+    return unicodedata.normalize("NFKC", _INVISIBLE_RE.sub("", s))
 _SECRET_QUERY_RE = re.compile(
     r"(?i)([?&](?:[a-z0-9_\-]*(?:token|key|secret|password|passwd|auth|sig|signature|session|code)"
     r"[a-z0-9_\-]*)=)[^&#\s]*")
@@ -118,7 +128,7 @@ _TOKENISH_RE = re.compile(
 
 
 def env_secret_name(name: str) -> bool:
-    up = str(name).upper()
+    up = _detect_form(str(name)).upper()
     return any(m in up for m in ENV_SECRET_MARKERS)
 
 
@@ -128,8 +138,10 @@ def redact_value(name: str, value: Any) -> str:
         return "***set***" if value not in (None, "") else "unset"
     if value is None:
         return "unset"
-    v = str(value)
-    if _TOKENISH_RE.search(v) or _shapes.TOKEN_PREFIX_RE.search(v):  # round 152
+    v = str(value)  # displayed as stored: dropping U+200D broke emoji ZWJ sequences (round 136 test)
+    d = _detect_form(v)
+    if (_TOKENISH_RE.search(v) or _shapes.TOKEN_PREFIX_RE.search(v)  # round 152
+            or _TOKENISH_RE.search(d) or _shapes.TOKEN_PREFIX_RE.search(d)):
         return "***redacted (token-shaped value)***"
     v = _URL_USERINFO_RE.sub(r"\1***@", v)
     v = _SECRET_QUERY_RE.sub(r"\1***", v)

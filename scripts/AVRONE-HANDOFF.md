@@ -778,3 +778,24 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - `born_here` compared the home node after it was clipped to 80 characters, so a long node id read as "imported". It now compares the raw values.
 - A format argument that isn't a string gives text output.
 - Tests: `tests/test_researchnote_agenthome_robust.py`.
+
+## Hardening round 52 (Hark edge-case series): tools_mempeek + tools_introspect.redact_value + tools_packpeer
+
+### redact_value (used by env_report and memory_peek)
+- A zero-width character inside a token hid it from every token pattern. A secret-shaped NAME was hidden the same way (`TOK` + U+200B + `EN`), and so was a fullwidth one (`ＴＯＫＥＮ`).
+- Checks now run on a detection form: invisible joiners dropped, then NFKC. The displayed value is unchanged, so emoji ZWJ sequences survive.
+- URL userinfo is masked up to the last `@` before the host. Before, `u:p@ss@host` showed `ss@host`.
+
+### memory_peek
+- Token detection (`_secretish`) uses the same detection form.
+- A lone surrogate in a stored value (from a hand-edited or peer-synced memory.jsonl) raised UnicodeEncodeError and failed the whole peek. Byte counts now use `surrogatepass`, and the display shows U+FFFD.
+- A non-dict record or namespace no longer raises.
+- A non-text prefix is refused. A format argument that isn't a string gives text output.
+- A format=json dump over the cap was cut into invalid JSON. It now falls back to compact form, then drops shown rows into `more`.
+
+### pack_list / peer_audit / fleet_forget
+- These printed raw text that could forge rows. Pack file names (`a\n- ok.tar.gz: OK`, U+202E), manifest agent_id and origin, PackError text, peer ids and status were all printed as-is. All are now passed through `textsafe.escape` and clipped.
+- An unexpected reader error (EOFError, RecursionError and similar) or a manifest that isn't a dict raised out of pack_list and hid every other pack. It is now a REFUSED row.
+- peer_audit: non-dict nodes, mixed key types and non-string urls no longer raise.
+- **Behavior change:** an unknown pack size now prints "size unknown" instead of "-1 bytes". test_cov17_a was updated to match.
+- Tests: `tests/test_mempeek_packpeer_robust.py`.

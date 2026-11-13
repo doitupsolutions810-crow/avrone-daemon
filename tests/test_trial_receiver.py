@@ -380,3 +380,116 @@ def test_migrated_schema_rejects_missing_or_malformed_source_identity_keys(tmp_p
         assert row is not None and len(row["source_identity_key"]) == 64
     finally:
         db.close()
+
+
+def test_concurrent_fresh_store_initialization_is_serialized(tmp_path):
+    import threading
+
+    path = tmp_path / "concurrent-fresh.sqlite3"
+    workers = 4
+    barrier = threading.Barrier(workers)
+
+    def initialize(_):
+        barrier.wait(timeout=15)
+        store = TrialStore(path)
+        db = store._connect()
+        try:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
+            return version, integrity
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(initialize, range(workers)))
+
+    assert results == [(2, "ok")] * workers
+    store = TrialStore(path)
+    assert store.ingest_many([sample()], sender="peer-a", transport="fleet")["accepted"] == 1
+    assert store.pool_snapshot()["runs"] == 1
+
+
+def test_concurrent_legacy_schema_migration_is_serialized_and_replay_safe(tmp_path):
+    import threading
+
+    path = tmp_path / "concurrent-legacy.sqlite3"
+    _create_legacy_trial_store(path)
+    envelope = sample()
+    _insert_legacy_trial(path, envelope)
+    workers = 4
+    barrier = threading.Barrier(workers)
+
+    def migrate(_):
+        barrier.wait(timeout=15)
+        store = TrialStore(path)
+        db = store._connect()
+        try:
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
+            row = db.execute(
+                "SELECT source_identity_key FROM trials WHERE trial_id=?",
+                (envelope["trial_id"],),
+            ).fetchone()
+            return version, integrity, row["source_identity_key"]
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(migrate, range(workers)))
+
+    assert all(version == 2 and integrity == "ok" and len(key) == 64
+               for version, integrity, key in results)
+    reopened = TrialStore(path)
+    duplicate = reopened.ingest_many(
+        [envelope], sender="peer-a", transport="bridge",
+        bridge_run_id="bridge-after-concurrent-migration",
+    )
+    assert duplicate["results"][0]["status"] == "duplicate"
+
+    db = reopened._connect()
+    try:
+        receipt = db.execute(
+            "SELECT transport,bridge_run_id,result FROM trial_receipts ORDER BY receipt_id"
+        ).fetchone()
+        assert (receipt["transport"], receipt["bridge_run_id"], receipt["result"]) == (
+            "bridge", "bridge-after-concurrent-migration", "duplicate"
+        )
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        db.close()
+    assert reopened.pool_snapshot()["runs"] == 1
+
+
+@pytest.mark.parametrize(
+    "bad_key",
+    [
+        pytest.param(None, id="null"),
+        pytest.param(sqlite3.Binary(b"a" * 64), id="blob-not-text"),
+        pytest.param("a" * 63, id="short"),
+        pytest.param("a" * 65, id="long"),
+        pytest.param("A" * 64, id="uppercase-hex"),
+        pytest.param("g" * 64, id="non-hex"),
+    ],
+)
+def test_source_identity_key_triggers_reject_noncanonical_values(tmp_path, bad_key):
+    path = tmp_path / "source-key-trigger.sqlite3"
+    _create_legacy_trial_store(path)
+    store = TrialStore(path)
+    envelope = sample()
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+
+    db = store._connect()
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="invalid source_identity_key"):
+            db.execute(
+                "UPDATE trials SET source_identity_key=? WHERE trial_id=?",
+                (bad_key, envelope["trial_id"]),
+            )
+        db.rollback()
+        row = db.execute(
+            "SELECT source_identity_key FROM trials WHERE trial_id=?",
+            (envelope["trial_id"],),
+        ).fetchone()
+        assert row is not None and len(row["source_identity_key"]) == 64
+    finally:
+        db.close()

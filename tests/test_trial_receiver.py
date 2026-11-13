@@ -1,9 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
 
+import hashlib
+import time
 import pytest
 import sqlite3
 
-from avrone.trial_contract import make_trial
+from avrone.trial_contract import canonical_trial_bytes, make_trial
 from avrone.trial_receiver import TrialStore, TrialStoreError
 
 
@@ -218,7 +220,7 @@ def test_legacy_schema_migrates_and_preserves_bridge_run_per_delivery(tmp_path):
     finally:
         db.close()
 
-    assert version == 1
+    assert version == 2
     assert [(r["transport"], r["bridge_run_id"], r["result"]) for r in receipts] == [
         ("fleet", None, "accepted"),
         ("bridge", "bridge-run-1", "duplicate"),
@@ -258,6 +260,75 @@ def test_failed_schema_migration_rolls_back_added_provenance_column(tmp_path):
     try:
         columns = {row[1] for row in db.execute("PRAGMA table_info(trial_receipts)")}
         assert "bridge_run_id" not in columns
+        trial_columns = {row[1] for row in db.execute("PRAGMA table_info(trials)")}
+        assert "source_identity_key" not in trial_columns
         assert db.execute("PRAGMA user_version").fetchone()[0] == 0
+    finally:
+        db.close()
+
+
+def _insert_legacy_trial(path, envelope, sender="peer-a"):
+    raw = canonical_trial_bytes(envelope)
+    db = sqlite3.connect(path)
+    try:
+        db.execute(
+            """
+            INSERT INTO trials(
+                trial_id,canonical_json,payload_sha256,outcome,system,node,source,run_id,
+                check_id,check_version,check_config_sha256,attempt_id,first_sender,
+                first_transport,bridge_run_id,received_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                envelope["trial_id"], raw, hashlib.sha256(raw).hexdigest(), envelope["outcome"],
+                envelope["system"], envelope["node"], envelope["source"], envelope["run_id"],
+                envelope["check_id"], envelope["check_version"], envelope["check_config_sha256"],
+                envelope["attempt_id"], sender, "fleet", None, time.time(),
+            ),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_legacy_migration_backfills_source_identity_key(tmp_path):
+    path = tmp_path / "legacy-with-row.sqlite3"
+    _create_legacy_trial_store(path)
+    _insert_legacy_trial(path, sample())
+
+    store = TrialStore(path)
+    db = store._connect()
+    try:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        row = db.execute(
+            "SELECT source_identity_key FROM trials WHERE trial_id=?", (sample()["trial_id"],)
+        ).fetchone()
+    finally:
+        db.close()
+
+    assert version == 2
+    assert row is not None and len(row["source_identity_key"]) == 64
+
+
+def test_legacy_migration_refuses_preexisting_canonical_source_aliases(tmp_path):
+    path = tmp_path / "legacy-source-aliases.sqlite3"
+    _create_legacy_trial_store(path)
+    values = dict(
+        node="node-a", run_id="run-source-alias", check_id="verify",
+        check_version="10.2", attempt_id="same-attempt", outcome="pass",
+        check_config={"profile": "strict"},
+    )
+    _insert_legacy_trial(path, make_trial(system="grokbot", **values), sender="peer-a")
+    _insert_legacy_trial(path, make_trial(system="GROKBOT", **values), sender="peer-b")
+
+    with pytest.raises(TrialStoreError, match="canonical source/attempt aliases"):
+        TrialStore(path)
+
+    db = sqlite3.connect(path)
+    try:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 0
+        columns = {row[1] for row in db.execute("PRAGMA table_info(trials)")}
+        assert "source_identity_key" not in columns
+        assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 2
     finally:
         db.close()

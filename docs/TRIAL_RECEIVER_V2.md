@@ -53,17 +53,30 @@ accepted, duplicate, non_pass_stored, conflict_quarantined, and sender_quarantin
 An external MCP tool may expose avrone.trial.ingest with the same wrapper schemas, but its authenticated principal must be mapped to an allowlisted fleet sender before calling the receiver. Suggested events are avrone.trial.accepted.v1, avrone.trial.duplicate.v1, avrone.trial.non_pass.v1, and avrone.trial.quarantined.v1. These are contract names only; no external MCP server or dashboard is claimed to be deployed by this change.
 
 
-## Receiver database schema version 1
+## Receiver database schema version 2
 
-The first receiver database schema was previously unversioned. On first open, version 0 is treated as
-the legacy layout. A transactional migration adds nullable \`bridge_run_id\` columns to
-\`trial_receipts\` and \`trial_quarantine\`, validates required columns, creates indexes, and sets
-\`PRAGMA user_version=1\`. DDL is executed statement-by-statement inside \`BEGIN IMMEDIATE\`; a
-failed migration rolls back. A database with a future user_version is refused without downgrade.
+The receiver database uses transactional schema migrations. Version 0 is the legacy unversioned
+layout; version 1 adds per-delivery `bridge_run_id` provenance to receipts and quarantine records.
+Version 2 adds a unique `source_identity_key` index. The key uses the evidence pool's NFKC,
+format-character removal, whitespace-collapse, and case-fold source equivalence rules, combined
+with run ID, check ID, check version, configuration digest, and attempt ID. The wire-level
+`avrone.trial/v2` trial ID is unchanged.
 
-Bridge run provenance is per delivery: accepted, duplicate, and conflicting bridge deliveries retain
-their own canonical bridge run ID in the receipt or quarantine record. Fleet deliveries retain NULL.
-The original trial row continues to preserve first-seen sender, transport and bridge scope.
+During migration, existing canonical envelopes are revalidated and their source identity keys are
+backfilled inside `BEGIN IMMEDIATE`. If legacy rows contain two different trial IDs for the same
+canonical source/check/attempt identity, migration fails closed and rolls back; an operator must
+review the conflicting records before retrying. Future user_version values are refused without
+downgrade. DDL is executed statement-by-statement so a failed migration does not leave partial
+columns or indexes.
+
+Bridge run provenance remains per delivery: accepted, duplicate, and conflicting bridge deliveries
+retain their own canonical bridge run ID in the receipt or quarantine record. Fleet deliveries retain
+NULL. The original trial row continues to preserve first-seen sender, transport and bridge scope.
+
+New ingestion also compares the storage-only source identity key before accepting a new trial ID.
+A source alias that the evidence pool would normalize to the same source and attempt is quarantined
+instead of becoming a second confirmation. A changed check version, configuration digest, or
+attempt ID remains a distinct identity.
 
 ## Remaining trust boundaries
 

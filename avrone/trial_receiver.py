@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat
@@ -11,7 +12,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from .evidence_pool import pool_trials
+from .evidence_pool import canonical_source_key, pool_trials
 from .trial_contract import canonical_trial_bytes, validate_trial_envelope
 
 SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
@@ -20,11 +21,32 @@ MAX_TRIAL_RECORDS = 100_000
 MAX_RECEIPTS = 100_000
 MAX_QUARANTINE_RECORDS = 1_000
 MAX_QUARANTINED_SENDERS = 1_000
-DB_SCHEMA_VERSION = 1  # v0 is the legacy unversioned receiver layout
+DB_SCHEMA_VERSION = 2  # v0 is unversioned; v1 adds per-delivery bridge provenance
 
 
 class TrialStoreError(RuntimeError):
     """The receiver cannot safely persist or continue accepting trial evidence."""
+
+
+def _source_identity_key(envelope: dict[str, Any]) -> str:
+    """Hash source/attempt identity using the evidence pool's source equivalence rules.
+
+    The wire trial_id remains v2-compatible. This storage key prevents NFC-distinct
+    but evidence-pool-equivalent source spellings from counting one attempt twice.
+    """
+    identity = {
+        "schema": envelope["schema"],
+        "source_key": canonical_source_key(envelope["source"]),
+        "run_id": envelope["run_id"],
+        "check_id": envelope["check_id"],
+        "check_version": envelope["check_version"],
+        "check_config_sha256": envelope["check_config_sha256"],
+        "attempt_id": envelope["attempt_id"],
+    }
+    raw = json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 class TrialStore:
@@ -102,6 +124,7 @@ class TrialStore:
                 """
                 CREATE TABLE IF NOT EXISTS trials (
                     trial_id TEXT PRIMARY KEY,
+                    source_identity_key TEXT NOT NULL,
                     canonical_json BLOB NOT NULL,
                     payload_sha256 TEXT NOT NULL,
                     outcome TEXT NOT NULL,
@@ -158,7 +181,7 @@ class TrialStore:
 
             required_columns = {
                 "trials": {
-                    "trial_id", "canonical_json", "payload_sha256", "outcome", "system", "node",
+                    "trial_id", "source_identity_key", "canonical_json", "payload_sha256", "outcome", "system", "node",
                     "source", "run_id", "check_id", "check_version", "check_config_sha256",
                     "attempt_id", "first_sender", "first_transport", "bridge_run_id", "received_at",
                 },
@@ -183,11 +206,52 @@ class TrialStore:
                 if table in {"trial_receipts", "trial_quarantine"} and "bridge_run_id" not in present:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN bridge_run_id TEXT")
                     present.add("bridge_run_id")
+                if table == "trials" and "source_identity_key" not in present:
+                    db.execute("ALTER TABLE trials ADD COLUMN source_identity_key TEXT")
+                    present.add("source_identity_key")
                 missing = required - present
                 if missing:
                     names = ", ".join(sorted(missing))
                     raise TrialStoreError(f"trial database schema is missing required columns in {table}: {names}")
 
+            if version < DB_SCHEMA_VERSION:
+                rows = db.execute(
+                    "SELECT trial_id,canonical_json,source_identity_key FROM trials ORDER BY trial_id"
+                ).fetchall()
+                for row in rows:
+                    try:
+                        envelope = json.loads(bytes(row["canonical_json"]).decode("utf-8"))
+                        if not validate_trial_envelope(envelope) or envelope["trial_id"] != row["trial_id"]:
+                            raise ValueError("stored envelope does not match its trial_id")
+                        identity_key = _source_identity_key(envelope)
+                    except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
+                        raise TrialStoreError(
+                            "existing trial record cannot be validated for source identity migration"
+                        ) from None
+                    if row["source_identity_key"] not in (None, identity_key):
+                        raise TrialStoreError("existing trial source identity key does not match its envelope")
+                    db.execute(
+                        "UPDATE trials SET source_identity_key=? WHERE trial_id=?",
+                        (identity_key, row["trial_id"]),
+                    )
+                duplicate = db.execute(
+                    "SELECT source_identity_key FROM trials "
+                    "GROUP BY source_identity_key HAVING COUNT(*) > 1 LIMIT 1"
+                ).fetchone()
+                if duplicate:
+                    raise TrialStoreError(
+                        "existing trial records contain canonical source/attempt aliases; manual review required"
+                    )
+
+            missing_identity_key = db.execute(
+                "SELECT 1 FROM trials WHERE source_identity_key IS NULL LIMIT 1"
+            ).fetchone()
+            if missing_identity_key:
+                raise TrialStoreError("trial database contains a missing source identity key")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS trial_source_identity_key "
+                "ON trials(source_identity_key)"
+            )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trial_receipts_trial_id ON trial_receipts(trial_id)"
             )
@@ -298,30 +362,44 @@ class TrialStore:
                 existing = db.execute(
                     "SELECT canonical_json FROM trials WHERE trial_id=?", (trial_id,)
                 ).fetchone()
+                source_identity_key = _source_identity_key(envelope)
+                conflict_reason = None
                 if existing is None:
-                    count = db.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
-                    if count >= MAX_TRIAL_RECORDS:
-                        raise TrialStoreError("trial store capacity reached")
-                    db.execute(
-                        """
-                        INSERT INTO trials(
-                            trial_id,canonical_json,payload_sha256,outcome,system,node,source,
-                            run_id,check_id,check_version,check_config_sha256,attempt_id,
-                            first_sender,first_transport,bridge_run_id,received_at
-                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            trial_id, raw, digest, envelope["outcome"], envelope["system"],
-                            envelope["node"], envelope["source"], envelope["run_id"],
-                            envelope["check_id"], envelope["check_version"],
-                            envelope["check_config_sha256"], envelope["attempt_id"],
-                            sender, transport, bridge_run_id, now,
-                        ),
-                    )
-                    status = "accepted" if envelope["outcome"] in {"pass", "fail"} else "non_pass_stored"
+                    alias = db.execute(
+                        "SELECT trial_id FROM trials WHERE source_identity_key=?",
+                        (source_identity_key,),
+                    ).fetchone()
+                    if alias is None:
+                        count = db.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
+                        if count >= MAX_TRIAL_RECORDS:
+                            raise TrialStoreError("trial store capacity reached")
+                        db.execute(
+                            """
+                            INSERT INTO trials(
+                                trial_id,source_identity_key,canonical_json,payload_sha256,outcome,system,node,source,
+                                run_id,check_id,check_version,check_config_sha256,attempt_id,
+                                first_sender,first_transport,bridge_run_id,received_at
+                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            """,
+                            (
+                                trial_id, source_identity_key, raw, digest, envelope["outcome"], envelope["system"],
+                                envelope["node"], envelope["source"], envelope["run_id"],
+                                envelope["check_id"], envelope["check_version"],
+                                envelope["check_config_sha256"], envelope["attempt_id"],
+                                sender, transport, bridge_run_id, now,
+                            ),
+                        )
+                        status = "accepted" if envelope["outcome"] in {"pass", "fail"} else "non_pass_stored"
+                    else:
+                        conflict_reason = (
+                            "canonical source/check/attempt identity arrived with a different trial_id"
+                        )
                 elif bytes(existing["canonical_json"]) == raw:
                     status = "duplicate"
                 else:
+                    conflict_reason = "same trial_id arrived with a different canonical envelope"
+
+                if conflict_reason is not None:
                     q_count = db.execute("SELECT COUNT(*) FROM trial_quarantine").fetchone()[0]
                     sender_count = db.execute(
                         "SELECT COUNT(*) FROM trial_quarantined_senders"
@@ -341,16 +419,14 @@ class TrialStore:
                         """,
                         (
                             trial_id, sender, transport, bridge_run_id,
-                            "same trial_id arrived with a different canonical envelope",
-                            digest, raw, now,
+                            conflict_reason, digest, raw, now,
                         ),
                     )
                     db.execute(
                         "INSERT OR IGNORE INTO trial_quarantined_senders"
                         "(sender,first_trial_id,reason,quarantined_at) VALUES(?,?,?,?)",
                         (
-                            sender, trial_id,
-                            "conflicting duplicate trial envelope", now,
+                            sender, trial_id, conflict_reason, now,
                         ),
                     )
                     status = "conflict_quarantined"

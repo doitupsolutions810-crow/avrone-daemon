@@ -1142,3 +1142,56 @@ def test_receipt_retention_remains_bounded_after_restart(tmp_path, monkeypatch):
     finally:
         db.close()
     assert reopened.pool_snapshot()["runs"] == 4
+
+@pytest.mark.parametrize("alias_system", ["GROKBOT", "Ｇｒｏｋｂｏｔ", "grokbot\\u200b"])
+def test_canonical_source_alias_for_same_attempt_is_quarantined(tmp_path, alias_system):
+    def build(system):
+        return make_trial(
+            system=system,
+            node="node-a",
+            run_id="run-source-alias",
+            check_id="verify",
+            check_version="10.2",
+            attempt_id="same-attempt",
+            outcome="pass",
+            check_config={"profile": "strict"},
+        )
+
+    first = build("grokbot")
+    alias = build(alias_system)
+    assert first["trial_id"] != alias["trial_id"]
+
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    accepted = store.ingest_many([first], sender="peer-a", transport="fleet")
+    rejected = store.ingest_many([alias], sender="peer-b", transport="fleet")
+
+    assert accepted["results"][0]["status"] == "accepted"
+    assert rejected["results"][0]["status"] == "conflict_quarantined"
+    snapshot = store.pool_snapshot()
+    assert snapshot["runs"] == 1
+    assert snapshot["sources"][0]["runs"] == 1
+    assert snapshot["independence"] == "not_assessed"
+    assert "canonical source" in store.quarantine_records()[0]["reason"]
+
+
+def test_canonical_source_alias_with_new_check_version_remains_distinct(tmp_path):
+    base = make_trial(
+        system="grokbot", node="node-a", run_id="run-source-alias",
+        check_id="verify", check_version="10.2", attempt_id="same-attempt",
+        outcome="pass", check_config={"profile": "strict"},
+    )
+    changed_version = make_trial(
+        system="GROKBOT", node="node-a", run_id="run-source-alias",
+        check_id="verify", check_version="10.3", attempt_id="same-attempt",
+        outcome="pass", check_config={"profile": "strict"},
+    )
+    store = TrialStore(tmp_path / "trials.sqlite3")
+
+    first = store.ingest_many([base], sender="peer-a", transport="fleet")
+    second = store.ingest_many([changed_version], sender="peer-b", transport="fleet")
+
+    assert first["results"][0]["status"] == "accepted"
+    assert second["results"][0]["status"] == "accepted"
+    snapshot = store.pool_snapshot()
+    assert snapshot["runs"] == 2
+    assert len(snapshot["sources"]) == 1

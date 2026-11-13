@@ -1143,7 +1143,7 @@ def test_receipt_retention_remains_bounded_after_restart(tmp_path, monkeypatch):
         db.close()
     assert reopened.pool_snapshot()["runs"] == 4
 
-@pytest.mark.parametrize("alias_system", ["GROKBOT", "Ｇｒｏｋｂｏｔ", "grokbot\\u200b"])
+@pytest.mark.parametrize("alias_system", ["GROKBOT", "Ｇｒｏｋｂｏｔ", "grokbot" + chr(0x200B)])
 def test_canonical_source_alias_for_same_attempt_is_quarantined(tmp_path, alias_system):
     def build(system):
         return make_trial(

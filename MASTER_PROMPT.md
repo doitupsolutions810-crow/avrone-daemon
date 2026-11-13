@@ -109,9 +109,9 @@ Avrone/
 │   ├── tools_routerstatus.py    router_status: a read-only, bounded, redacted view of the model-router bridge (avrone.gateway).
 │   ├── tools_secrets.py         secret_scan + mcp_selftest.
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
-│   ├── trial_adapters.py       Versioned fleet and bridge adapters for the AVRONE trial receiver.
-│   ├── trial_contract.py       Versioned, bounded trial identity contract for cross-system evidence.
-│   ├── trial_receiver.py       Durable, idempotent receiver for authenticated AVRONE trial envelopes.
+│   ├── trial_adapters.py        Versioned fleet and bridge adapters for the AVRONE trial receiver.
+│   ├── trial_contract.py        Versioned, bounded trial identity contract for cross-system evidence.
+│   ├── trial_receiver.py        Durable, idempotent receiver for authenticated AVRONE trial envelopes.
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
 ├── tests/                  # 362 test files, offline by default

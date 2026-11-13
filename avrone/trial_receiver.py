@@ -14,7 +14,7 @@ from typing import Any
 from .evidence_pool import pool_trials
 from .trial_contract import canonical_trial_bytes, validate_trial_envelope
 
-SENDER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
 MAX_BATCH = 10
 MAX_TRIAL_RECORDS = 100_000
 MAX_RECEIPTS = 100_000

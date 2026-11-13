@@ -17,7 +17,7 @@ MAX_CONFIG_BYTES = 16_384
 MAX_CONFIG_DEPTH = 32
 MAX_CONFIG_NODES = 4_096
 MAX_ENVELOPE_BYTES = 24 * 1024
-_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
 
 
 def _identity(value: Any, field: str, max_chars: int = MAX_FIELD_CHARS) -> str:

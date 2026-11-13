@@ -18,7 +18,7 @@ FLEET_TRIAL_SCHEMA = "avrone.trial-ingest/v1"
 BRIDGE_TRIAL_SCHEMA = "avrone.bridge-trial-ingest/v1"
 FLEET_TRIAL_PATH = "/api/fleet/trials"
 BRIDGE_TRIAL_PATH = "/api/fleet/bridge/trials"
-SENDER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
 
 
 def _reject_constant(value: str) -> None:

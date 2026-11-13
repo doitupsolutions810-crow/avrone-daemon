@@ -78,6 +78,10 @@ A source alias that the evidence pool would normalize to the same source and att
 instead of becoming a second confirmation. A changed check version, configuration digest, or
 attempt ID remains a distinct identity.
 
+The unique index is supplemented by insert/update triggers that reject NULL, non-text, non-hex,
+or non-64-character source identity keys. This preserves the invariant on migrated databases,
+where SQLite's additive column migration cannot retroactively add a NOT NULL constraint.
+
 ## Remaining trust boundaries
 
 Fleet HMAC uses the existing shared token and signed sender assertion. This authenticates the relay

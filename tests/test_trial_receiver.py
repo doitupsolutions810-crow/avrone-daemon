@@ -332,3 +332,51 @@ def test_legacy_migration_refuses_preexisting_canonical_source_aliases(tmp_path)
         assert db.execute("SELECT COUNT(*) FROM trials").fetchone()[0] == 2
     finally:
         db.close()
+
+def test_migrated_schema_rejects_missing_or_malformed_source_identity_keys(tmp_path):
+    path = tmp_path / "legacy-key-constraints.sqlite3"
+    _create_legacy_trial_store(path)
+    store = TrialStore(path)
+    envelope = sample()
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+
+    db = store._connect()
+    try:
+        with pytest.raises(sqlite3.IntegrityError, match="source_identity_key"):
+            db.execute(
+                "UPDATE trials SET source_identity_key=NULL WHERE trial_id=?",
+                (envelope["trial_id"],),
+            )
+        db.rollback()
+
+        with pytest.raises(sqlite3.IntegrityError, match="source_identity_key"):
+            db.execute(
+                "UPDATE trials SET source_identity_key=? WHERE trial_id=?",
+                ("z" * 64, envelope["trial_id"]),
+            )
+        db.rollback()
+
+        with pytest.raises(sqlite3.IntegrityError, match="source_identity_key"):
+            db.execute(
+                """
+                INSERT INTO trials(
+                    trial_id,source_identity_key,canonical_json,payload_sha256,outcome,system,node,source,
+                    run_id,check_id,check_version,check_config_sha256,attempt_id,
+                    first_sender,first_transport,bridge_run_id,received_at
+                )
+                SELECT ?,NULL,canonical_json,payload_sha256,outcome,system,node,source,
+                    run_id,check_id,check_version,check_config_sha256,attempt_id,
+                    first_sender,first_transport,bridge_run_id,received_at
+                FROM trials WHERE trial_id=?
+                """,
+                ("f" * 64, envelope["trial_id"]),
+            )
+        db.rollback()
+
+        row = db.execute(
+            "SELECT source_identity_key FROM trials WHERE trial_id=?",
+            (envelope["trial_id"],),
+        ).fetchone()
+        assert row is not None and len(row["source_identity_key"]) == 64
+    finally:
+        db.close()

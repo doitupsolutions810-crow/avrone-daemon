@@ -253,6 +253,32 @@ class TrialStore:
                 "ON trials(source_identity_key)"
             )
             db.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_insert
+                BEFORE INSERT ON trials
+                WHEN NEW.source_identity_key IS NULL
+                    OR typeof(NEW.source_identity_key) != 'text'
+                    OR length(NEW.source_identity_key) != 64
+                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid source_identity_key');
+                END
+                """
+            )
+            db.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_update
+                BEFORE UPDATE OF source_identity_key ON trials
+                WHEN NEW.source_identity_key IS NULL
+                    OR typeof(NEW.source_identity_key) != 'text'
+                    OR length(NEW.source_identity_key) != 64
+                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid source_identity_key');
+                END
+                """
+            )
+            db.execute(
                 "CREATE INDEX IF NOT EXISTS trial_receipts_trial_id ON trial_receipts(trial_id)"
             )
             db.execute(

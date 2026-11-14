@@ -120,8 +120,13 @@ def bridge_status(ctx: "AgentContext") -> dict[str, Any]:
         refs = p.get("refs")
         if isinstance(refs, (list, tuple)):
             replied.update(r for r in refs if isinstance(r, str))
-    open_q = [p for p in posts if p.get("kind") == "question" and p.get("id") not in replied]
-    return {"run_id": b.run_id, "posts": len(posts), "limit": b.limit, "kinds": kinds,
+    # round 62: an unhashable question id (a list from a relayed post) raised TypeError in the set
+    # lookup and the whole status failed; a non-str id can never be answered by a str ref
+    open_q = [p for p in posts if p.get("kind") == "question"
+              and not (isinstance(p.get("id"), str) and p.get("id") in replied)]
+    # round 62: the run id and ring bound were printed raw in the header ("r1\n- FORGED")
+    return {"run_id": _name(b.run_id), "posts": len(posts), "limit": _name(b.limit) if not isinstance(b.limit, int)
+            else b.limit, "kinds": kinds,
             "agents": dict(sorted(agents.items(), key=lambda x: -x[1])[:STATUS_MAX_AGENTS]),
             "more_agents": max(0, len(agents) - STATUS_MAX_AGENTS), "remote": remote,
             "open_questions": [{"id": _name(p.get("id", "?")), "agent": _name(p.get("agent", "?")),

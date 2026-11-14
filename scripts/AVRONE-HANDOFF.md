@@ -958,3 +958,11 @@ Tests: `tests/test_agentfs_tools_robust.py`.
 - **limits_status crash.** A single non-numeric `run_agents` count (a str, None or NaN) raised TypeError in the sort, and the whole status call failed. Counts are now filtered, and run ids are escaped, because an id holding a newline forged a limit line. A bool `max_parallel` printed "= True", and a bool semaphore value did arithmetic; both are now ignored.
 - **mcp_selftest report.** A non-object `serverInfo` raised AttributeError outside the try. A tool without a name (None) raised TypeError in the join. The protocol, server name and tool names were printed raw. The report now FAILs on a bad serverInfo and escapes every echoed field.
 - Tests: `tests/test_limits_secrets_robust.py` (74).
+
+## Hardening round 62: flake_probe and bridge_status (`tools_flakeprobe.py`, `tools_lessonforget.py`)
+
+- **Wrong diff line numbers.** `_first_diff_line` split with `splitlines()`, which also breaks at U+2028/U+2029, `\x0b`, `\x0c`, `\x1c`–`\x1e`, `\x85` and a lone `\r`. A tool output holding one named a line that doesn't exist in the `\n`-split text: `"a\u2028b\nc"` vs `"a\u2028b\nd"` reported line 3 instead of 2. The new `_lines()` splits on `\n` only (project rule), with ending-only differences still found.
+- **Digest collision.** `_digest` encoded with `errors="replace"`, so every lone surrogate became `?`. `"a\ud800"` and `"a\ud801"` (and `"x\ud800y"` vs `"x?y"`) shared a digest, so the report said 1 distinct output while counting 1 differing run. It now uses `surrogatepass`; valid text hashes exactly as before.
+- **bridge_status crash.** A question post whose id was unhashable (a list or dict from a relayed post) raised TypeError in the `in replied` set lookup, and the whole status failed. A non-str id now simply stays open, since a str ref can never answer it.
+- **Forged header.** The run id (and a non-int ring bound) was printed raw, so `"r1\n- FORGED"` printed a line of its own, and bidi or ANSI characters reached the reader. Both are now escaped.
+- Tests: `tests/test_flakeprobe_bridgestatus_robust.py` (50).

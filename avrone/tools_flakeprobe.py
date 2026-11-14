@@ -62,19 +62,31 @@ def _is_error(o: str) -> bool:
 
 
 def _digest(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8", errors="replace")).hexdigest()[:12]
+    # round 62: errors="replace" turned every lone surrogate into "?", so "a\ud800" and "a\ud801"
+    # had one digest: the report said 1 distinct output while counting 1 differing run
+    return hashlib.sha256(s.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+
+
+def _lines(s: str, keepends: bool = False) -> list[str]:
+    """Lines split on \\n only (round 62): splitlines() also broke at U+2028, \\x0c, \\x1c ... so a
+    tool output holding one named a line number that does not exist in the \\n-split text."""
+    parts = s.split("\n")
+    if keepends:
+        out = [x + "\n" for x in parts[:-1]]
+        return out + ([parts[-1]] if parts[-1] else [])
+    return parts[:-1] + ([parts[-1]] if parts[-1] else [])
 
 
 def _first_diff_line(a: str, b: str) -> int:
     """1-based line where a and b first differ, line endings included. Round 47: endings were
     dropped, so "x\r\n" vs "x\n" and "x" vs "x\n" named a line one past the end of both."""
-    la, lb = a.splitlines(), b.splitlines()
+    la, lb = _lines(a), _lines(b)
     for i, (x, y) in enumerate(zip(la, lb), 1):
         if x != y:
             return i
     if len(la) != len(lb):
         return min(len(la), len(lb)) + 1  # the first extra line, which exists in the longer one
-    ka, kb = a.splitlines(keepends=True), b.splitlines(keepends=True)
+    ka, kb = _lines(a, True), _lines(b, True)
     for i, (x, y) in enumerate(zip(ka, kb), 1):
         if x != y:  # same text, different line ending
             return i

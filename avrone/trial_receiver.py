@@ -450,12 +450,27 @@ class TrialStore:
             self._assert_primary_key_schema(db)
 
             if version < DB_SCHEMA_VERSION:
+                # Do not fetch all canonical trial BLOBs into Python memory
+                # during legacy migration. Bound the number of records and
+                # avoid even transferring a giant malformed BLOB via CASE.
                 rows = db.execute(
-                    "SELECT trial_id,canonical_json,source_identity_key FROM trials ORDER BY trial_id"
-                ).fetchall()
+                    "SELECT trial_id, "
+                    "CASE WHEN length(canonical_json) > ? THEN NULL "
+                    "ELSE canonical_json END AS canonical_json, "
+                    "source_identity_key FROM trials ORDER BY trial_id LIMIT ?",
+                    (MAX_ENVELOPE_BYTES, MAX_TRIAL_RECORDS + 1),
+                )
+                migrated = 0
                 for row in rows:
+                    if migrated >= MAX_TRIAL_RECORDS:
+                        raise TrialStoreError(
+                            "existing trial count exceeds source identity migration capacity"
+                        )
                     try:
-                        envelope = json.loads(bytes(row["canonical_json"]).decode("utf-8"))
+                        raw = row["canonical_json"]
+                        if not isinstance(raw, bytes):
+                            raise ValueError("legacy trial evidence is not a bounded byte envelope")
+                        envelope = json.loads(raw.decode("utf-8"))
                         if not validate_trial_envelope(envelope) or envelope["trial_id"] != row["trial_id"]:
                             raise ValueError("stored envelope does not match its trial_id")
                         identity_key = _source_identity_key(envelope)
@@ -469,6 +484,7 @@ class TrialStore:
                         "UPDATE trials SET source_identity_key=? WHERE trial_id=?",
                         (identity_key, row["trial_id"]),
                     )
+                    migrated += 1
                 duplicate = db.execute(
                     "SELECT source_identity_key FROM trials "
                     "GROUP BY source_identity_key HAVING COUNT(*) > 1 LIMIT 1"

@@ -34,6 +34,10 @@ if TYPE_CHECKING:
     from .trinity import AgentContext
 
 DAY = 86400
+# round 61: older_than_days / keep had no upper bound, so {"prune": true, "older_than_days": 10**400}
+# raised OverflowError (an int too large for float) in the cutoff, after the report was built.
+MAX_DAYS = 36500  # 100 years: older than anything on disk
+MAX_KEEP = 1_000_000
 
 
 def _limits() -> list[tuple[str, str, int, str]]:
@@ -61,9 +65,10 @@ async def t_limits_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     lines = ["limits_status:"]
     mp = getattr(getattr(core, "settings", None), "max_parallel", None)
     sem = getattr(core, "_sem", None)
-    if isinstance(mp, int):
+    # round 61: a bool max_parallel printed "= True", and a bool semaphore value did arithmetic
+    if isinstance(mp, int) and not isinstance(mp, bool):
         free = getattr(sem, "_value", None)
-        used = f", {mp - free} in use now" if isinstance(free, int) else ""
+        used = f", {mp - free} in use now" if isinstance(free, int) and not isinstance(free, bool) else ""
         lines.append(f"- AVRONE_MAX_PARALLEL (concurrent model calls) = {mp}{used}")
     for env, src, v, _ in _limits():
         lines.append(f"- {env} = {v} ({src})")
@@ -77,8 +82,15 @@ async def t_limits_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
         lines.append(f"live: {working} agent(s) working, {len(active)} known")
     ra = getattr(core, "run_agents", None)
     if isinstance(ra, dict) and ra:
-        top = sorted(ra.items(), key=lambda kv: -kv[1])[:5]
-        lines.append("agents started per run (top): " + ", ".join(f"{k}={v}" for k, v in top))
+        # round 61: one non-numeric count (a str, None) raised TypeError in the sort and the whole
+        # status call failed; run ids were printed raw, so a run id holding a newline forged lines
+        from .textsafe import escape
+        nums = [(k, v) for k, v in ra.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v]
+        top = sorted(nums, key=lambda kv: -kv[1])[:5]
+        if top:
+            lines.append("agents started per run (top): "
+                         + ", ".join(f"{escape(str(k))}={v}" for k, v in top))
     try:
         pack_body = server.max_body_bytes("/api/fleet/agentpack")
         lines.append(f"body cap on /api/fleet/agentpack (fits a quota-sized pack) = {pack_body}")
@@ -171,7 +183,8 @@ def _unlink_if_same(p: Path, mtime_ns: int, size: int) -> bool:
 
 def prune(runs: Path, older_than_days: int, keep: int, active: set[str], now: float | None = None) -> dict:
     u = usage(runs)
-    cutoff = (now or time.time()) - older_than_days * DAY
+    # round 61: `now or time.time()` replaced an explicit now=0.0 with the wall clock
+    cutoff = (time.time() if now is None else now) - min(max(older_than_days, 1), MAX_DAYS) * DAY  # the tool's own floor: 1 day
     removed = freed = 0
     for i, f in enumerate(u["files"]):
         mtime, _size, p, parts = f[0], f[1], f[2], f[3]
@@ -193,12 +206,18 @@ def _archive_no(p: Path) -> int:
     return int(m.group(1)) if m and m.end() == len(p.name) else 0
 
 
-def _int(v: Any, default: int, lo: int) -> int | None:
-    if v is None:
-        return default
-    if isinstance(v, bool) or not isinstance(v, int):
-        return None
-    return max(lo, v)
+def _int(v: Any, default: int, lo: int, hi: int = MAX_KEEP) -> int | None:
+    """Round 61: through argnum.tool_int (the one integer rule), clamped to [lo, hi]. Junk is None
+    rather than the default: prune deletes, so a garbled keep must never prune with keep=50."""
+    from .argnum import tool_int
+    return tool_int(v, default, lo, hi, bad=None)
+
+
+def _ago(now: float, t: float) -> str:
+    """Round 61: a log with a future mtime (clock skew, a copied file) read "newest -5d ago"."""
+    if t > now:
+        return "in the future (clock skew)"
+    return f"{int((now - t) // DAY)}d ago"
 
 
 def _mb(n: int) -> str:
@@ -209,8 +228,8 @@ async def t_run_logs(ctx: "AgentContext", args: dict[str, Any]) -> str:
     runs = _runs_dir(ctx)
     if runs is None:
         return "run_logs: no data_dir configured on this node"
-    days = _int(args.get("older_than_days"), 30, 1)
-    keep = _int(args.get("keep"), 50, 10)
+    days = _int(args.get("older_than_days"), 30, 1, MAX_DAYS)
+    keep = _int(args.get("keep"), 50, 10, MAX_KEEP)
     if days is None or keep is None:
         return "ERROR: older_than_days and keep must be integers"
     u = await asyncio.to_thread(usage, runs)
@@ -225,14 +244,18 @@ async def t_run_logs(ctx: "AgentContext", args: dict[str, Any]) -> str:
         extra += f", {u['orphans']} run(s) with archives only"
     if u.get("truncated"):
         extra += f", listing capped at {USAGE_SCAN_MAX} entries"
-    head = (f"run_logs: {u['count']} run log(s), {_mb(u['bytes'])}{extra}; newest {int((now - newest) // DAY)}d ago, "
-            f"oldest {int((now - oldest) // DAY)}d ago")
-    if args.get("prune") is not True:
+    head = (f"run_logs: {u['count']} run log(s), {_mb(u['bytes'])}{extra}; newest {_ago(now, newest)}, "
+            f"oldest {_ago(now, oldest)}")
+    from .argnum import tool_bool
+    # round 61: MCP / fleet / admin skip check(), and prune="true" from them silently did a dry run
+    if not tool_bool(args.get("prune"), False):
         stale = sum(1 for i, f in enumerate(u["files"]) if i >= keep and f[0] < now - days * DAY)
         return head + f"\nprunable with older_than_days={days}, keep={keep}: {stale}"
     active = {str(getattr(ctx, "run_id", "") or "")}
     core = getattr(ctx, "core", None)
-    for a in (getattr(core, "active", None) or {}).values():
+    act = getattr(core, "active", None)
+    # round 61: a non-dict core.active (a list) raised AttributeError mid-prune
+    for a in (act.values() if isinstance(act, dict) else ()):
         if isinstance(a, dict) and a.get("run_id"):
             active.add(str(a["run_id"]))
     r = await asyncio.to_thread(prune, runs, days, keep, active, now)

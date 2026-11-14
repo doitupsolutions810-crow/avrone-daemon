@@ -356,7 +356,11 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = scope.strip().lower() if isinstance(scope, str) else scope  # round 55: " Runs" refused
     if scope not in ("runs", "data", "workspace"):
         return "ERROR: scope must be runs, data or workspace"
-    if args.get("fix") is True and scope not in ("runs", "data"):
+    from .argnum import tool_bool
+    # round 61: entry points that skip check() (MCP, fleet, admin) pass fix="true"; `is True` ignored
+    # it, so the scan reported FOUND and fixed nothing, and fix="true" with scope workspace was not refused
+    fix = tool_bool(args.get("fix"), False)
+    if fix and scope not in ("runs", "data"):
         return "ERROR: fix is only allowed for scope runs or data (run logs, bridge journals, memory, jobs.db); fix other files by hand"
     root = _roots(ctx, scope)
     if root is None:
@@ -377,10 +381,10 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if nhits > MAX_SHOWN:
         lines.append(f"... {nhits - MAX_SHOWN} more")
     if scope == "data":  # round 159: jobs.db rows (results/errors stored raw before v0.148)
-        lines += await _jobs_db_report(root / "jobs.db", args.get("fix") is True)
+        lines += await _jobs_db_report(root / "jobs.db", fix)
         if any(ln.startswith("- jobs.db:") and "NOT scanned" not in ln for ln in lines) and not hits:
             lines[0] = lines[0].replace(": CLEAN -", ": FOUND -", 1)
-    if hits and args.get("fix") is True:
+    if hits and fix:
         lock = getattr(getattr(getattr(ctx, "core", None), "codex", None), "_write_lock", None)
         paths = set(hpaths)
         if scope == "runs":
@@ -459,9 +463,14 @@ async def t_mcp_selftest(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"mcp_selftest: FAIL - server raised {type(e).__name__}"
     failed = [k for k, ok in r["checks"].items() if not ok]
     srv = r["server"]
-    return "\n".join([f"mcp_selftest: {'PASS' if not failed else 'FAIL'} - protocol {r['protocol']}, "
-                      f"{srv.get('name', '?')} {srv.get('version', '?')}, {len(r['tools'])} tool(s): "
-                      + ", ".join(r["tools"])]
+    # round 61: a serverInfo that is not an object raised AttributeError outside the try, and the
+    # protocol, server name and tool names were printed raw (a name holding a newline forged a line)
+    if not isinstance(srv, dict):
+        srv = {}
+        failed.append("serverInfo")
+    return "\n".join([f"mcp_selftest: {'PASS' if not failed else 'FAIL'} - protocol {_tsesc(r['protocol'])}, "
+                      f"{_tsesc(srv.get('name', '?'))} {_tsesc(srv.get('version', '?'))}, {len(r['tools'])} tool(s): "
+                      + ", ".join(_tsesc(t) for t in r["tools"])]
                      + [f"- {k}: {'ok' if ok else 'FAILED'}" for k, ok in r["checks"].items()])
 
 

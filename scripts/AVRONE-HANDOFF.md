@@ -947,3 +947,14 @@ Tests: `tests/test_agentfs_tools_robust.py`.
 - **Bytes inspect output.** `str(b"true|/x")` produced `"b'true|/x'"`, so a running home was read as not running and was removed and recreated. `parse_inspect` now decodes bytes first.
 - **Cache cross-handout.** The cached home was returned without checking which directory it belonged to. `ensure()` now raises `ForeignContainer` if the cached home's `agent_dir` differs from the requested resolved directory.
 - Tests: `tests/test_agentcontainer_robust.py` (53).
+
+## Hardening round 61: run-log and secret tools (`tools_limits.py`, `tools_secrets.py`)
+
+- **Overflow on prune.** `older_than_days` and `keep` had no upper bound. `run_logs {"prune": true, "older_than_days": 10**400}` passed `check()`, then raised OverflowError ("int too large to convert to float") in the cutoff. The report path did the same once a node had more logs than `keep`, and the whole 400-digit number was echoed back. Both now go through `argnum.tool_int`, clamped to `MAX_DAYS` = 36500 and `MAX_KEEP` = 1,000,000. Junk is still an ERROR, never the default, because prune deletes. `prune()` itself clamps `older_than_days` to 1..MAX_DAYS, so a direct negative age can't move the cutoff into the future.
+- **`now=0.0` ignored.** `prune(..., now=0.0)` used `now or time.time()`, so it fell back to the wall clock. It now uses `is None`.
+- **Quoted booleans from check()-less entry points.** MCP, fleet and admin calls skip `check()`. With `run_logs {"prune": "true"}`, the prune was silently skipped and the call reported a dry run. With `secret_scan {"fix": "true"}`, the scan reported FOUND and fixed nothing, and `fix: "true"` with scope workspace wasn't refused. Both now use `argnum.tool_bool`, and unknown words stay False.
+- **Non-dict `core.active`.** A list raised AttributeError partway through the prune. It now counts as no active runs. The current run's own `run_id` is still kept.
+- **Clock skew.** A log with a future mtime read "newest -5d ago". `_ago()` now says "in the future (clock skew)".
+- **limits_status crash.** A single non-numeric `run_agents` count (a str, None or NaN) raised TypeError in the sort, and the whole status call failed. Counts are now filtered, and run ids are escaped, because an id holding a newline forged a limit line. A bool `max_parallel` printed "= True", and a bool semaphore value did arithmetic; both are now ignored.
+- **mcp_selftest report.** A non-object `serverInfo` raised AttributeError outside the try. A tool without a name (None) raised TypeError in the join. The protocol, server name and tool names were printed raw. The report now FAILs on a bad serverInfo and escapes every echoed field.
+- Tests: `tests/test_limits_secrets_robust.py` (74).

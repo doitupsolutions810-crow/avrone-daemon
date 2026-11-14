@@ -62,7 +62,20 @@ class TrialStore:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
-        os.chmod(self.path.parent, 0o700)
+        # Never chmod a pre-existing directory: a caller choosing /tmp/trials.db
+        # must not silently remove other users' access to the shared /tmp folder.
+        # mkdir(mode=0700) creates the leaf privately when it did not exist.
+        # Existing storage must already be private, and is rejected unchanged
+        # rather than repaired by changing filesystem permissions globally.
+        try:
+            mode = stat.S_IMODE(self.path.parent.lstat().st_mode)
+        except OSError as exc:
+            raise TrialStoreError("trial data directory permissions cannot be inspected") from exc
+        if mode != 0o700:
+            raise TrialStoreError(
+                "trial data directory must already be private (mode 0700); "
+                "refusing to change an existing directory"
+            )
         self._assert_database_file()
         self._initialize()
 

@@ -86,7 +86,9 @@ def test_trial_provenance_corruption_blocks_pool_and_replay(tmp_path, field, val
         pytest.param("", id="empty"),
         pytest.param(" \t ", id="whitespace-control"),
         pytest.param("x" * 129, id="overlong"),
-        pytest.param(37, id="not-text"),
+        # SQLite TEXT affinity coerces integer 37 into string "37"; a BLOB
+        # stays non-text and exercises the actual persisted-type boundary.
+        pytest.param(b"not-text", id="blob-not-text"),
     ],
 )
 def test_stored_bridge_id_must_stay_valid(tmp_path, invalid_id):

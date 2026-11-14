@@ -180,9 +180,16 @@ def test_invalid_legacy_blob_rolls_back_all_schema_and_key_migration(
 
 def test_legacy_noncanonical_bytes_are_rejected_even_with_matching_digest(tmp_path):
     path = legacy_store(tmp_path, 2)
-    second = trial(1)
-    raw = json.dumps(second, indent=2, sort_keys=True).encode()
-    assert raw != canonical_trial_bytes(second)
+    db = sqlite3.connect(path)
+    try:
+        stored = db.execute(
+            "SELECT canonical_json FROM trials ORDER BY trial_id DESC LIMIT 1"
+        ).fetchone()[0]
+    finally:
+        db.close()
+    envelope = json.loads(stored)
+    raw = json.dumps(envelope, indent=2, sort_keys=True).encode()
+    assert raw != canonical_trial_bytes(envelope)
     alter_blob(path, raw)
     with pytest.raises(TrialStoreError, match="cannot be validated"):
         TrialStore(path)

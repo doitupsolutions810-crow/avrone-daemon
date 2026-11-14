@@ -165,6 +165,15 @@ class TrialStore:
                 "trial database schema version changed since initialization"
             )
 
+    @staticmethod
+    def _assert_live_wal_mode(db: sqlite3.Connection) -> None:
+        """Require WAL durability throughout the lifetime of an initialized receiver."""
+        mode = db.execute("PRAGMA journal_mode").fetchone()[0]
+        if not isinstance(mode, str) or mode.lower() != "wal":
+            raise TrialStoreError(
+                "trial database WAL journal mode changed since initialization"
+            )
+
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self._assert_private_parent()
@@ -195,6 +204,7 @@ class TrialStore:
             db.execute("PRAGMA synchronous=FULL")
             if self._initialized:
                 self._assert_live_schema_version(db)
+                self._assert_live_wal_mode(db)
             return db
         except (sqlite3.Error, TrialStoreError, OSError) as exc:
             if db is not None:
@@ -680,6 +690,7 @@ class TrialStore:
             # An intervening writer could change user_version between opening
             # and the write lock; the second check is inside that lock.
             self._assert_live_schema_version(db)
+            self._assert_live_wal_mode(db)
             # Startup schema validation alone is insufficient: a running
             # receiver might outlive a replaced/removed uniqueness index.
             # Check while holding SQLite's writer lock, preventing a DDL swap

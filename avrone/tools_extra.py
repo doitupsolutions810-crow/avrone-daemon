@@ -371,10 +371,24 @@ async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except asyncio.TimeoutError:
         timed_out = True
     finally:
-        if proc.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-        await proc.wait()
+        # EOF on stdout may arrive before the child-exit notification. The
+        # previous unconditional kill could turn a clean no-match scan into
+        # "ERROR: search failed: 255" when the child was already exiting.
+        # Reap normally after successful collection; only kill on timeout.
+        if timed_out:
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+            await proc.wait()
+        else:
+            try:
+                await asyncio.wait_for(proc.wait(), 2.0)
+            except asyncio.TimeoutError:
+                timed_out = True
+                if proc.returncode is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        proc.kill()
+                await proc.wait()
     if proc.returncode not in (0, None) and not timed_out and not hits:
         err = (await proc.stderr.read()).decode(errors="replace").strip().splitlines() if proc.stderr else []
         return f"ERROR: search failed: {err[-1][:300] if err else proc.returncode}"

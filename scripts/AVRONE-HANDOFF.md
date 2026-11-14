@@ -844,3 +844,29 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - Admin and fleet tokens that differ only by a trailing newline are now flagged as the same secret.
 - The bind host is escaped.
 - Tests: `tests/test_statehealth_hostview_robust.py`.
+
+## Hardening round 55 (Hark edge-case series): tools_secrets + plugins + greatscale
+
+### secret_scan / fix
+- **Data loss in fix.** `_redact_value` rebuilt dicts with a comprehension. Two secret-shaped keys both redacted to `[REDACTED]`, so only the last entry survived, and fix silently deleted the other from the run log. Colliding keys now get `#2`, `#3` and so on.
+- **JSON-escaped secrets.** An env secret holding a quote or backslash appears JSON-escaped in event lines. The raw-text scan missed it and reported CLEAN, even though fix (which decodes lines) would have masked it. Whole escaped JSON lines are now decoded during the scan, reported as kind `json-escaped-secret`.
+  - The check is gated on `\"`, `\\`, `\u` and `\/`. A line holding only `\n` is not decoded.
+  - `_line_hides_secret` now also checks lines that open with `[` or are indented.
+- **Memory.** Every hit was kept in memory, so a 256 MiB run log of short flagged lines built millions of dicts. Rows past `HITS_KEEP` (5000) are counted instead. The flagged-path set that fix uses stays complete.
+- **File selection.** `.env.local`, `.env.production` and `prod.env.bak` were skipped by suffix, and so were `.pem`, `.key`, `.conf`, `.properties`, `.tfvars` and `.xml`. All are now scanned.
+- **Scope.** " runs" and "RUNS" are accepted.
+
+### load_plugins
+- A dotted or dashed file name (`my.plugin.py`) gave a dotted module name.
+- `foo.py` and a `foo.pkg/` package both used stem "foo" and shared one `sys.modules` slot.
+- Module names are now identifiers, unique, and never replace an existing `sys.modules` entry. A package directory keeps its full name.
+- A custom BaseException subclass raised by a plugin escaped `except (Exception, SystemExit)` and could kill the node. It is now reported. KeyboardInterrupt and CancelledError still propagate.
+- Error text is clipped to 500 characters and escaped. An exception whose `__str__` raises reads `<unprintable>`.
+- An unreadable plugins dir becomes a report instead of crashing startup. An `__init__.py` that is a directory is skipped.
+
+### great_scale
+- `heat(NaN)` returned 0, which read as "on the cone floor" (JS gives NaN). It now returns NaN, which fails `cone_compliant`.
+- `runs_to_detect` now uses `log1p`, and `detectInRuns` uses `-expm1(runs * log1p(-p))`. The old `1 - (1 - p)**runs` drifted about 1.6e-8 relative at p=1e-9 with 1e9 runs.
+- A non-finite alpha is refused. Format matching is trimmed and case-insensitive.
+
+Tests: `tests/test_secrets_plugins_greatscale_robust.py`.

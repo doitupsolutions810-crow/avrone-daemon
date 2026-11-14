@@ -32,7 +32,19 @@ MAX_BYTES = 2 * 1024 * 1024
 SCAN_ENTRIES_MAX = 200_000  # directory entries read by one scan
 MAX_SHOWN = 30
 TEXT_SUFFIXES = {".jsonl", ".json", ".log", ".txt", ".md", ".py", ".sh", ".env", ".yml", ".yaml", ".toml", ".cfg",
-                 ".ini", ""}
+                 ".ini", "",
+                 # round 55: key files and config formats that hold credentials were never read
+                 ".pem", ".key", ".conf", ".properties", ".tfvars", ".xml", ".ps1", ".bash", ".zsh"}
+HITS_KEEP = 5000  # hit rows kept in memory per scan; counts and flagged paths stay exact (round 55)
+
+
+def _wanted(name: str) -> bool:
+    """A file secret_scan reads. Round 55: ".env.local", ".env.production" and "prod.env.bak" have
+    suffixes ".local" / ".production" / ".bak", so the most common secret files were skipped."""
+    low = name.lower()
+    if low.startswith(".env") or ".env." in low or low.endswith(".env"):
+        return True
+    return Path(low).suffix in TEXT_SUFFIXES or is_run_log(name)
 
 
 def _shapes_rules():
@@ -78,8 +90,25 @@ def _roots(ctx: "AgentContext", scope: str) -> Path | None:
     return Path(dd) / "runs" if scope == "runs" else Path(dd)
 
 
+class _Hits(list):
+    """Round 55: every hit was kept, so a 256 MiB run log of short flagged lines built millions of
+    dicts (GBs of memory) though only MAX_SHOWN are printed. Rows past HITS_KEEP are counted, and
+    the set of flagged paths (what fix rewrites) stays complete."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.count = 0
+        self.paths: set[str] = set()
+
+    def append(self, h: dict[str, Any]) -> None:  # type: ignore[override]
+        self.count += 1
+        self.paths.add(h["path"])
+        if len(self) < HITS_KEEP:
+            super().append(h)
+
+
 def scan(root: Path) -> dict[str, Any]:
-    hits: list[dict[str, Any]] = []
+    hits: _Hits = _Hits()
     files = scanned = total = 0
     total_cap = SCAN_TOTAL_MAX
     partial_files: list[str] = []
@@ -92,8 +121,7 @@ def scan(root: Path) -> dict[str, Any]:
             break
         p = Path(de.path)
         try:
-            if not de.is_file(follow_symlinks=False) or (
-                    p.suffix.lower() not in TEXT_SUFFIXES and not is_run_log(p.name)):
+            if not de.is_file(follow_symlinks=False) or not _wanted(p.name):
                 continue
         except OSError:
             continue
@@ -139,7 +167,13 @@ def _scan_stream(f: Any, cap: int, rel: str, hits: list[dict[str, Any]]) -> tupl
         read += len(chunk)
         ends = chunk.endswith(b"\n")
         if not flagged:
-            k = _kinds((tail + chunk).decode("utf-8", errors="replace"))
+            text = (tail + chunk).decode("utf-8", errors="replace")
+            k = _kinds(text)
+            # round 55: a secret JSON-escaped in an event line (an env value holding a quote or a
+            # backslash) was invisible to the raw-text search, so the scan said CLEAN while fix
+            # (which decodes lines) would have masked it; decode whole escaped JSON lines here too
+            if not k and ends and not tail and _line_hides_secret(text.rstrip("\n")):
+                k = ["json-escaped-secret"]
             if k:
                 hits.append({"path": rel, "line": lineno, "kinds": sorted(set(k))})
                 flagged = True
@@ -174,7 +208,18 @@ def _redact_value(v: Any) -> Any:
     if isinstance(v, list):
         return [_redact_value(x) for x in v]
     if isinstance(v, dict):
-        return {(_redact_value(k) if isinstance(k, str) else k): _redact_value(x) for k, x in v.items()}
+        # round 55: two secret keys redact to the same "[REDACTED]", and the dict comprehension kept
+        # only the last one: fix silently deleted the other entry from the run log
+        out: dict[Any, Any] = {}
+        for k, x in v.items():
+            nk = _redact_value(k) if isinstance(k, str) else k
+            if nk in out and nk != k:
+                i = 2
+                while f"{nk}#{i}" in out or f"{nk}#{i}" in v:
+                    i += 1
+                nk = f"{nk}#{i}"
+            out[nk] = _redact_value(x)
+        return out
     return v
 
 
@@ -205,8 +250,12 @@ def _redact_text(text: str) -> str:
 
 def _line_hides_secret(ln: str) -> bool:
     """A JSON line whose decoded strings hold a secret the raw text hides (escaped quotes etc.)."""
-    if not ln.startswith("{") or "\\" not in ln:
+    st = ln.lstrip(" \t")
+    if st[:1] not in ("{", "[") or not any(e in ln for e in ('\\"', "\\\\", "\\u", "\\/")):
+        # round 55: only escapes that can hide a secret's characters are worth decoding; "\n" alone
+        # cannot, and a line opening with "[" or indentation was never checked
         return False
+    ln = st
     from .safeio import json_loads
     try:
         obj = json_loads(ln.rstrip("\r"))
@@ -304,6 +353,7 @@ async def _jobs_db_report(path: Path, fix: bool) -> list[str]:
 
 async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = args.get("scope", "runs")
+    scope = scope.strip().lower() if isinstance(scope, str) else scope  # round 55: " Runs" refused
     if scope not in ("runs", "data", "workspace"):
         return "ERROR: scope must be runs, data or workspace"
     if args.get("fix") is True and scope not in ("runs", "data"):
@@ -313,8 +363,10 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"secret_scan: no {scope} directory configured on this node"
     res = await asyncio.to_thread(scan, root)
     hits = res["hits"]
-    head = (f"secret_scan [{scope}]: {'CLEAN' if not hits else 'FOUND'} - {len(hits)} line(s) in "
-            f"{len({h['path'] for h in hits})} file(s); {res['files']} file(s) read"
+    nhits = getattr(hits, "count", len(hits))
+    hpaths = set(getattr(hits, "paths", None) or {h["path"] for h in hits})
+    head = (f"secret_scan [{scope}]: {'CLEAN' if not hits else 'FOUND'} - {nhits} line(s) in "
+            f"{len(hpaths)} file(s); {res['files']} file(s) read"
             + (" (file cap reached)" if res["truncated"] else ""))
     if res.get("partial"):
         part = res["partial"]
@@ -322,15 +374,15 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
                  + ", ".join(_tsesc(x) for x in part[:5]) + (" ..." if len(part) > 5 else ""))
     # round 157: hit paths were printed raw; a run log named "x.jsonl\n- CLEAN" forged report lines
     lines = [head] + [f"- {_tsesc(h['path'])}:{h['line']} {', '.join(h['kinds'])}" for h in hits[:MAX_SHOWN]]
-    if len(hits) > MAX_SHOWN:
-        lines.append(f"... {len(hits) - MAX_SHOWN} more")
+    if nhits > MAX_SHOWN:
+        lines.append(f"... {nhits - MAX_SHOWN} more")
     if scope == "data":  # round 159: jobs.db rows (results/errors stored raw before v0.148)
         lines += await _jobs_db_report(root / "jobs.db", args.get("fix") is True)
         if any(ln.startswith("- jobs.db:") and "NOT scanned" not in ln for ln in lines) and not hits:
             lines[0] = lines[0].replace(": CLEAN -", ": FOUND -", 1)
     if hits and args.get("fix") is True:
         lock = getattr(getattr(getattr(ctx, "core", None), "codex", None), "_write_lock", None)
-        paths = {h["path"] for h in hits}
+        paths = set(hpaths)
         if scope == "runs":
             n = await asyncio.to_thread(fix_runs, root, paths, lock)
             nb = 0
@@ -357,7 +409,7 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
                         pass
         after = await asyncio.to_thread(scan, root)
         lines.append(f"fixed {n} run log(s)" + (f" and {nb} bridge journal(s)" if scope == "data" else "")
-                     + f"; {len(after['hits'])} line(s) still flagged")
+                     + f"; {getattr(after['hits'], 'count', len(after['hits']))} line(s) still flagged")
     return "\n".join(lines)
 
 

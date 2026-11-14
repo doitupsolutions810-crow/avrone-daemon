@@ -47,7 +47,10 @@ MAX_RUNS = 10**9
 
 
 def heat(h: float) -> float:
-    x = max(0.0, min(1.0, float(h)))
+    x = float(h)
+    if math.isnan(x):  # round 55: min/max turned NaN into 1.0, i.e. "on the cone floor"; JS gives NaN
+        return math.nan
+    x = max(0.0, min(1.0, x))
     return x * (1 - x)
 
 
@@ -95,7 +98,8 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
         return None
     if p == 1:
         return 1
-    return max(1, math.ceil(math.log(alpha) / math.log(1 - p) - 1e-12))
+    # round 55: log(1 - p) loses most digits for a rare defect (p = 1e-9: 1 - p rounds); log1p is exact
+    return max(1, math.ceil(math.log(alpha) / math.log1p(-p) - 1e-12))
 
 
 def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:
@@ -115,7 +119,9 @@ def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str
         # floor like an always-passing one, so correctness rides a separate signed channel.
         "orientation": "pass" if failures == 0 else ("fail" if failures == runs else "mixed"),
         "n": residual_count(s), "lambda": cascade_lambda(residual_count(s)),
-        "singleRunDetect": p, "detectInRuns": 1 - (1 - p) ** runs,
+        "singleRunDetect": p,
+        # round 55: 1 - (1 - p)**runs cancels to noise for p near 1e-9; -expm1(runs * log1p(-p)) does not
+        "detectInRuns": 1.0 if p == 1 else -math.expm1(runs * math.log1p(-p)),
         "runsFor95": runs_to_detect(p, alpha),
     }
 
@@ -143,13 +149,14 @@ async def t_great_scale(ctx: "AgentContext", args: dict[str, Any]) -> str:
             out = {"h": h, "S": s, "logCoord": log_coordinate(s), "psi": psi(s), "coneOk": cone_compliant(s)}
         else:
             alpha = args.get("alpha", 0.05)
-            if isinstance(alpha, bool) or not isinstance(alpha, (int, float)):
+            if isinstance(alpha, bool) or not isinstance(alpha, (int, float)) or not math.isfinite(alpha):
                 return "ERROR: alpha must be a number in (0, 1)"
             f, r = args.get("failures", 0), args.get("runs")
             if any(isinstance(v, bool) or not isinstance(v, int) for v in (f, r)):
                 return 'ERROR: give {"failures": int, "runs": int} or {"h": 0..1}'
             out = evidence_snapshot(f, r, float(alpha))
-            if str(args.get("format", "text")).lower() != "json":
+            fmt = args.get("format", "text")
+            if not (isinstance(fmt, str) and fmt.strip().lower() == "json"):
                 return _fmt(out)
     except OverflowError:  # h or alpha = a 400-digit int: math.isfinite/float() raised it raw
         return "ERROR: number out of range: h must be in [0, 1], alpha in (0, 1)"

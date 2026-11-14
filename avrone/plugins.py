@@ -27,6 +27,25 @@ from .tools import ToolRegistry
 
 log = logging.getLogger("avrone.plugins")
 ENTRY_POINT_GROUP = "avrone.plugins"
+ERROR_MAX = 500  # round 55: a plugin's exception text is clipped in its report
+
+
+def _err(e: BaseException) -> str:
+    """Round 55: the report carried str(e) whole (a plugin raising a 10 MB message put it in
+    /api/plugins and every log line), with any newline or bidi control in it raw."""
+    from .textsafe import escape
+    try:
+        msg = str(e)
+    except Exception:  # noqa: BLE001 - a __str__ that raises
+        msg = "<unprintable>"
+    return escape(f"{type(e).__name__}: {msg}"[:ERROR_MAX])
+
+
+def _fatal(e: BaseException) -> bool:
+    """Interrupts propagate; every other BaseException a plugin raises is its failure, not the node's
+    (round 55: a custom BaseException subclass escaped `except (Exception, SystemExit)`)."""
+    import asyncio
+    return isinstance(e, (KeyboardInterrupt, asyncio.CancelledError))
 
 
 def plugins_dir() -> Path:
@@ -39,8 +58,10 @@ def _run_register(name: str, source: str, register: Callable[..., Any],
     try:
         register(registry, settings)
         error = None
-    except (Exception, SystemExit) as e:  # sys.exit() inside register() used to take the node down
-        error = f"{type(e).__name__}: {e}"
+    except BaseException as e:  # sys.exit() inside register() used to take the node down
+        if _fatal(e):
+            raise
+        error = _err(e)
         log.warning("plugin %s register() failed: %s", name, error, exc_info=True)  # round 150: traceback via exc_info
     # A plugin may ADD tools, never silently REPLACE one that was already there (a builtin such as
     # shell/read_file, or another plugin's): the replacement kept source "builtin", so nothing in
@@ -60,9 +81,26 @@ def _run_register(name: str, source: str, register: Callable[..., Any],
     return {"name": name, "source": source, "tools": added, "error": error}
 
 
+def _plugin_name(path: Path) -> str:
+    # round 55: a package dir "x.y" was named "x" (Path.stem), clashing with plugin x.py
+    return path.name if path.is_dir() else path.stem
+
+
+def _module_name(name: str) -> str:
+    """Round 55: "avrone_plugin_<stem>" with a dotted or dashed stem ("my.plugin.py") is a submodule
+    path of a package that does not exist, and foo.py beside a foo/ package shared one sys.modules
+    slot, so the second silently replaced the first. Names are made identifiers and kept unique."""
+    import re
+    base = "avrone_plugin_" + (re.sub(r"\W", "_", name, flags=re.ASCII) or "_")
+    mod, i = base, 2
+    while mod in sys.modules:
+        mod, i = f"{base}_{i}", i + 1
+    return mod
+
+
 def _load_file(path: Path) -> Any:
     target = path / "__init__.py" if path.is_dir() else path
-    mod_name = f"avrone_plugin_{path.stem}"
+    mod_name = _module_name(_plugin_name(path))
     spec = importlib.util.spec_from_file_location(
         mod_name, target, submodule_search_locations=[str(path)] if path.is_dir() else None)
     if spec is None or spec.loader is None:
@@ -84,20 +122,31 @@ def load_plugins(registry: ToolRegistry, settings: Any = None,
     reports: list[dict[str, Any]] = []
     d = Path(directory).resolve() if directory else plugins_dir()
     if d.is_dir():
-        candidates = sorted(
-            p for p in d.iterdir()
-            if not p.name.startswith(("_", "."))
-            and ((p.is_file() and p.suffix == ".py") or (p.is_dir() and (p / "__init__.py").exists())))
+        try:  # round 55: an unreadable plugins dir raised PermissionError out of node startup
+            entries = list(d.iterdir())
+        except OSError as e:
+            entries = []
+            reports.append({"name": "(plugins dir)", "source": str(d), "tools": [], "error": _err(e)})
+
+        def _ok(p: Path) -> bool:
+            try:
+                return not p.name.startswith(("_", ".")) and (
+                    (p.is_file() and p.suffix == ".py") or (p.is_dir() and (p / "__init__.py").is_file()))
+            except OSError:
+                return False
+        candidates = sorted(p for p in entries if _ok(p))
         for p in candidates:
-            name = p.stem
+            name = _plugin_name(p)
             try:
                 module = _load_file(p)
                 register = getattr(module, "register", None)
                 if not callable(register):
                     raise AttributeError("plugin has no register(registry, settings) function")
-            except (Exception, SystemExit) as e:  # a top-level sys.exit() must not kill the node
-                log.warning("plugin %s failed to import: %s", name, e)
-                reports.append({"name": name, "source": str(p), "tools": [], "error": f"{type(e).__name__}: {e}"})
+            except BaseException as e:  # a top-level sys.exit() must not kill the node
+                if _fatal(e):
+                    raise
+                log.warning("plugin %s failed to import: %s", name, _err(e))
+                reports.append({"name": name, "source": str(p), "tools": [], "error": _err(e)})
                 continue
             reports.append(_run_register(name, str(p), register, registry, settings))
 
@@ -114,8 +163,10 @@ def load_plugins(registry: ToolRegistry, settings: Any = None,
                 register = obj if callable(obj) and not hasattr(obj, "register") else getattr(obj, "register", None)
                 if not callable(register):
                     raise AttributeError("entry point has no register(registry, settings)")
-            except (Exception, SystemExit) as e:
-                reports.append({"name": ep.name, "source": src, "tools": [], "error": f"{type(e).__name__}: {e}"})
+            except BaseException as e:
+                if _fatal(e):
+                    raise
+                reports.append({"name": ep.name, "source": src, "tools": [], "error": _err(e)})
                 continue
             reports.append(_run_register(ep.name, src, register, registry, settings))
 

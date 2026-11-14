@@ -64,6 +64,7 @@ class TrialStore:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         # Never chmod a pre-existing parent such as /tmp. Private storage
         # is required, and the same invariant is checked on every connection.
+        self._parent_identity: tuple[int, int] | None = None
         self._assert_private_parent()
         self._assert_database_file()
         self._initialize()
@@ -91,6 +92,11 @@ class TrialStore:
                 "trial data directory must already be private (mode 0700); "
                 "refusing to change an existing directory"
             )
+        identity = (info.st_dev, info.st_ino)
+        if self._parent_identity is None:
+            self._parent_identity = identity
+        elif self._parent_identity != identity:
+            raise TrialStoreError("trial data directory identity changed since initialization")
 
     def _assert_database_file(self) -> None:
         """Reject non-regular and multiply-linked database files before SQLite opens them."""

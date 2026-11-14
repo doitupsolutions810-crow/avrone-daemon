@@ -66,9 +66,13 @@ class TrialStore:
         # is required, and the same invariant is checked on every connection.
         self._parent_identity: tuple[int, int] | None = None
         self._database_identity: tuple[int, int] | None = None
+        # Allow legacy database modes during the one-time trusted migration;
+        # every later open must find the finalized private 0600 database.
+        self._initialized = False
         self._assert_private_parent()
         self._assert_database_file()
         self._initialize()
+        self._initialized = True
 
     @staticmethod
     def _assert_no_symlink_components(path: Path, label: str) -> None:
@@ -82,6 +86,13 @@ class TrialStore:
             if linked:
                 raise TrialStoreError(f"{label} must not contain symlinked path components")
 
+    @staticmethod
+    def _assert_file_owner(info: os.stat_result, label: str) -> None:
+        """Reject cross-user stores/sidecars on POSIX, including UID drift."""
+        euid = getattr(os, "geteuid", None)
+        if callable(euid) and info.st_uid != euid():
+            raise TrialStoreError(f"{label} must be owned by the receiver process")
+
     def _assert_private_parent(self) -> None:
         """Refuse permission drift instead of chmodding an existing shared directory."""
         try:
@@ -93,6 +104,7 @@ class TrialStore:
                 "trial data directory must already be private (mode 0700); "
                 "refusing to change an existing directory"
             )
+        self._assert_file_owner(info, "trial data directory")
         identity = (info.st_dev, info.st_ino)
         if self._parent_identity is None:
             self._parent_identity = identity
@@ -113,6 +125,9 @@ class TrialStore:
             raise TrialStoreError("trial database must be a regular file")
         if info.st_nlink != 1:
             raise TrialStoreError("trial database must not be a hard link")
+        self._assert_file_owner(info, "trial database")
+        if self._initialized and stat.S_IMODE(info.st_mode) != 0o600:
+            raise TrialStoreError("trial database permissions changed after initialization (expected 0600)")
         return info.st_dev, info.st_ino
 
     def _assert_sidecar_files(self) -> None:
@@ -133,6 +148,7 @@ class TrialStore:
                 raise TrialStoreError(
                     "trial database sidecar must be a regular single-link file"
                 )
+            self._assert_file_owner(info, "trial database sidecar")
 
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")

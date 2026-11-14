@@ -146,7 +146,9 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if len(topic) > RESEARCH_NOTE_MAX_TOPIC:
         return f"ERROR: topic is longer than {RESEARCH_NOTE_MAX_TOPIC} chars"
     text = redact_text(raw.strip()).strip()
-    masked = text != raw.strip()
+    # round 68: redact_text also drops invisible joiners, so a note with a zero-width space (pasted
+    # from a web page) was reported as "secret-shaped tokens masked" when nothing was masked
+    masked = text != _INVISIBLE_RE.sub("", raw.strip()).strip()
     t2 = redact_text(topic)
     masked = masked or t2 != topic
     topic = t2

@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v123",
+  "finding": "The script refuses when OLLAMA_HOST has illegal characters. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "illegal": "refuse",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The host-validation check holds."
+}

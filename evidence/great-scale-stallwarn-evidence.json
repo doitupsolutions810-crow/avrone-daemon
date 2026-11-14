@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v89",
+  "finding": "The script logs a stall warning when the stage holds for a multiple of STALL_CYCLES. If the stage advances it clears the hold counter. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "stall": "warn and continue",
+  "advance": "clear hold counter",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The stall-warn check holds."
+}

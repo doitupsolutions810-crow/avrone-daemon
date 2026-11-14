@@ -195,7 +195,9 @@ def test_noop_trigger_cannot_disguise_invalid_source_key_on_reopen(tmp_path):
     tamper(store, name, fake)
     db = store._connect()
     try:
-        db.execute("UPDATE trials SET source_identity_key=NULL")
+        # New-schema trials has a NOT NULL column: corrupt with malformed
+        # non-null text to exercise the removed UPDATE guard itself.
+        db.execute("UPDATE trials SET source_identity_key='malformed'")
         db.commit()
     finally:
         db.close()

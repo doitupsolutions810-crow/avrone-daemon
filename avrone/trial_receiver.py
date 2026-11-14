@@ -11,7 +11,7 @@ import sqlite3
 import time
 import unicodedata
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .evidence_pool import canonical_source_key, pool_trials
 from .trial_contract import MAX_ENVELOPE_BYTES, canonical_trial_bytes, validate_trial_envelope
@@ -475,13 +475,26 @@ class TrialStore:
                 OverflowError, sqlite3.Error) as exc:
             raise TrialStoreError("stored trial evidence integrity check failed") from exc
 
-    def _verified_trial_rows(self, db: sqlite3.Connection) -> list[sqlite3.Row]:
-        rows = db.execute("SELECT * FROM trials ORDER BY trial_id").fetchall()
-        if len(rows) > MAX_TRIAL_RECORDS:
-            raise TrialStoreError("stored trial count exceeds receiver capacity")
-        for row in rows:
+    def _verified_trial_rows(self, db: sqlite3.Connection) -> Iterator[dict[str, Any]]:
+        """Stream bounded verified projections, never retain large JSON BLOBs.
+
+        At capacity the store can contain 100,000 canonical envelopes, each up
+        to 24 KiB. fetchall() would materialize gigabytes of untrusted BLOBs
+        before their size/integrity checks ran. Yield one verified, lightweight
+        metadata projection per row instead.
+        """
+        fields = (
+            "trial_id", "source", "outcome", "system", "node", "run_id",
+            "check_id", "check_version", "check_config_sha256", "attempt_id",
+            "first_sender", "first_transport", "bridge_run_id", "received_at",
+        )
+        count = 0
+        for row in db.execute("SELECT * FROM trials ORDER BY trial_id"):
+            count += 1
+            if count > MAX_TRIAL_RECORDS:
+                raise TrialStoreError("stored trial count exceeds receiver capacity")
             self._verify_stored_trial(row)
-        return rows
+            yield {field: row[field] for field in fields}
 
     @staticmethod
     def _record_receipt(

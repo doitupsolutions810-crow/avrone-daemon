@@ -152,6 +152,19 @@ class TrialStore:
                 )
             self._assert_file_owner(info, "trial database sidecar")
 
+    @staticmethod
+    def _assert_live_schema_version(db: sqlite3.Connection) -> None:
+        """Never interpret live evidence using a changed SQLite schema version.
+
+        _initialize handles trusted migrations, but a running instance must
+        not silently keep using a database marked for a different version.
+        """
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        if type(version) is not int or version != DB_SCHEMA_VERSION:
+            raise TrialStoreError(
+                "trial database schema version changed since initialization"
+            )
+
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self._assert_private_parent()
@@ -180,6 +193,8 @@ class TrialStore:
             db.execute("PRAGMA foreign_keys=ON")
             db.execute("PRAGMA busy_timeout=5000")
             db.execute("PRAGMA synchronous=FULL")
+            if self._initialized:
+                self._assert_live_schema_version(db)
             return db
         except (sqlite3.Error, TrialStoreError, OSError) as exc:
             if db is not None:
@@ -662,6 +677,9 @@ class TrialStore:
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
+            # An intervening writer could change user_version between opening
+            # and the write lock; the second check is inside that lock.
+            self._assert_live_schema_version(db)
             # Startup schema validation alone is insufficient: a running
             # receiver might outlive a replaced/removed uniqueness index.
             # Check while holding SQLite's writer lock, preventing a DDL swap

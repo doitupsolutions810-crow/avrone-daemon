@@ -2264,20 +2264,87 @@ def _clip1(v: Any, n: int) -> str:
     return _CTRL1.sub(" ", "" if v is None else str(v))[:n]
 
 
+class _ArgError(ValueError):
+    """A bad fleet tool argument, reported as "ERROR: ..." before anything is sent (round 69)."""
+
+
+def _need_text(args: dict[str, Any], key: str) -> str:
+    """A required non-empty text arg. Before: a missing key raised KeyError out of the tool, and
+    a dict/list/number was str()-ed into the task or message sent to a peer."""
+    v = args.get(key)
+    if not isinstance(v, str) or not v.strip():
+        raise _ArgError(f"{key} is required (a non-empty string)")
+    return v
+
+
+def _route_arg(args: dict[str, Any], key: str = "node") -> str:
+    """node: a route or "auto". None, "" and blanks are "auto"; before, {"node": null} became the
+    route ["None"] and asked the fleet for a node literally called None."""
+    v = args.get(key)
+    if v is None:
+        return "auto"
+    if not isinstance(v, str):
+        raise _ArgError(f"{key} must be text (a node id, a route like \"router1/edge7\", or \"auto\")")
+    v = "/".join(p.strip() for p in v.split("/") if p.strip())
+    return v or "auto"
+
+
+def _mode_arg(args: dict[str, Any]) -> str:
+    v = args.get("mode")
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return "squad"
+    if not isinstance(v, str):
+        raise _ArgError("mode must be one of " + ", ".join(SPAWN_MODES))
+    m = v.strip().lower()
+    if m not in SPAWN_MODES:  # unknown modes ran as squad on the remote anyway; say so up front
+        raise _ArgError(f"unknown mode {v.strip()[:40]!r}; use one of " + ", ".join(SPAWN_MODES))
+    return m
+
+
+def _privileged_arg(v: Any) -> str:
+    """remote_spawn privileged: "" (not privileged), "priv:shell" or "priv:admin".
+    Round 69: str(v) turned {"privileged": "false"} into the capability "priv:false" (the spawn was
+    refused instead of running normally) and true into "priv:True"."""
+    from .argnum import _FALSE_WORDS
+    if v is None or v is False:
+        return ""
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in _FALSE_WORDS:
+            return ""
+        t = t if t.startswith("priv:") else f"priv:{t}"
+        if t in PRIVILEGED_CAPABILITIES:
+            return t
+    elif isinstance(v, (int, float)) and not isinstance(v, bool) and v == 0:
+        return ""
+    raise _ArgError("privileged must be \"shell\" or \"admin\" (or left out)")
+
+
+def _tool_err(e: BaseException, cap: int = 300) -> str:
+    """A peer's error as one masked line (round 69; same rule as agent_migrate in round 68)."""
+    from .tools import one_line
+    try:
+        from .tools_researchnote import redact_text
+        t = redact_text(one_line(f"{type(e).__name__}: {e}"))
+    except Exception:  # noqa: BLE001 - fail closed
+        return type(e).__name__
+    return t if len(t) <= cap else t[:cap] + "..."
+
+
 async def t_remote_spawn(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = _fleet(ctx)
-    target = str(args.get("node", "auto"))
+    try:
+        task, target, mode = _need_text(args, "task"), _route_arg(args), _mode_arg(args)
+        priv = _privileged_arg(args.get("privileged"))
+    except _ArgError as e:
+        return f"ERROR: {e}"
     route = [p for p in target.split("/") if p] if target != "auto" else []
     hops = getattr(ctx.core, "fleet_hops", 0)
-    priv = str(args.get("privileged") or "")
-    if priv and not priv.startswith("priv:"):
-        priv = f"priv:{priv}"
     kw = {"rounds": r} if (r := clamp_deep_rounds(args.get("rounds"))) is not None else {}
     if args.get("checkpoint_id"):  # squad/deep: a retried spawn with the same id resumes on that node
         kw["checkpoint_id"] = str(args["checkpoint_id"])
     try:
-        res = await f.dispatch(route, str(args.get("mode", "squad")), str(args["task"]), hops, args.get("n"),
-                               ctx.run_id, privileged=priv, **kw)
+        res = await f.dispatch(route, mode, task, hops, args.get("n"), ctx.run_id, privileged=priv, **kw)
     except GatewayRefused as e:
         if not priv:
             raise
@@ -2287,7 +2354,20 @@ async def t_remote_spawn(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 async def t_remote_broadcast(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = _fleet(ctx)
-    targets = args.get("nodes") or [n["node_id"] for n in f.list_nodes() if n["status"] == "online"]
+    try:
+        task, mode = _need_text(args, "task"), _mode_arg(args)
+    except _ArgError as e:
+        return f"ERROR: {e}"
+    targets = args.get("nodes")
+    if isinstance(targets, str):
+        # round 69: a bare string was iterated character by character, so {"nodes": "router1"}
+        # dispatched the task to up to 8 one-letter nodes "r", "o", "u", ...
+        targets = [targets]
+    elif targets is not None and not isinstance(targets, (list, tuple)):
+        return "ERROR: nodes must be a list of node ids or routes"
+    if targets is not None and not all(isinstance(t, str) for t in targets):
+        return "ERROR: nodes must be a list of node ids or routes (text)"
+    targets = targets or [n["node_id"] for n in f.list_nodes() if n["status"] == "online"]
     # Normalize each route ("good/", "/good", " good " are all "good") before de-duplicating, and
     # drop empty ones: an empty route would silently become an "auto" pick of some other node.
     routes = ("/".join(p.strip() for p in str(t).split("/") if p.strip()) for t in targets)
@@ -2298,11 +2378,11 @@ async def t_remote_broadcast(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
     async def one(t: str) -> str:
         try:
-            r = await f.dispatch([p for p in t.split("/") if p], str(args.get("mode", "squad")), str(args["task"]),
-                                 hops, args.get("n"), ctx.run_id)
+            r = await f.dispatch([p for p in t.split("/") if p], mode, task, hops, args.get("n"), ctx.run_id)
             return f"## {t}\n{r.get('answer', '')}"
         except Exception as e:  # noqa: BLE001
-            return f"## {t}\nERROR: {type(e).__name__}: {e}"
+            # round 69: a peer's raw error body could forge a "## node" section for another node
+            return f"## {t}\nERROR: {_tool_err(e)}"
     return "\n\n".join(await asyncio.gather(*(one(t) for t in targets)))
 
 
@@ -2329,8 +2409,12 @@ async def t_agent_message(ctx: "AgentContext", args: dict[str, Any]) -> str:
     from .argnum import tool_bool
     from .presence import directory, find_agent
     f = _fleet(ctx)
-    route, name = find_agent(await directory(ctx.core), str(args["agent"]))
-    res = await f.send_message([p for p in route.split("/") if p], name, str(args["message"]),
+    try:
+        agent, message = _need_text(args, "agent"), _need_text(args, "message")
+    except _ArgError as e:
+        return f"ERROR: {e}"
+    route, name = find_agent(await directory(ctx.core), agent)
+    res = await f.send_message([p for p in route.split("/") if p], name, message,
                                f"{f.node_id}/{ctx.name}", getattr(ctx.core, "fleet_hops", 0), tool_bool(args.get("wait"), False))
     head = f"[{' -> '.join(res.get('path', []))}] {name}: {res.get('delivered')}"
     return head + (f"\n{res['answer']}" if res.get("answer") else f" ({res.get('note') or res.get('run_id')})")
@@ -2360,11 +2444,14 @@ async def t_queue_submit(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: task is required (a non-empty string)"
     if len(task.encode("utf-8", "replace")) > QUEUE_TASK_MAX:
         return f"ERROR: task is over {QUEUE_TASK_MAX} bytes; put the detail in a file and reference it"
-    payload = {"task": task, "node": str(args.get("node", "auto")), "mode": str(args.get("mode", "squad")),
+    try:  # round 69: {"node": null} queued a job for the node "None"
+        node, mode = _route_arg(args), _mode_arg(args)
+    except _ArgError as e:
+        return f"ERROR: {e}"
+    payload = {"task": task, "node": node, "mode": mode,
                "n": args.get("n"), "from": f"{f.node_id}/{ctx.name}"}
     first = payload["node"].split("/", 1)[0]
     try:  # vet at submit time too, so a doomed job never enters the durable queue
-        mode = payload["mode"] if payload["mode"] in SPAWN_MODES else "squad"
         f.check_outbound("run", f"spawn:{mode}", getattr(ctx.core, "fleet_hops", 0), first)
     except PermissionError as e:
         return f"ERROR: refused by fleet gateway: {e}"

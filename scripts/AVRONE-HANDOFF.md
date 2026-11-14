@@ -939,3 +939,11 @@ Tests: `tests/test_safeio_robust.py` (59 tests).
 - **Kept on purpose.** `fs_delete` on a FIFO is still refused, per `test_cov7_config_agentfs::test_delete_special_file_refused`. Its message is now escaped.
 
 Tests: `tests/test_agentfs_tools_robust.py`.
+
+## Hardening round 60: agent home containers (`agentcontainer.py`, `sovereign.py`)
+
+- **Busy homes were reaped mid-command.** Idleness was measured from `ensure()`. A command running longer than `AVRONE_AGENT_IDLE_SECS` (600 s by default) therefore had its container removed with `docker rm -f` as soon as any other agent called `ensure()`. The command died and the home's state was lost. The pool now has `begin(name)` and `end(name)`, which keep an active count. Homes with active commands are skipped by the reaper, and idle time counts from `end()`. `Sovereign.run` wraps both exec attempts (first and recreate) in begin/end inside `try`/`finally`. `state()` shows `active` and never reports a negative idle time.
+- **Image as option.** The image was passed as the first positional argument of `docker run`, so `AVRONE_DOCKER_IMAGE="--privileged"` ran the container privileged, using the image `sleep`. The new `check_image()` requires a leading letter or digit, followed only by `[A-Za-z0-9._/:@+-]`, up to 512 characters. Anything else raises `ValueError`. It applies in `persistent_run_argv`, `Sovereign.start` (which wraps the error in a RuntimeError) and the isolated `docker run`.
+- **Bytes inspect output.** `str(b"true|/x")` produced `"b'true|/x'"`, so a running home was read as not running and was removed and recreated. `parse_inspect` now decodes bytes first.
+- **Cache cross-handout.** The cached home was returned without checking which directory it belonged to. `ensure()` now raises `ForeignContainer` if the cached home's `agent_dir` differs from the requested resolved directory.
+- Tests: `tests/test_agentcontainer_robust.py` (53).

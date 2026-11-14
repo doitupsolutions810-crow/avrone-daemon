@@ -107,9 +107,25 @@ def hardening_args(allow_network: bool, mem: int | None = None, cpu: float | Non
     return args
 
 
+_IMAGE_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,511}\Z")
+
+
+def check_image(image: Any) -> str:
+    """The image reference, or ValueError. Round 60: the image is the first positional argument
+    of `docker run`, so AVRONE_DOCKER_IMAGE="--privileged" (or "-v=/:/host") was parsed as an
+    option: the home ran privileged with image "sleep". A reference starts with a letter or digit
+    and holds only name/tag/digest characters (no spaces, controls or leading '-')."""
+    s = image if isinstance(image, str) else ""
+    if not _IMAGE_OK.match(s):
+        raise ValueError(f"invalid docker image reference {str(image)[:80]!r}: it must start with a letter or "
+                         "digit and contain only letters, digits and ._/:@+-")
+    return s
+
+
 def persistent_run_argv(name: str, host_dir: Path, image: str, allow_network: bool,
                         mem: int | None = None, cpu: float | None = None, agent_id: str = "") -> list[str]:
     """`docker run -d` for a long-lived agent home: ONLY the agent dir is mounted, at /agent."""
+    image = check_image(image)
     mnt = agentfs.CONTAINER_AGENT_MOUNT
     labels = ["--label", "avrone.agent-home=1"]
     if agent_id:
@@ -174,6 +190,8 @@ def inspect_argv(name: str) -> list[str]:
 def parse_inspect(stdout: Any) -> tuple[bool, str]:
     """(running, mounted host dir or "") from inspect_argv's output. Older output (just "true")
     reports no mount, which is accepted as before."""
+    if isinstance(stdout, (bytes, bytearray)):  # round 60: str(b"true|/x") was "b'true|/x'" = not running,
+        stdout = bytes(stdout).decode("utf-8", "replace")  # so a live home got rm -f'd and recreated
     text = str(stdout or "").strip().splitlines()
     first = text[0] if text else ""
     state, _, src = first.partition("|")
@@ -205,6 +223,7 @@ class _Home:
     last_used: float
     created: float = 0.0
     uses: int = 0
+    active: int = 0  # commands running in it now (round 60): never reaped while > 0
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -249,6 +268,9 @@ class AgentContainerPool:
             now = self.clock()
             home = self.homes.get(name)
             if home is not None:
+                if home.agent_dir != d:  # round 60: never hand one agent's home to another dir
+                    raise ForeignContainer(f"container {name} is the home of {str(home.agent_dir)!r}, "
+                                           f"not {str(d)!r}")
                 home.last_used, home.uses = now, home.uses + 1
                 return name
             res = await self._exec(inspect_argv(name), 30)
@@ -269,6 +291,22 @@ class AgentContainerPool:
             self.homes[name] = _Home(name, d, now, created=now, uses=1)
             return name
 
+    def begin(self, name: str) -> None:
+        """A command starts in `name`. Round 60: idleness was measured from ensure(), so a command
+        running longer than AVRONE_AGENT_IDLE_SECS had its container rm -f'd under it as soon as
+        any other agent called ensure() (the reaper saw it as idle). Pair with end()."""
+        h = self.homes.get(name)
+        if h is not None:
+            h.active += 1
+            h.last_used = self.clock()
+
+    def end(self, name: str) -> None:
+        """The command started by begin() finished: idleness counts from now."""
+        h = self.homes.get(name)
+        if h is not None:
+            h.active = max(0, h.active - 1)
+            h.last_used = self.clock()
+
     async def forget(self, name: str) -> None:
         """Drop a home whose container died, so the next ensure() recreates it."""
         async with self._lock:
@@ -283,7 +321,8 @@ class AgentContainerPool:
         # record, inspected the still-running container, re-registered and handed it out, and the
         # reaper's rm -f killed it under the agent (its next exec failed / its state was lost).
         async with self._lock:
-            stale = [h for n, h in self.homes.items() if n != skip and now - h.last_used >= limit]
+            stale = [h for n, h in self.homes.items()
+                     if n != skip and h.active <= 0 and now - h.last_used >= limit]
             for h in stale:
                 del self.homes[h.name]
             for h in stale:
@@ -308,5 +347,6 @@ class AgentContainerPool:
         now = self.clock()
         return {"mode": "persistent", "node": self.node, "idle_secs": self.idle_after,
                 "created": self.created, "reaped": self.reaped,
-                "homes": {n: {"agent": h.agent_dir.name, "uses": h.uses, "idle_s": round(now - h.last_used, 1)}
+                "homes": {n: {"agent": h.agent_dir.name, "uses": h.uses, "active": h.active,
+                              "idle_s": 0.0 if h.active else round(max(0.0, now - h.last_used), 1)}
                           for n, h in self.homes.items()}}

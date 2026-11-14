@@ -348,12 +348,13 @@ class DockerRunner(Runner):
         self.workspace.mkdir(parents=True, exist_ok=True)
         try:
             mount = agentfs.bind_args(self.workspace, "/workspace")
-        except agentfs.AgentFSError as e:
+            image = agentcontainer.check_image(self.s.docker_image)  # round 60: "--privileged" was a flag
+        except (agentfs.AgentFSError, ValueError) as e:
             raise RuntimeError(f"Could not start environment container: {e}") from None
         argv = ["docker", "run", "-d", "--rm", "--name", self.container, *mount, "-w", "/workspace"]
         if not self.s.allow_network:
             argv += ["--network", "none"]
-        argv += [self.s.docker_image, "sleep", "infinity"]
+        argv += [image, "sleep", "infinity"]
         res = await self._exec(argv, " ".join(argv), 300)
         if res.exit_code != 0:
             raise RuntimeError(f"Could not start environment container: {res.stderr}")
@@ -384,7 +385,7 @@ class DockerRunner(Runner):
             # same hardening as the persistent agent home (cap_drop ALL, no-new-privileges,
             # mem/cpu/pids limits, --network none unless AVRONE_ALLOW_NETWORK)
             argv += agentcontainer.hardening_args(self.s.allow_network)
-            return argv + [self.s.docker_image, *tail]
+            return argv + [agentcontainer.check_image(self.s.docker_image), *tail]
         inner = agentfs.container_agent_path(self.workspace, agent_cwd)
         argv = ["docker", "exec", "-w", inner]
         for k, v in self.agent_env(agent_cwd, in_container=inner).items():
@@ -404,12 +405,20 @@ class DockerRunner(Runner):
             # long-lived per-agent home container (only the agent dir mounted at /agent), reused
             pool = self._pool()
             name = await pool.ensure(agent_cwd)
-            res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+            pool.begin(name)  # round 60: a busy home is never idle-reaped mid-command
+            try:
+                res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+            finally:
+                pool.end(name)
             if agentcontainer.container_gone(res, name):  # the home died under us: recreate once
                 await pool.forget(name)
                 self.restarts += 1
                 name = await pool.ensure(agent_cwd)
-                res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+                pool.begin(name)
+                try:
+                    res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+                finally:
+                    pool.end(name)
             return res
         if agent_cwd is not None and agentfs.docker_isolate():
             run_name = f"avrone-run-{uuid.uuid4().hex[:12]}"

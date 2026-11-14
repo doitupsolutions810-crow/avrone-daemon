@@ -92,11 +92,16 @@ def test_missing_source_guard_denies_running_receiver_before_any_receipt(tmp_pat
         with pytest.raises(TrialStoreError, match="trigger integrity"):
             store.ingest_many([payload], sender=sender, transport="fleet")
     assert totals(store) == before
-    with pytest.raises(TrialStoreError, match="trigger integrity"):
-        TrialStore(path)
-    restore(store, definition)
+    # Fresh initialization is allowed to restore a genuinely *missing*
+    # trusted trigger, unlike a same-name forged/no-op replacement.
+    repaired = TrialStore(path)
+    db = repaired._connect()
+    try:
+        repaired._assert_source_identity_triggers(db)
+    finally:
+        db.close()
     assert store.ingest_many([trial("new")], sender="peer-b", transport="fleet")["accepted"] == 1
-    assert TrialStore(path).pool_snapshot()["runs"] == 2
+    assert repaired.pool_snapshot()["runs"] == 2
 
 
 @pytest.mark.parametrize("which", ["insert", "update"])

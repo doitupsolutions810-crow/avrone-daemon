@@ -40,10 +40,14 @@ def seeded(tmp_path):
     assert store.ingest_many(
         [trial("blocked")], sender="peer-c", transport="fleet"
     )["results"][0]["status"] == "sender_quarantined"
-    assert [r["result"] for r in store.receipt_records()] == [
+    from avrone import trial_receiver
+    expected = [
         "accepted", "duplicate", "non_pass_stored", "conflict_quarantined",
         "sender_quarantined",
     ]
+    # Receipt retention is intentionally bounded; even the fixture must not
+    # require historical rows once MAX_RECEIPTS is reduced for a stress test.
+    assert [r["result"] for r in store.receipt_records()] == expected[-trial_receiver.MAX_RECEIPTS:]
     return store, path
 
 

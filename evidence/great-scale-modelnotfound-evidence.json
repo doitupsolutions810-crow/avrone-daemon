@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v109",
+  "finding": "The script refuses immediately when the pull log contains model-not-found patterns. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "notFound": "refuse immediately",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The model-not-found check holds."
+}

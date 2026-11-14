@@ -83,7 +83,9 @@ def test_live_journal_mode_drift_denies_every_audit_and_ingest_then_recovers(
         )
 
     assert counts(path) == before
-    assert mode(path) == bad_mode
+    # SQLite persists only WAL vs rollback-journal selection across new
+    # connections; TRUNCATE, PERSIST, and MEMORY reopen in DELETE mode.
+    assert mode(path) == "delete"
     assert mode(path, "wal") == "wal"
     assert store.pool_snapshot()["runs"] == 1
     assert store.ingest_many(

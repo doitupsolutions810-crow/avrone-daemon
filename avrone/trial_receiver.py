@@ -701,7 +701,20 @@ class TrialStore:
         if not validate_trial_envelope(envelope):
             raise ValueError("invalid avrone.trial/v2 envelope")
         digest = hashlib.sha256(raw).hexdigest()
-        now = time.time()
+        try:
+            now = time.time()
+        except (OSError, OverflowError, ValueError) as exc:
+            raise TrialStoreError("receiver clock could not provide a receipt timestamp") from exc
+        # SQLite may silently turn NaN into NULL. Never commit a receipt,
+        # first-seen trial, or quarantine marker with invalid chronology.
+        # Check before opening a transaction so no partial evidence is written.
+        if (
+            isinstance(now, bool)
+            or not isinstance(now, (int, float))
+            or not math.isfinite(now)
+            or now < 0
+        ):
+            raise TrialStoreError("receiver clock returned an invalid receipt timestamp")
         trial_id = envelope["trial_id"]
         db = self._connect()
         try:

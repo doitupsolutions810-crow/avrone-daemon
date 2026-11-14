@@ -536,9 +536,7 @@ class TrialStore:
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
-            quarantined = db.execute(
-                "SELECT 1 FROM trial_quarantined_senders WHERE sender=?", (sender,)
-            ).fetchone()
+            quarantined = self._assert_sender_quarantine_state(db, sender)
             if quarantined:
                 status = "sender_quarantined"
             else:
@@ -688,6 +686,46 @@ class TrialStore:
                 OverflowError, sqlite3.Error) as exc:
             raise TrialStoreError("stored trial quarantine integrity check failed") from exc
 
+    @staticmethod
+    def _verify_sender_quarantine_pair(marker: sqlite3.Row | None,
+                                       row: sqlite3.Row | None) -> None:
+        """Reject missing, forged or mismatched sender-quarantine markers."""
+        if (marker is None) != (row is None):
+            raise TrialStoreError("stored sender quarantine state is inconsistent")
+        if row is None:
+            return
+        TrialStore._verify_quarantine_row(row)
+        if (
+            not isinstance(marker["sender"], str)
+            or not SENDER_RE.fullmatch(marker["sender"])
+            or marker["sender"] != row["sender"]
+            or marker["first_trial_id"] != row["trial_id"]
+            or marker["reason"] != row["reason"]
+            or marker["quarantined_at"] != row["received_at"]
+        ):
+            raise TrialStoreError("stored sender quarantine state is inconsistent")
+
+    def _assert_sender_quarantine_state(self, db: sqlite3.Connection, sender: str) -> bool:
+        """Validate this sender's marker before blocking or admitting a delivery.
+
+        Limit result rows to detect duplicate conflict evidence without scanning
+        every quarantined sender on the hot ingest path.
+        """
+        marker = db.execute(
+            "SELECT sender,first_trial_id,reason,quarantined_at "
+            "FROM trial_quarantined_senders WHERE sender=?", (sender,)
+        ).fetchone()
+        conflicts = db.execute(
+            "SELECT trial_id,sender,transport,bridge_run_id,reason,"
+            "incoming_sha256,incoming_json,received_at "
+            "FROM trial_quarantine WHERE sender=? ORDER BY quarantine_id LIMIT 2",
+            (sender,),
+        ).fetchall()
+        if len(conflicts) > 1:
+            raise TrialStoreError("stored sender quarantine state is inconsistent")
+        self._verify_sender_quarantine_pair(marker, conflicts[0] if conflicts else None)
+        return marker is not None
+
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
@@ -699,8 +737,22 @@ class TrialStore:
                 "trial_id", "sender", "transport", "bridge_run_id",
                 "reason", "incoming_sha256", "received_at",
             )
+            conflict_by_sender = {}
             for row in rows:
                 self._verify_quarantine_row(row)
+                if row["sender"] in conflict_by_sender:
+                    raise TrialStoreError("stored sender quarantine state is inconsistent")
+                conflict_by_sender[row["sender"]] = row
+            markers = db.execute(
+                "SELECT sender,first_trial_id,reason,quarantined_at "
+                "FROM trial_quarantined_senders ORDER BY sender"
+            ).fetchall()
+            if len(markers) != len(conflict_by_sender):
+                raise TrialStoreError("stored sender quarantine state is inconsistent")
+            for marker in markers:
+                self._verify_sender_quarantine_pair(
+                    marker, conflict_by_sender.get(marker["sender"])
+                )
             return [{key: row[key] for key in public} for row in rows]
         except sqlite3.Error as exc:
             raise TrialStoreError("trial quarantine read failed") from exc

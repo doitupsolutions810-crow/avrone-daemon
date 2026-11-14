@@ -95,9 +95,10 @@ def test_mode_drift_during_sqlite_connect_closes_untrusted_connection(
         opened.append(conn)
         return conn
 
-    monkeypatch.setattr(trial_receiver.sqlite3, "connect", changed_mode_during_open)
-    with pytest.raises(TrialStoreError, match="database permissions changed"):
-        store.pool_snapshot()
+    with monkeypatch.context() as ctx:
+        ctx.setattr(trial_receiver.sqlite3, "connect", changed_mode_during_open)
+        with pytest.raises(TrialStoreError, match="database permissions changed"):
+            store.pool_snapshot()
     assert len(opened) == 1
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         opened[0].execute("SELECT 1")

@@ -132,10 +132,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, {"detail": "missing"})
             return
         if peer.mode == "429":
-            self._send(429, {"detail": "slow down"})
+            self.send_response(429)
+            body = b'{"detail":"slow down"}'
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            if peer.retry_after is not None:
+                self.send_header("Retry-After", peer.retry_after)
+            self.end_headers()
+            self.wfile.write(body)
             return
         if peer.mode == "text":
             self._send(200, None, raw=b"not-json")
+            return
+        if peer.mode == "204":
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         if peer.mode == "307":
             self.send_response(307)
@@ -172,6 +184,7 @@ class _Peer(ThreadingHTTPServer):
         self.health_saw_token = False
         self.health_delay = 0.0
         self.health_status = 0
+        self.retry_after: str | None = None
         self.gets: list[str] = []
         self.timeout = 0.2
 

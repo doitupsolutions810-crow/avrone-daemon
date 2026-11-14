@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any
 
 from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core
+from .fusion_deliver import MIN_RETRY_DELAY, parse_retry_after
+from .fusion_loopback import origin_key
 from .safeio import FileTooBig, atomic_write, read_capped
 from .textsafe import UNSAFE_RUN
 
@@ -551,11 +553,6 @@ def _url_closed(url: str) -> bool:
     return bool(parts.username or parts.password or not parts.hostname)
 
 
-def _origin(url: str) -> str:
-    parts = urllib.parse.urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc.lower()}"
-
-
 def _exchange(
     method: str,
     url: str,
@@ -584,7 +581,9 @@ def _exchange(
     if safe_key:
         headers["Idempotency-Key"] = safe_key
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
-    opener = urllib.request.build_opener(_NoRedirect)
+    # An empty proxy map ignores HTTP_PROXY. A proxy must not see the admin token
+    # or turn a loopback peer into a remote hop.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     try:
         try:
             response = opener.open(request, timeout=timeout)
@@ -600,6 +599,13 @@ def _exchange(
         with response as resp:
             status = int(getattr(resp, "status", None) or getattr(resp, "code", 0) or 0)
             raw = resp.read(max_read + 1)
+            retry_after = None
+            headers = getattr(resp, "headers", None)
+            if headers is not None:
+                try:
+                    retry_after = headers.get("Retry-After")
+                except Exception:  # noqa: BLE001 - a weird header map is not a reason to raise
+                    retry_after = None
     except Exception as exc:  # noqa: BLE001
         reason = getattr(exc, "reason", exc)
         error = "timeout" if isinstance(exc, TimeoutError) or isinstance(reason, TimeoutError) else "down"
@@ -614,9 +620,11 @@ def _exchange(
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         parsed = None
     if status >= 400 or (300 <= status < 400):
-        return {"ok": False, "status": status, "error": _status_error(status), "body": parsed}
+        return {"ok": False, "status": status, "error": _status_error(status), "body": parsed,
+                "retry_after": retry_after}
     if 200 <= status < 300:
-        if parsed is None:
+        # 204 and an empty 200 are delivered. Non-empty garbage is not JSON, so retry.
+        if parsed is None and raw.strip():
             return {"ok": False, "status": status, "error": "malformed", "body": None}
         return {"ok": True, "status": status, "error": None, "body": parsed}
     return {"ok": False, "status": status or None, "error": "down", "body": parsed}
@@ -644,6 +652,7 @@ class FusionWatch:
         self._fail_counts: dict[str, int] = {}
         self._open_until: dict[str, float] = {}
         self._probing: dict[str, bool] = {}
+        self._hold_until: dict[str, float] = {}
         self._lock = threading.RLock()
         self._load()
 
@@ -717,7 +726,7 @@ class FusionWatch:
         """
         if self._breaker_threshold <= 0:
             return False
-        host = _origin(url)
+        host = origin_key(url)
         until = self._open_until.get(host)
         if until is None:
             return False
@@ -731,7 +740,7 @@ class FusionWatch:
     def _circuit_observe(self, url: str, error: str | None) -> None:
         if self._breaker_threshold <= 0:
             return
-        host = _origin(url)
+        host = origin_key(url)
         if error is None:
             self._fail_counts.pop(host, None)
             self._open_until.pop(host, None)
@@ -745,10 +754,26 @@ class FusionWatch:
         if host in self._open_until or count >= self._breaker_threshold:
             self._open_until[host] = time.monotonic() + max(0.0, self._breaker_cooldown)
 
+    def _hold_blocked(self, url: str) -> bool:
+        """True while a 429/408 asked this origin to wait. Does not reset the timer."""
+        until = self._hold_until.get(origin_key(url))
+        return until is not None and time.monotonic() < until
+
+    def _note_hold(self, url: str, hop: dict[str, Any]) -> None:
+        if hop.get("error") != "retry":
+            return
+        delay = parse_retry_after(hop.get("retry_after"))
+        if delay is None:
+            delay = MIN_RETRY_DELAY
+        self._hold_until[origin_key(url)] = time.monotonic() + delay
+
     def _dial(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         if self._circuit_blocked(url):
             return {"ok": False, "status": None, "error": "circuit", "body": None}
+        if self._hold_blocked(url):
+            return {"ok": False, "status": None, "error": "retry", "body": None}
         hop = _exchange(method, url, **kwargs)
+        self._note_hold(url, hop)
         self._circuit_observe(url, None if hop["ok"] else hop["error"])
         return hop
 
@@ -798,11 +823,15 @@ class FusionWatch:
             if self._circuit_blocked(url):
                 return {"ok": False, "error": "circuit", "duplicate": False, "status": None,
                         "remembered": False, "skipped": False}
+            if self._hold_blocked(url):
+                return {"ok": False, "error": "retry", "duplicate": False, "status": None,
+                        "remembered": False, "skipped": False}
             hop = _exchange(
                 "POST", url, body=raw, token=token,
                 idempotency_key=_idempotency_key(event_id),
                 timeout=timeout, max_read=max_read,
             )
+            self._note_hold(url, hop)
             self._circuit_observe(url, None if hop["ok"] else hop["error"])
             duplicate = False
             remembered = False

@@ -475,13 +475,29 @@ class TrialStore:
                 OverflowError, sqlite3.Error) as exc:
             raise TrialStoreError("stored trial evidence integrity check failed") from exc
 
-    def _verified_trial_rows(self, db: sqlite3.Connection) -> list[sqlite3.Row]:
-        rows = db.execute("SELECT * FROM trials ORDER BY trial_id").fetchall()
-        if len(rows) > MAX_TRIAL_RECORDS:
-            raise TrialStoreError("stored trial count exceeds receiver capacity")
-        for row in rows:
+    def _verified_trial_rows(self, db: sqlite3.Connection) -> list[dict[str, Any]]:
+        """Verify one trial at a time and retain only its small report projection.
+
+        Do not materialize up to 100,000 canonical_json BLOBs in Python memory.
+        A LIMIT max+1 sentinel prevents silently truncating corrupt oversized
+        tables while the cursor retains only one canonical row at a time.
+        """
+        fields = (
+            "trial_id", "source", "system", "node", "run_id", "check_id",
+            "check_version", "check_config_sha256", "attempt_id", "outcome",
+            "first_sender", "first_transport", "bridge_run_id", "received_at",
+        )
+        verified: list[dict[str, Any]] = []
+        cursor = db.execute(
+            "SELECT * FROM trials ORDER BY trial_id LIMIT ?",
+            (MAX_TRIAL_RECORDS + 1,),
+        )
+        for row in cursor:
+            if len(verified) >= MAX_TRIAL_RECORDS:
+                raise TrialStoreError("stored trial count exceeds receiver capacity")
             self._verify_stored_trial(row)
-        return rows
+            verified.append({field: row[field] for field in fields})
+        return verified
 
     @staticmethod
     def _record_receipt(
@@ -743,13 +759,16 @@ class TrialStore:
             rows = db.execute(
                 "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
                 "result,payload_sha256,received_at "
-                "FROM trial_receipts ORDER BY receipt_id"
-            ).fetchall()
-            if len(rows) > MAX_RECEIPTS:
-                raise TrialStoreError("stored trial receipt count exceeds capacity")
+                "FROM trial_receipts ORDER BY receipt_id LIMIT ?",
+                (MAX_RECEIPTS + 1,),
+            )
+            retained: list[dict[str, Any]] = []
             for row in rows:
+                if len(retained) >= MAX_RECEIPTS:
+                    raise TrialStoreError("stored trial receipt count exceeds capacity")
                 self._verify_receipt_row(db, row)
-            return [dict(row) for row in rows]
+                retained.append(dict(row))
+            return retained
         except sqlite3.Error as exc:
             raise TrialStoreError("trial receipt read failed") from exc
         finally:
@@ -858,13 +877,15 @@ class TrialStore:
 
     @staticmethod
     def _verify_sender_quarantine_pair(marker: sqlite3.Row | None,
-                                       row: sqlite3.Row | None) -> None:
+                                       row: sqlite3.Row | dict[str, Any] | None,
+                                       *, already_verified: bool = False) -> None:
         """Reject missing, forged or mismatched sender-quarantine markers."""
         if (marker is None) != (row is None):
             raise TrialStoreError("stored sender quarantine state is inconsistent")
         if row is None:
             return
-        TrialStore._verify_quarantine_row(row)
+        if not already_verified:
+            TrialStore._verify_quarantine_row(row)
         if (
             not isinstance(marker["sender"], str)
             or not SENDER_RE.fullmatch(marker["sender"])
@@ -903,29 +924,43 @@ class TrialStore:
         try:
             rows = db.execute(
                 "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
-                "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"
-            ).fetchall()
+                "incoming_json,received_at FROM trial_quarantine "
+                "ORDER BY quarantine_id LIMIT ?",
+                (MAX_QUARANTINE_RECORDS + 1,),
+            )
             public = (
                 "trial_id", "sender", "transport", "bridge_run_id",
                 "reason", "incoming_sha256", "received_at",
             )
-            conflict_by_sender = {}
+            minimal = ("trial_id", "sender", "reason", "received_at")
+            conflict_by_sender: dict[str, dict[str, Any]] = {}
+            audited: list[dict[str, Any]] = []
             for row in rows:
+                if len(audited) >= MAX_QUARANTINE_RECORDS:
+                    raise TrialStoreError("stored quarantine count exceeds capacity")
                 self._assert_quarantine_conflict_semantics(db, row)
                 if row["sender"] in conflict_by_sender:
                     raise TrialStoreError("stored sender quarantine state is inconsistent")
-                conflict_by_sender[row["sender"]] = row
+                # Original BLOB is validated and discarded before the next row.
+                conflict_by_sender[row["sender"]] = {k: row[k] for k in minimal}
+                audited.append({k: row[k] for k in public})
             markers = db.execute(
                 "SELECT sender,first_trial_id,reason,quarantined_at "
-                "FROM trial_quarantined_senders ORDER BY sender"
-            ).fetchall()
-            if len(markers) != len(conflict_by_sender):
-                raise TrialStoreError("stored sender quarantine state is inconsistent")
+                "FROM trial_quarantined_senders ORDER BY sender LIMIT ?",
+                (MAX_QUARANTINED_SENDERS + 1,),
+            )
+            checked = 0
             for marker in markers:
+                if checked >= MAX_QUARANTINED_SENDERS:
+                    raise TrialStoreError("stored quarantined sender count exceeds capacity")
+                checked += 1
                 self._verify_sender_quarantine_pair(
-                    marker, conflict_by_sender.get(marker["sender"])
+                    marker, conflict_by_sender.get(marker["sender"]),
+                    already_verified=True,
                 )
-            return [{key: row[key] for key in public} for row in rows]
+            if checked != len(conflict_by_sender):
+                raise TrialStoreError("stored sender quarantine state is inconsistent")
+            return audited
         except sqlite3.Error as exc:
             raise TrialStoreError("trial quarantine read failed") from exc
         finally:

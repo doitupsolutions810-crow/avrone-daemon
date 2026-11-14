@@ -913,6 +913,9 @@ class TrialStore:
     def _verify_quarantine_row(row: sqlite3.Row) -> None:
         """Refuse malformed conflict evidence instead of displaying an unverified digest."""
         try:
+            event_id = row["quarantine_id"]
+            if type(event_id) is not int or event_id <= 0:
+                raise ValueError("quarantine event identifier is invalid")
             raw = row["incoming_json"]
             if not isinstance(raw, bytes) or len(raw) > MAX_ENVELOPE_BYTES:
                 raise ValueError("quarantine envelope is not bounded bytes")
@@ -1009,7 +1012,7 @@ class TrialStore:
             "FROM trial_quarantined_senders WHERE sender=?", (sender,)
         ).fetchone()
         conflicts = db.execute(
-            "SELECT trial_id,sender,transport,bridge_run_id,reason,"
+            "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,"
             "incoming_sha256,incoming_json,received_at "
             "FROM trial_quarantine WHERE sender=? ORDER BY quarantine_id LIMIT 2",
             (sender,),
@@ -1025,7 +1028,7 @@ class TrialStore:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
+                "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
                 "incoming_json,received_at FROM trial_quarantine "
                 "ORDER BY quarantine_id LIMIT ?",
                 (MAX_QUARANTINE_RECORDS + 1,),
@@ -1036,11 +1039,15 @@ class TrialStore:
             )
             minimal = ("trial_id", "sender", "reason", "received_at")
             conflict_by_sender: dict[str, dict[str, Any]] = {}
+            seen_event_ids: set[int] = set()
             audited: list[dict[str, Any]] = []
             for row in rows:
                 if len(audited) >= MAX_QUARANTINE_RECORDS:
                     raise TrialStoreError("stored quarantine count exceeds capacity")
                 self._assert_quarantine_conflict_semantics(db, row)
+                if row["quarantine_id"] in seen_event_ids:
+                    raise TrialStoreError("stored duplicate quarantine event identity")
+                seen_event_ids.add(row["quarantine_id"])
                 if row["sender"] in conflict_by_sender:
                     raise TrialStoreError("stored sender quarantine state is inconsistent")
                 # Original BLOB is validated and discarded before the next row.

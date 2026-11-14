@@ -50,6 +50,24 @@ def _boot_time() -> float | None:
 
 
 from .textsafe import escape as _escape  # noqa: E402
+import re  # noqa: E402
+
+# round 65: a credential passed on a command line ("--password=x", "--token x", "-H 'Authorization:
+# Bearer x'", "postgres://u:pw@db") was printed in the child's argv: proc_status hid env vars but
+# not argv. Flag values whose NAME says secret are masked; the shapes go through redact_text.
+_ARGV_SECRET_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(--?[A-Za-z0-9_.\-]*(?:passw(?:or)?d|passwd|pwd|secret|token|api[-_]?key|"
+    r"access[-_]?key|private[-_]?key|credential|auth)[A-Za-z0-9_.\-]*)(=|\s+)(?!-)(\S+)")
+
+
+def _redact_cmd(cmd: str) -> str:
+    """argv with credentials masked; never raises (a read-only view must not fail on one process)."""
+    try:
+        out = _ARGV_SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "***", cmd)
+        from .tools_researchnote import redact_text
+        return redact_text(out)
+    except Exception:  # noqa: BLE001 - mask everything rather than show an unchecked argv
+        return cmd.split(" ", 1)[0] + " ***"
 
 
 def _children(root_pid: int) -> dict[int, dict[str, Any]]:
@@ -80,7 +98,8 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
         started = btime + start_ticks / tck if btime is not None else None
         info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started,
                      "rss_kb": max(0, rss_pages) * page_kb,
-                     "cmd": _escape(cmd[:CMD_MAX])}  # round 146: argv/comm are the process's own choice
+                     # round 65: redact the FULL argv before the cut, so a cut never shows half a secret
+                     "cmd": _escape(_redact_cmd(cmd)[:CMD_MAX])}  # round 146: argv/comm are the process's own choice
     out: dict[int, dict[str, Any]] = {}
     frontier = {root_pid}
     while frontier:
@@ -100,7 +119,8 @@ async def t_proc_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     rows = sorted(kids.values(), key=lambda i: i["started"] or 0)
     long_ = [r for r in rows if r["started"] is not None and now - r["started"] >= long_s]
     zombies = [r for r in rows if r["state"] == "Z"]
-    show = rows if args.get("all") is True else (long_ + [z for z in zombies if z not in long_] or rows)
+    from .argnum import tool_bool  # round 65: "true" (a string, as many models send it) was ignored
+    show = rows if tool_bool(args.get("all"), False) is True else (long_ + [z for z in zombies if z not in long_] or rows)
     lines = [f"proc_status: {len(rows)} child process(es) of pid {os.getpid()}; "
              f"{len(long_)} running >= {long_s:.0f}s, {len(zombies)} zombie(s)"]
     for r in show[:MAX_PROCS]:
@@ -180,9 +200,24 @@ def _token_strength(v: Any) -> str:
     # round 54: "changeme123", "CHANGEME" and "secret-secret-secret" all read "ok"
     if low in _PLACEHOLDERS or any(low.startswith(p) and len(set(low[len(p):])) <= 3 for p in _PLACEHOLDERS):
         return "placeholder"
+    # round 65: the check above only looked at ONE placeholder prefix, so "secret-secret-secret",
+    # "passwordpassword", "adminadminadmin123" and "tokentokentoken12345" all read "ok". Strip every
+    # placeholder word, digit and separator: nothing left means it is made only of placeholders.
+    rest = low
+    for p in sorted(_PLACEHOLDERS + ("changeme", "letmein", "qwerty", "pass"), key=len, reverse=True):
+        rest = rest.replace(p, "")
+    if not re.sub(r"[0-9\s_.\-:/+=!@#*]", "", rest):
+        return "placeholder"
     if len(t) < 16:  # round 54: measured on the stripped token ("short" + 12 spaces was "ok")
         return "weak"
+    # round 65: "aaaaaaaaaaaaaaaaaaaa", "abab...", all-digit and keyboard/alphabet runs read "ok"
+    if len(set(low)) < 8 or t.isdigit() or any(low in seq or seq.startswith(low[:12]) for seq in _SEQUENCES):
+        return "weak"
     return "ok"
+
+
+_SEQUENCES = ("qwertyuiopasdfghjklzxcvbnm", "abcdefghijklmnopqrstuvwxyz", "01234567890123456789",
+              "1qaz2wsx3edc4rfv5tgb6yhn", "zyxwvutsrqponmlkjihgfedcba")
 
 
 def exposure() -> dict[str, Any]:

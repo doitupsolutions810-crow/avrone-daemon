@@ -39,7 +39,22 @@ ACTING = {"run_logs", "fleet_forget", "secret_scan", "shell", "python", "git", "
           "evolve_propose", "evolve_skill_propose", "evolve_start", "evolve_loop", "evolve_reset", "evolve_cancel",
           "memory_save", "memory_sync", "agent_migrate", "agent_pack_export", "agent_pack_import", "artifact_save",
           "task_board", "bridge_post", "bridge_reply", "research_note", "lesson_forget", "http_request",
-          "fleet_message", "queue_submit", "port_scan"}
+          "fleet_message", "queue_submit", "port_scan",
+          # round 65: tools that send traffic to a third-party host count as acting (the definition
+          # above: network). port_scan and http_request were here, but tcp_ping, traceroute, fetch
+          # and the recon lookups were counted read-only, so the "map of the agent's reach"
+          # hid its outbound reach.
+          "fetch", "web_search", "dns_lookup", "http_fingerprint", "ip_geo", "osint_domain", "rdap_whois",
+          "tcp_ping", "tls_inspect", "traceroute"}
+
+
+def is_acting(name: str, tool: Any = None) -> bool:
+    """In ACTING, or a tool that says so itself (description "acting: ..."), so a newly added
+    acting tool is not silently counted read-only until someone edits the set (round 65)."""
+    if name in ACTING:
+        return True
+    d = getattr(tool, "description", None)
+    return isinstance(d, str) and d.lstrip().lower().startswith("acting")
 
 
 def _check_json(p: Path) -> str | None:
@@ -157,7 +172,8 @@ async def t_state_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     st = state_health(data_dir)
     if not st["data_dir_exists"]:
         return "state_health: data_dir does not exist yet (nothing persisted)"
-    verbose = args.get("verbose") is True
+    from .argnum import tool_bool  # round 65: "true" as a string was ignored
+    verbose = tool_bool(args.get("verbose"), False) is True
     total_bad = sum(a["bad"] for a in st["areas"].values())
     head = "HEALTHY" if not total_bad and not st["set_aside_count"] else "ATTENTION"
     more = "+" if st.get("set_aside_truncated") else ""
@@ -197,7 +213,7 @@ def registry_audit(registry: Any, source: str | None = None) -> dict[str, Any]:
         by_source[src] = by_source.get(src, 0) + 1
         if getattr(t, "schema", None) is None:
             no_schema.append(n)
-        acting += n in ACTING
+        acting += is_acting(n, t)
     shown = sum(by_source.values())
     return {"tools": shown, "by_source": by_source, "no_schema": no_schema, "acting": acting,
             "read_only": shown - acting}

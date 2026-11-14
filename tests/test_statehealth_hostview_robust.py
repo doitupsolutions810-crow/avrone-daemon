@@ -195,7 +195,7 @@ def test_long_s(monkeypatch, v, want):
 @pytest.mark.parametrize("v,want", [
     (None, "unset"), ("", "unset"), (" " * 20, "weak"), ("\n\t" * 10, "weak"),
     ("CHANGEME", "placeholder"), ("changeme123", "placeholder"), (" secret ", "placeholder"),
-    ("Password", "placeholder"), ("short" + " " * 12, "weak"), ("x" * 32, "ok"),
+    ("Password", "placeholder"), ("short" + " " * 12, "weak"), ("x" * 32, "weak"), ("Xk9mP2vL8qR4wZ7nB3cD5fG6hJ1tY0uE", "ok"),
     (12345, "unknown"), (b"bytes-token-1234567", "unknown"), ("a8f3kL0qZ9xW2mN7pR4t", "ok"),
 ])
 def test_token_strength(v, want):
@@ -205,7 +205,7 @@ def test_token_strength(v, want):
 def test_secretstr_token():
     from pydantic import SecretStr
     assert hv._token_strength(SecretStr("changeme")) == "placeholder"
-    assert hv._token_strength(SecretStr("q" * 32)) == "ok"
+    assert hv._token_strength(SecretStr("Xk9mP2vL8qR4wZ7nB3cD5fG6hJ1tY0uE")) == "ok"
 
 
 @pytest.fixture()
@@ -217,8 +217,8 @@ def env(monkeypatch):
 
 
 def test_same_token_with_trailing_newline(env):
-    env.setattr(server.settings, "admin_token", "k" * 32)
-    env.setenv("AVRONE_FLEET_TOKEN", "k" * 32 + "\n")
+    env.setattr(server.settings, "admin_token", "Xk9mP2vL8qR4wZ7nB3cD5fG6hJ1tY0uE")
+    env.setenv("AVRONE_FLEET_TOKEN", "Xk9mP2vL8qR4wZ7nB3cD5fG6hJ1tY0uE" + "\n")
     assert "admin and fleet tokens are the same secret" in hv.exposure()["issues"]
 
 

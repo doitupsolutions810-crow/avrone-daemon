@@ -39,6 +39,6 @@ def test_hardening_path(monkeypatch):
     monkeypatch.setattr(server.settings, "admin_token", "")
     assert hv.exposure()["verdict"] == "AT RISK"
     monkeypatch.setenv("AVRONE_PUBLIC_ACCESS", "admin")       # step 3 mapping
-    monkeypatch.setattr(server.settings, "admin_token", "z" * 32)
+    monkeypatch.setattr(server.settings, "admin_token", "Xk9mP2vL8qR4wZ7nB3cD5fG6hJ1tY0uE")
     out = asyncio.run(hv.t_exposure_check(None, {}))
     assert out.startswith("exposure_check: GUARDED") and "agent/run routes" not in out

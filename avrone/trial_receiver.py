@@ -730,6 +730,41 @@ class TrialStore:
                 OverflowError, sqlite3.Error) as exc:
             raise TrialStoreError("stored trial quarantine integrity check failed") from exc
 
+    def _assert_quarantine_conflict_semantics(
+        self, db: sqlite3.Connection, row: sqlite3.Row,
+    ) -> None:
+        """Verify that a conflict reason follows from the preserved original.
+
+        Same-ID mismatches take precedence over canonical source aliases in
+        _ingest_one. An audit reason is trustworthy only if a still-valid
+        original record proves that exact classification.
+        """
+        self._verify_quarantine_row(row)
+        incoming = json.loads(row["incoming_json"])
+        exact = db.execute(
+            "SELECT * FROM trials WHERE trial_id=?", (row["trial_id"],)
+        ).fetchone()
+        if exact is not None:
+            self._verify_stored_trial(exact)
+            if (
+                row["reason"] != "same trial_id arrived with a different canonical envelope"
+                or bytes(exact["canonical_json"]) == row["incoming_json"]
+            ):
+                raise TrialStoreError("stored trial quarantine conflict reason is inconsistent")
+            return
+        alias = db.execute(
+            "SELECT * FROM trials WHERE source_identity_key=?",
+            (_source_identity_key(incoming),),
+        ).fetchone()
+        if alias is None:
+            raise TrialStoreError("stored trial quarantine conflict lacks original evidence")
+        self._verify_stored_trial(alias)
+        if (
+            row["reason"] != "canonical source/check/attempt identity arrived with a different trial_id"
+            or alias["trial_id"] == row["trial_id"]
+        ):
+            raise TrialStoreError("stored trial quarantine conflict reason is inconsistent")
+
     @staticmethod
     def _verify_sender_quarantine_pair(marker: sqlite3.Row | None,
                                        row: sqlite3.Row | None) -> None:
@@ -768,6 +803,8 @@ class TrialStore:
         if len(conflicts) > 1:
             raise TrialStoreError("stored sender quarantine state is inconsistent")
         self._verify_sender_quarantine_pair(marker, conflicts[0] if conflicts else None)
+        if conflicts:
+            self._assert_quarantine_conflict_semantics(db, conflicts[0])
         return marker is not None
 
     def quarantine_records(self) -> list[dict[str, Any]]:
@@ -783,7 +820,7 @@ class TrialStore:
             )
             conflict_by_sender = {}
             for row in rows:
-                self._verify_quarantine_row(row)
+                self._assert_quarantine_conflict_semantics(db, row)
                 if row["sender"] in conflict_by_sender:
                     raise TrialStoreError("stored sender quarantine state is inconsistent")
                 conflict_by_sender[row["sender"]] = row

@@ -223,6 +223,28 @@ class TrialStore:
         if str(mode).lower() != "wal":
             raise TrialStoreError("SQLite WAL mode is unavailable")
 
+    @staticmethod
+    def _assert_source_identity_unique_index(db: sqlite3.Connection) -> None:
+        """Refuse a spoofed or weakened index under the expected SQLite name.
+
+        CREATE UNIQUE INDEX IF NOT EXISTS is not a schema-integrity proof:
+        another index with that name might be nonunique, partial, or target the
+        wrong columns, allowing multiple canonical aliases to enter the pool.
+        """
+        for info in db.execute("PRAGMA index_list('trials')"):
+            if info["name"] != "trial_source_identity_key":
+                continue
+            columns = [
+                col["name"]
+                for col in db.execute("PRAGMA index_info('trial_source_identity_key')")
+            ]
+            if (info["unique"] != 1
+                    or info["partial"] != 0
+                    or columns != ["source_identity_key"]):
+                raise TrialStoreError("trial source identity unique index integrity check failed")
+            return
+        raise TrialStoreError("trial source identity unique index is missing")
+
     def _initialize(self) -> None:
         db = self._connect()
         try:
@@ -370,6 +392,7 @@ class TrialStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS trial_source_identity_key "
                 "ON trials(source_identity_key)"
             )
+            self._assert_source_identity_unique_index(db)
             db.execute(
                 """
                 CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_insert
@@ -488,6 +511,7 @@ class TrialStore:
             "first_sender", "first_transport", "bridge_run_id", "received_at",
         )
         verified: list[dict[str, Any]] = []
+        source_keys: set[str] = set()
         cursor = db.execute(
             "SELECT * FROM trials ORDER BY trial_id LIMIT ?",
             (MAX_TRIAL_RECORDS + 1,),
@@ -496,6 +520,10 @@ class TrialStore:
             if len(verified) >= MAX_TRIAL_RECORDS:
                 raise TrialStoreError("stored trial count exceeds receiver capacity")
             self._verify_stored_trial(row)
+            key = row["source_identity_key"]
+            if key in source_keys:
+                raise TrialStoreError("stored trial source identity alias collision")
+            source_keys.add(key)
             verified.append({field: row[field] for field in fields})
         return verified
 

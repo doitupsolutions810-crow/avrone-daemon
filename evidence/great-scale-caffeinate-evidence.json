@@ -1,14 +1,13 @@
 {
-  "schema": "great-scale-evidence/v62",
-  "finding": "The script launches caffeinate if present. This environment is Linux, so caffeinate is absent. The check is present but not reachable. The script continues without it. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v95",
+  "finding": "The script launches caffeinate when it is present. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "caffeinate": "absent",
-  "continues": true,
-  "soft": true,
+  "present": "launch and continue",
+  "absent": "continue without it",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,
   "effectiveRuns": 1,
   "docker": false,
-  "mitigation": "None needed. The caffeinate check holds. It is Darwin-only."
+  "mitigation": "None needed. The caffeinate check holds."
 }

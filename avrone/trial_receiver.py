@@ -52,6 +52,25 @@ SOURCE_IDENTITY_UPDATE_TRIGGER_SQL = """
 """
 
 
+# Use SQL CASE to avoid transferring oversized stored BLOBs into Python.
+# A streaming cursor bounds row *count*, but a single corrupted 500 MB BLOB
+# could still exhaust process memory before _verify_stored_trial sees it.
+# The bound is a trusted module constant, not input from the SQL caller.
+BOUNDED_TRIAL_COLUMNS = (
+    "trial_id,source_identity_key,"
+    f"CASE WHEN length(canonical_json) > {MAX_ENVELOPE_BYTES} "
+    "THEN NULL ELSE canonical_json END AS canonical_json,"
+    "payload_sha256,outcome,system,node,source,run_id,check_id,"
+    "check_version,check_config_sha256,attempt_id,first_sender,"
+    "first_transport,bridge_run_id,received_at"
+)
+BOUNDED_QUARANTINE_COLUMNS = (
+    "quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
+    f"CASE WHEN length(incoming_json) > {MAX_ENVELOPE_BYTES} "
+    "THEN NULL ELSE incoming_json END AS incoming_json,received_at"
+)
+
+
 class TrialStoreError(RuntimeError):
     """The receiver cannot safely persist or continue accepting trial evidence."""
 
@@ -602,7 +621,7 @@ class TrialStore:
         trial_ids: set[str] = set()
         source_keys: set[str] = set()
         cursor = db.execute(
-            "SELECT * FROM trials ORDER BY trial_id LIMIT ?",
+            f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials ORDER BY trial_id LIMIT ?",
             (MAX_TRIAL_RECORDS + 1,),
         )
         for row in cursor:
@@ -735,7 +754,7 @@ class TrialStore:
                 status = "sender_quarantined"
             else:
                 existing = db.execute(
-                    "SELECT * FROM trials WHERE trial_id=?", (trial_id,)
+                    f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials WHERE trial_id=?", (trial_id,)
                 ).fetchone()
                 if existing is not None:
                     self._verify_stored_trial(existing)
@@ -743,7 +762,7 @@ class TrialStore:
                 conflict_reason = None
                 if existing is None:
                     alias = db.execute(
-                        "SELECT * FROM trials WHERE source_identity_key=?",
+                        f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials WHERE source_identity_key=?",
                         (source_identity_key,),
                     ).fetchone()
                     if alias is not None:
@@ -849,7 +868,7 @@ class TrialStore:
             status = row["result"]
             if status in {"accepted", "duplicate", "non_pass_stored"}:
                 first = db.execute(
-                    "SELECT * FROM trials WHERE trial_id=?", (trial_id,)
+                    f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials WHERE trial_id=?", (trial_id,)
                 ).fetchone()
                 if first is None:
                     raise ValueError("receipt has no stored trial")
@@ -869,7 +888,7 @@ class TrialStore:
                     raise ValueError("first receipt provenance disagrees with trial")
             elif status == "conflict_quarantined":
                 rows = db.execute(
-                    "SELECT * FROM trial_quarantine WHERE sender=? "
+                    f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine WHERE sender=? "
                     "ORDER BY quarantine_id LIMIT 2",
                     (row["sender"],),
                 ).fetchall()
@@ -1005,7 +1024,7 @@ class TrialStore:
         self._verify_quarantine_row(row)
         incoming = json.loads(row["incoming_json"])
         exact = db.execute(
-            "SELECT * FROM trials WHERE trial_id=?", (row["trial_id"],)
+            f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials WHERE trial_id=?", (row["trial_id"],)
         ).fetchone()
         if exact is not None:
             self._verify_stored_trial(exact)
@@ -1016,7 +1035,7 @@ class TrialStore:
                 raise TrialStoreError("stored trial quarantine conflict reason is inconsistent")
             return
         alias = db.execute(
-            "SELECT * FROM trials WHERE source_identity_key=?",
+            f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials WHERE source_identity_key=?",
             (_source_identity_key(incoming),),
         ).fetchone()
         if alias is None:
@@ -1060,9 +1079,8 @@ class TrialStore:
             "FROM trial_quarantined_senders WHERE sender=?", (sender,)
         ).fetchone()
         conflicts = db.execute(
-            "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,"
-            "incoming_sha256,incoming_json,received_at "
-            "FROM trial_quarantine WHERE sender=? ORDER BY quarantine_id LIMIT 2",
+            f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine "
+            "WHERE sender=? ORDER BY quarantine_id LIMIT 2",
             (sender,),
         ).fetchall()
         if len(conflicts) > 1:
@@ -1076,8 +1094,7 @@ class TrialStore:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
-                "incoming_json,received_at FROM trial_quarantine "
+                f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine "
                 "ORDER BY quarantine_id LIMIT ?",
                 (MAX_QUARANTINE_RECORDS + 1,),
             )

@@ -125,3 +125,76 @@ def test_shared_parent_existing_sqlite_is_not_modified(tmp_path):
 
     assert path.read_bytes() == original
     assert _mode(parent) == 0o777
+
+
+@pytest.mark.parametrize(
+    "unsafe_mode",
+    [
+        pytest.param(0o755, id="world-readable-after-open"),
+        pytest.param(0o777, id="world-writable-after-open"),
+        pytest.param(0o770, id="group-writable-after-open"),
+        pytest.param(0o500, id="owner-no-write-after-open"),
+    ],
+)
+def test_permission_drift_fails_closed_for_existing_store_then_recovers(
+    tmp_path, unsafe_mode,
+):
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    path = parent / "trials.sqlite3"
+    store = TrialStore(path)
+    trial = make_trial(
+        system="cyclekernel", node="node-a", run_id="run-drift",
+        check_id="storage", check_version="v2", attempt_id="drift-187",
+        outcome="pass",
+    )
+    before = path.read_bytes()
+    parent.chmod(unsafe_mode)
+
+    with pytest.raises(TrialStoreError, match="must already be private"):
+        store.ingest_many([trial], sender="peer-a", transport="fleet")
+    with pytest.raises(TrialStoreError, match="must already be private"):
+        store.pool_snapshot()
+
+    assert path.read_bytes() == before
+    assert _mode(parent) == unsafe_mode
+    parent.chmod(0o700)
+    assert store.ingest_many([trial], sender="peer-a", transport="fleet")["accepted"] == 1
+    assert store.pool_snapshot()["runs"] == 1
+
+
+def test_private_parent_inode_replacement_is_rejected_until_store_reopened(tmp_path):
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    path = parent / "trials.sqlite3"
+    store = TrialStore(path)
+    displaced = tmp_path / "displaced-private"
+    parent.rename(displaced)
+    parent.mkdir(mode=0o700)
+    assert _mode(parent) == 0o700
+    assert parent.stat().st_ino != displaced.stat().st_ino
+
+    with pytest.raises(TrialStoreError, match="identity changed"):
+        store.pool_snapshot()
+
+    assert not path.exists()
+    assert (displaced / "trials.sqlite3").exists()
+    # A new receiver instance can intentionally open a different private
+    # directory, but a live receiver may not silently switch evidence stores.
+    reopened = TrialStore(path)
+    assert reopened.pool_snapshot()["runs"] == 0
+
+
+def test_parent_swapped_to_symlink_after_open_is_rejected(tmp_path):
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    path = parent / "trials.sqlite3"
+    store = TrialStore(path)
+    displaced = tmp_path / "moved-private"
+    parent.rename(displaced)
+    parent.symlink_to(displaced, target_is_directory=True)
+
+    with pytest.raises(TrialStoreError, match="symlink"):
+        store.pool_snapshot()
+
+    assert (displaced / "trials.sqlite3").exists()

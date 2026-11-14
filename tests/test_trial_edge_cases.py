@@ -565,7 +565,20 @@ print(result["results"][0]["status"])
             if time.monotonic() >= deadline:
                 raise AssertionError("workers did not reach the synchronized start gate")
             if any(proc.poll() is not None for proc in processes):
-                raise AssertionError("a worker exited before the synchronized start gate")
+                # Keep the earliest worker's actual traceback instead of
+                # concealing an intermittent SQLite startup failure behind
+                # a generic readiness-gate assertion.
+                exited = []
+                for index, proc in enumerate(processes):
+                    if proc.poll() is not None:
+                        stdout, stderr = proc.communicate(timeout=2)
+                        exited.append({
+                            "worker": index, "returncode": proc.returncode,
+                            "stdout": stdout[-4000:], "stderr": stderr[-8000:],
+                        })
+                raise AssertionError(
+                    f"a worker exited before the synchronized start gate: {exited}"
+                )
             time.sleep(0.01)
         go.touch()
         results = [proc.communicate(timeout=20) for proc in processes]

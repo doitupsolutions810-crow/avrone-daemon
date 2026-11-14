@@ -664,6 +664,97 @@ class TrialStore:
         finally:
             db.close()
 
+    def _verify_receipt_row(self, db: sqlite3.Connection, row: sqlite3.Row) -> None:
+        """Fail closed on retained receipt claims unsupported by stored evidence.
+
+        The receiver intentionally prunes old receipts. Only retained rows are
+        verified; this does not reconstruct deleted history or independently
+        authenticate a privileged writer who can alter all SQLite tables.
+        """
+        try:
+            receipt_id = row["receipt_id"]
+            if type(receipt_id) is not int or receipt_id <= 0:
+                raise ValueError("invalid receipt sequence")
+            trial_id = row["trial_id"]
+            digest = row["payload_sha256"]
+            if not isinstance(trial_id, str) or re.fullmatch(r"[0-9a-f]{64}", trial_id) is None:
+                raise ValueError("invalid receipt trial identity")
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                raise ValueError("invalid receipt digest")
+            self._verify_stored_provenance(
+                sender=row["sender"], transport=row["transport"],
+                bridge_run_id=row["bridge_run_id"], received_at=row["received_at"],
+            )
+            status = row["result"]
+            if status in {"accepted", "duplicate", "non_pass_stored"}:
+                first = db.execute(
+                    "SELECT * FROM trials WHERE trial_id=?", (trial_id,)
+                ).fetchone()
+                if first is None:
+                    raise ValueError("receipt has no stored trial")
+                self._verify_stored_trial(first)
+                if first["payload_sha256"] != digest:
+                    raise ValueError("receipt digest disagrees with first-seen evidence")
+                if status == "accepted" and first["outcome"] not in {"pass", "fail"}:
+                    raise ValueError("accepted receipt contradicts outcome")
+                if status == "non_pass_stored" and first["outcome"] in {"pass", "fail"}:
+                    raise ValueError("non-pass receipt contradicts outcome")
+                if status != "duplicate" and (
+                    row["sender"] != first["first_sender"]
+                    or row["transport"] != first["first_transport"]
+                    or row["bridge_run_id"] != first["bridge_run_id"]
+                    or row["received_at"] != first["received_at"]
+                ):
+                    raise ValueError("first receipt provenance disagrees with trial")
+            elif status == "conflict_quarantined":
+                rows = db.execute(
+                    "SELECT * FROM trial_quarantine WHERE sender=? "
+                    "ORDER BY quarantine_id LIMIT 2",
+                    (row["sender"],),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise ValueError("conflict receipt has no unique quarantine evidence")
+                conflict = rows[0]
+                self._assert_quarantine_conflict_semantics(db, conflict)
+                self._assert_sender_quarantine_state(db, row["sender"])
+                if (
+                    conflict["trial_id"] != trial_id
+                    or conflict["incoming_sha256"] != digest
+                    or conflict["transport"] != row["transport"]
+                    or conflict["bridge_run_id"] != row["bridge_run_id"]
+                    or conflict["received_at"] != row["received_at"]
+                ):
+                    raise ValueError("receipt disagrees with preserved conflict")
+            elif status == "sender_quarantined":
+                if not self._assert_sender_quarantine_state(db, row["sender"]):
+                    raise ValueError("blocked receipt has no quarantine marker")
+                # The original rejected envelope is intentionally not retained
+                # for repeat deliveries. Only the digest's syntax is verifiable.
+            else:
+                raise ValueError("unrecognized receipt result")
+        except (ValueError, TypeError, KeyError, RecursionError, UnicodeError,
+                OverflowError, sqlite3.Error, TrialStoreError) as exc:
+            raise TrialStoreError("stored trial receipt integrity check failed") from exc
+
+    def receipt_records(self) -> list[dict[str, Any]]:
+        """Return retained delivery receipts only after validating every row."""
+        db = self._connect()
+        try:
+            rows = db.execute(
+                "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
+                "result,payload_sha256,received_at "
+                "FROM trial_receipts ORDER BY receipt_id"
+            ).fetchall()
+            if len(rows) > MAX_RECEIPTS:
+                raise TrialStoreError("stored trial receipt count exceeds capacity")
+            for row in rows:
+                self._verify_receipt_row(db, row)
+            return [dict(row) for row in rows]
+        except sqlite3.Error as exc:
+            raise TrialStoreError("trial receipt read failed") from exc
+        finally:
+            db.close()
+
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
         try:

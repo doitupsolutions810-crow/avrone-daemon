@@ -373,7 +373,10 @@ class TrialStore:
             if not validate_trial_envelope(envelope):
                 raise ValueError("invalid avrone.trial/v2 envelope")
             raw = canonical_trial_bytes(envelope)
-            prepared.append((envelope, raw))
+            # Persist a private snapshot reconstructed from the validated canonical bytes.
+            # Callers may mutate a shared envelope before the per-row transaction runs;
+            # never pair those old bytes with later-mutated metadata or outcome fields.
+            prepared.append((json.loads(raw), raw))
 
         results = [
             self._ingest_one(

@@ -238,6 +238,19 @@ class TrialStore:
                 raise
             raise TrialStoreError("trial database is unavailable") from exc
 
+    def _begin_verified_read(self, db: sqlite3.Connection) -> None:
+        """Pin one WAL snapshot for an entire evidence audit.
+
+        Isolation-level None starts independent SQLite reads otherwise.
+        Quarantine/receipt audits issue multiple SELECTs and could combine a
+        stale conflict with newly changed backing evidence. Start a deferred
+        read transaction, then validate metadata *inside that snapshot*.
+        """
+        db.execute("BEGIN")
+        self._assert_live_schema_version(db)
+        self._assert_live_wal_mode(db)
+        self._assert_source_identity_required_triggers(db)
+
     @staticmethod
     def _enable_wal(db: sqlite3.Connection) -> None:
         """Enable WAL while tolerating bounded contention between first-time openers.
@@ -915,6 +928,7 @@ class TrialStore:
         """Return retained delivery receipts only after validating every row."""
         db = self._connect()
         try:
+            self._begin_verified_read(db)
             rows = db.execute(
                 "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
                 "result,payload_sha256,received_at "
@@ -936,6 +950,7 @@ class TrialStore:
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
         try:
+            self._begin_verified_read(db)
             rows = self._verified_trial_rows(db)
             return pool_trials([
                 {"trial_id": row["trial_id"], "source": row["source"],
@@ -950,6 +965,7 @@ class TrialStore:
     def non_pass_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
+            self._begin_verified_read(db)
             fields = (
                 "trial_id", "source", "system", "node", "run_id", "check_id",
                 "check_version", "check_config_sha256", "attempt_id", "outcome",
@@ -1081,6 +1097,7 @@ class TrialStore:
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
+            self._begin_verified_read(db)
             rows = db.execute(
                 "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
                 "incoming_json,received_at FROM trial_quarantine "

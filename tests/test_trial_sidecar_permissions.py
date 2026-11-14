@@ -120,3 +120,56 @@ def test_private_sidecar_mode_check_does_not_chmod_existing_file(tmp_path):
     assert stat.S_IMODE(sidecar.stat().st_mode) == 0o666
     sidecar.unlink()
     assert store.pool_snapshot()["runs"] == 1
+
+def test_fresh_database_is_private_before_wal_transition_under_umask_022(
+    tmp_path, monkeypatch,
+):
+    """Regression: a fresh DB may begin as 0644, but WAL must start at 0600."""
+    private = tmp_path / "umask-private"
+    private.mkdir(mode=0o700)
+    path = private / "trials.sqlite3"
+    real_enable_wal = TrialStore._enable_wal
+    observed = []
+
+    def inspected_wal_transition(db):
+        observed.append(stat.S_IMODE(path.stat().st_mode))
+        assert observed[-1] == 0o600
+        return real_enable_wal(db)
+
+    monkeypatch.setattr(
+        TrialStore, "_enable_wal", staticmethod(inspected_wal_transition)
+    )
+    old_mask = os.umask(0o022)
+    try:
+        store = TrialStore(path)
+    finally:
+        os.umask(old_mask)
+    assert observed == [0o600]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert store.ingest_many(
+        [trial("new-under-022")], sender="peer-a", transport="fleet"
+    )["accepted"] == 1
+    assert store.pool_snapshot()["runs"] == 1
+
+
+def test_legacy_0644_owned_database_is_private_before_wal_transition(
+    tmp_path, monkeypatch,
+):
+    """A trusted legacy file must not spawn publicly readable WAL/SHM files."""
+    store, path = prepared(tmp_path)
+    path.chmod(0o644)
+    observed = []
+    real_enable_wal = TrialStore._enable_wal
+
+    def inspected_wal_transition(db):
+        observed.append(stat.S_IMODE(path.stat().st_mode))
+        assert observed[-1] == 0o600
+        return real_enable_wal(db)
+
+    monkeypatch.setattr(
+        TrialStore, "_enable_wal", staticmethod(inspected_wal_transition)
+    )
+    reopened = TrialStore(path)
+    assert observed == [0o600]
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert reopened.pool_snapshot()["runs"] == 1

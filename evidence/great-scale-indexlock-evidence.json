@@ -1,8 +1,9 @@
 {
-  "schema": "great-scale-evidence/v64",
-  "finding": "The script removes a stale index.lock when no git process is running. It warned, removed the lock, and continued. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v97",
+  "finding": "The script removes a stale index.lock when no git process is running. If a git process is holding it, it refuses. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "staleLock": "remove and continue",
+  "stale": "remove and continue",
+  "live": "refuse",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,

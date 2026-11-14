@@ -84,6 +84,9 @@ async def t_pack_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
             out.append((Path(de.path), link, size))
         return out
     entries = await asyncio.to_thread(listing)
+    # round 63: scandir order is the filesystem's, so "first 50 shown" named a different 50 from
+    # one call to the next (and flake_probe would call pack_list nondeterministic); sort by name
+    entries.sort(key=lambda e: e[0].name)
     files = [p for p, _, _ in entries]
     meta = {p: (link, size) for p, link, size in entries}
     if not files:

@@ -75,7 +75,18 @@ def redact_text(text: str) -> str:
         if any(c.isdigit() for c in b) and any(c.islower() for c in b) and any(c.isupper() for c in b):
             return REDACTED
         return b
-    return _BLOB_RE.sub(blob, out)
+    out = _BLOB_RE.sub(blob, out)
+    # round 63: the token shapes above miss secret ASSIGNMENTS and auth headers - "password=hunter2",
+    # "DB_PASSWORD: s3cr3t", "Authorization: Basic dXNl...", "x-api-key: 0123..." - so research_note
+    # stored them raw as lessons in memory.jsonl (the bridge copy was masked by the bridge itself),
+    # and every later run on a related task was primed with the credential. The codex redactor
+    # (the one run logs get on write) now runs too; its rule gates keep plain prose untouched.
+    from . import ctxspawn
+    try:
+        out = ctxspawn.redact(out)
+    except Exception:  # noqa: BLE001 - masking must never fail the note; the shapes above still ran
+        pass
+    return out
 
 
 def lesson_text(text: str) -> str:

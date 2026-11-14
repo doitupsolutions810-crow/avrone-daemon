@@ -1,13 +1,12 @@
 {
-  "schema": "great-scale-evidence/v63",
-  "finding": "The script traps SIGHUP and logs 'SIGHUP (terminal closed) \u2014 ignoring'. The trap is present. The script continues. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v96",
+  "finding": "The script ignores SIGHUP and logs it. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "trap": "present",
-  "continues": true,
+  "hup": "ignore and continue",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,
   "effectiveRuns": 1,
   "docker": false,
-  "mitigation": "None needed. The HUP trap holds. It ignores the terminal closing."
+  "mitigation": "None needed. The HUP-trap check holds."
 }

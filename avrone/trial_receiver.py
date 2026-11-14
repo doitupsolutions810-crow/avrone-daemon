@@ -19,6 +19,7 @@ from .trial_contract import MAX_ENVELOPE_BYTES, canonical_trial_bytes, validate_
 SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
 MAX_BATCH = 10
 MAX_TRIAL_RECORDS = 100_000
+MIGRATION_BATCH_SIZE = 64  # legacy canonical envelopes per keyset page
 MAX_RECEIPTS = 100_000
 MAX_QUARANTINE_RECORDS = 1_000
 MAX_QUARANTINED_SENDERS = 1_000
@@ -355,25 +356,73 @@ class TrialStore:
                     raise TrialStoreError(f"trial database schema is missing required columns in {table}: {names}")
 
             if version < DB_SCHEMA_VERSION:
-                rows = db.execute(
-                    "SELECT trial_id,canonical_json,source_identity_key FROM trials ORDER BY trial_id"
-                ).fetchall()
-                for row in rows:
-                    try:
-                        envelope = json.loads(bytes(row["canonical_json"]).decode("utf-8"))
-                        if not validate_trial_envelope(envelope) or envelope["trial_id"] != row["trial_id"]:
-                            raise ValueError("stored envelope does not match its trial_id")
-                        identity_key = _source_identity_key(envelope)
-                    except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
-                        raise TrialStoreError(
-                            "existing trial record cannot be validated for source identity migration"
-                        ) from None
-                    if row["source_identity_key"] not in (None, identity_key):
-                        raise TrialStoreError("existing trial source identity key does not match its envelope")
-                    db.execute(
-                        "UPDATE trials SET source_identity_key=? WHERE trial_id=?",
-                        (identity_key, row["trial_id"]),
+                # Migration is a one-time trust boundary. Never eagerly fetch
+                # every historical canonical BLOB: a malformed old database
+                # could exceed the regular receiver cap and exhaust RAM before
+                # any trial is validated. Check count and BLOB types/length in
+                # SQLite itself, before transferring payloads to Python.
+                count = db.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
+                if count > MAX_TRIAL_RECORDS:
+                    raise TrialStoreError("legacy trial migration exceeds receiver capacity")
+                invalid_blob = db.execute(
+                    "SELECT 1 FROM trials "
+                    "WHERE typeof(canonical_json) != 'blob' "
+                    "OR length(canonical_json) > ? LIMIT 1",
+                    (MAX_ENVELOPE_BYTES,),
+                ).fetchone()
+                if invalid_blob:
+                    raise TrialStoreError(
+                        "existing trial record cannot be validated for source identity migration"
                     )
+
+                # Keyset pages are stable under our BEGIN IMMEDIATE write
+                # transaction. Updates change only source_identity_key, never
+                # the trial_id ordering used for the next bounded page.
+                last_trial_id: str | None = None
+                migrated = 0
+                while True:
+                    if last_trial_id is None:
+                        rows = db.execute(
+                            "SELECT trial_id,canonical_json,source_identity_key "
+                            "FROM trials ORDER BY trial_id LIMIT ?",
+                            (MIGRATION_BATCH_SIZE,),
+                        ).fetchall()
+                    else:
+                        rows = db.execute(
+                            "SELECT trial_id,canonical_json,source_identity_key "
+                            "FROM trials WHERE trial_id>? ORDER BY trial_id LIMIT ?",
+                            (last_trial_id, MIGRATION_BATCH_SIZE),
+                        ).fetchall()
+                    if not rows:
+                        break
+                    for row in rows:
+                        try:
+                            raw = row["canonical_json"]
+                            if not isinstance(raw, bytes) or len(raw) > MAX_ENVELOPE_BYTES:
+                                raise ValueError("oversized or nonbinary canonical trial envelope")
+                            envelope = json.loads(raw.decode("utf-8"))
+                            if (not validate_trial_envelope(envelope)
+                                    or canonical_trial_bytes(envelope) != raw
+                                    or envelope["trial_id"] != row["trial_id"]):
+                                raise ValueError("stored envelope differs from canonical trial_id")
+                            identity_key = _source_identity_key(envelope)
+                        except (KeyError, TypeError, ValueError, UnicodeError, RecursionError,
+                                OverflowError):
+                            raise TrialStoreError(
+                                "existing trial record cannot be validated for source identity migration"
+                            ) from None
+                        if row["source_identity_key"] not in (None, identity_key):
+                            raise TrialStoreError(
+                                "existing trial source identity key does not match its envelope"
+                            )
+                        db.execute(
+                            "UPDATE trials SET source_identity_key=? WHERE trial_id=?",
+                            (identity_key, row["trial_id"]),
+                        )
+                    migrated += len(rows)
+                    if migrated > MAX_TRIAL_RECORDS:
+                        raise TrialStoreError("legacy trial migration exceeds receiver capacity")
+                    last_trial_id = rows[-1]["trial_id"]
                 duplicate = db.execute(
                     "SELECT source_identity_key FROM trials "
                     "GROUP BY source_identity_key HAVING COUNT(*) > 1 LIMIT 1"

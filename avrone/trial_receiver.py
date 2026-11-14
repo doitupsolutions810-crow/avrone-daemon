@@ -62,7 +62,10 @@ class TrialStore:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
-        os.chmod(self.path.parent, 0o700)
+        # Never chmod a pre-existing parent such as /tmp. Private storage
+        # is required, and the same invariant is checked on every connection.
+        self._parent_identity: tuple[int, int] | None = None
+        self._assert_private_parent()
         self._assert_database_file()
         self._initialize()
 
@@ -77,6 +80,23 @@ class TrialStore:
                 raise TrialStoreError(f"{label} path cannot be inspected") from exc
             if linked:
                 raise TrialStoreError(f"{label} must not contain symlinked path components")
+
+    def _assert_private_parent(self) -> None:
+        """Refuse permission drift instead of chmodding an existing shared directory."""
+        try:
+            info = self.path.parent.lstat()
+        except OSError as exc:
+            raise TrialStoreError("trial data directory permissions cannot be inspected") from exc
+        if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
+            raise TrialStoreError(
+                "trial data directory must already be private (mode 0700); "
+                "refusing to change an existing directory"
+            )
+        identity = (info.st_dev, info.st_ino)
+        if self._parent_identity is None:
+            self._parent_identity = identity
+        elif self._parent_identity != identity:
+            raise TrialStoreError("trial data directory identity changed since initialization")
 
     def _assert_database_file(self) -> None:
         """Reject non-regular and multiply-linked database files before SQLite opens them."""
@@ -95,6 +115,7 @@ class TrialStore:
 
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
+        self._assert_private_parent()
         self._assert_database_file()
         try:
             db = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)

@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v102",
+  "finding": "The script applies the carried patches when apply_tool_focus or coerce_args are missing. If the symbols still do not land it refuses. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "missing": "apply patches",
+  "stillMissing": "refuse",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The patch-check holds."
+}

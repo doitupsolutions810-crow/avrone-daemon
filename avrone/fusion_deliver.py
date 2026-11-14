@@ -187,7 +187,9 @@ def retry_delay(kind: str, streak: int, config: DeliverConfig) -> float:
         base = config.backoff_base
         maximum = config.backoff_max if config.backoff_max >= base else base
         if base > 0:
-            delay = min(maximum, base * (2 ** max(0, streak - 1)))
+            # round 57: the exponent is capped. attempts keeps counting through a long outage, and
+            # 2 ** 1024 cannot become a float: the 1,025th retry raised OverflowError mid-cycle.
+            delay = min(maximum, base * (2 ** min(60, max(0, streak - 1))))
         else:
             delay = maximum
     if delay <= 0:
@@ -288,6 +290,43 @@ def _payload_too_big(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _json_problem(value: Any) -> str | None:
+    """Round 57: what keeps `value` from being strict, UTF-8 JSON, or None.
+
+    NaN and Infinity inside the payload went out as the bare words NaN / Infinity (not JSON, so the
+    peer rejects the body), a lone surrogate made prepare_event raise UnicodeEncodeError instead of
+    returning its (None, detail), and a non-string key either collided with a string one
+    ({1: "a", "1": "b"} sent "1" twice) or made sort_keys raise TypeError."""
+    stack: list[Any] = [value]
+    seen = 0
+    while stack:
+        item = stack.pop()
+        seen += 1
+        if seen > 100_000:
+            return "payload: too many values"
+        if isinstance(item, dict):
+            for key, sub in item.items():
+                if not isinstance(key, str):
+                    return "payload: object keys must be strings"
+                stack.append(key)
+                stack.append(sub)
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                return "payload: non-finite number (NaN or Infinity is not JSON)"
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return "payload: lone surrogate (not valid UTF-8)"
+        elif item is None or isinstance(item, (bool, int)):
+            pass
+        else:
+            return f"payload: {type(item).__name__} is not a JSON value"
+    return None
+
+
 def _wire_bytes(event: dict[str, Any]) -> bytes:
     return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -314,6 +353,13 @@ def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any
     field_err = _check_known_fields(payload)
     if field_err:
         return None, field_err
+    json_err = _json_problem(payload)
+    if json_err:
+        return None, json_err
+    try:
+        run_id.encode("utf-8")
+    except UnicodeEncodeError:
+        return None, "run_id: lone surrogate (not valid UTF-8)"
     if _payload_too_big(payload):
         return None, "request body too large (max 4096 bytes)"
     ts = data.get("ts", 0)

@@ -887,3 +887,23 @@ Tests: `tests/test_secrets_plugins_greatscale_robust.py`.
 - **`apply_tool_focus`.** An `AVRONE_TOOLS_ONLY` naming no known tool (a typo, or "none") removed every tool. It now keeps all tools and logs a warning. Partial matches still trim.
 
 Tests: `tests/test_presence_bootstrap_robust.py`.
+
+## Hardening round 57 (Hark edge-case series): secretshapes, raw-JSON redaction, fusion_deliver
+
+### secretshapes
+- **pgpass ReDoS.** The user part `[^\s:]*[g-zG-Z_*][^\s:]*` tried every split of a long colon-free run, and the rule's gate is ":", so it ran on almost every event. A 40,000-char line took 6.8 s and a 160,000-char line took 104 s, on the event loop. Its runs are now letter-free-prefix plus possessive, so the cost is linear (1,000,000 chars in 12 ms). Output is identical on LF text (differential fuzz).
+- **pgpass CRLF.** `host:5432:db:user:pw\r\n` leaked, because `$` does not match before `\r`. It is now masked.
+- **Case-insensitive gates.** Rules compiled with (?i) were gated case-sensitively, so `COOKIE:`, `Machine host password x`, `"Auth"`/`"IdentityToken"`, `convertto-securestring` and `Client-Key-Data:` skipped their rule and went out raw. Their gate words are now lower case and ctxspawn tests them on the folded text (`folded_gate`, `_FOLDED_ANY`).
+- **Quoted CLI values.** `--password "x"`, `--password 'a b'`, `mysql -p'x'`, `curl -u "u:p"` and `sshpass -p 'x'` leaked. The quote is now kept and the value inside it is masked. A JSON-escaped `\"` and `--flag\tvalue` in raw lines are handled too.
+
+### ctxspawn (redact on raw JSON lines; secret_scan fix rewrites run logs with it)
+- **key=value rule.** The value ran through quotes. `{"cmd": "x token=abc", "n": 1}` lost its closing quote, `token=abc\nnext` swallowed the escape, and `{"a": "token=", "b": "c"}` took `", "` as the value and masked the next key. Now an unquoted value stops at `"` and at JSON escapes, a quoted value honours `\"` and must end at a non-word character, a single-quoted value never spans a `"`, an escaped `\"...\"` value is taken whole, and an unclosed value keeps its opening quote or `[`.
+- **Authorization rule.** It ate the `\` of `\"` and `\n`, and now stops there.
+- In 240,000 fuzzed JSON lines through every rule, 11,073 of 20,000 used to come out invalid. Now none do.
+- `tests/test_round63_redact_redos.py`'s old-regex comparison skips the quote cases that now differ on purpose.
+
+### fusion_deliver
+- `retry_delay`: `2 ** attempts` overflowed float at the 1,025th retry (OverflowError mid-cycle). The exponent is now capped.
+- `prepare_event`: NaN/Infinity nested in the payload went out as bare `NaN` (not JSON). A lone surrogate in the payload or run_id raised UnicodeEncodeError. Non-string keys collided (`{1:..,"1":..}`) or made sort_keys raise TypeError. Sets and other objects reached the "too large" message. Each now gets an explicit `(None, detail)`.
+
+Tests: `tests/test_secretshapes_fusion_robust.py`.

@@ -79,7 +79,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S),
      REDACTED),
     (re.compile(r"(?i)\b(authorization|proxy-authorization|x-api-key|x-admin-token)(\"?\s*[:=]\s*\"?)"
-                r"(?:(bearer|basic|token)\s+)?[^\s,;\"']+"),
+                r"(?:(bearer|basic|token)\s+)?[^\s,;\"'\\]+"),  # round 57: stop at "\" (a JSON escape: \" or \n)
      lambda m: f"{m.group(1)}{m.group(2)}{(m.group(3) + ' ') if m.group(3) else ''}{REDACTED}"),  # type: ignore[list-item]
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), f"Bearer {REDACTED}"),
     (None, None),  # key = value with a secret-ish key: _KVRule, filled in below (linear, no regex)
@@ -103,7 +103,18 @@ _SECRET_RE = re.compile(_SECRET_WORD, re.I)
 # round 153: "=>" and ":=" are separators too ("password => 'x'" masked only the ">")
 # round 160: an unquoted value may not open a container: {"credentials": {"secret": "x"}} masked the
 # "{" and the nested secret went out raw
-_KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|(?!\{)[^\s,;}\]]+)")
+# round 57: redact() also runs on raw JSON lines (secret_scan fix rewrites run logs), and the
+# value ran to the next space or comma, quotes included. {"cmd": "x token=abc", "n": 1} lost its
+# closing quote, "token=abc\\nnext" swallowed the escape and the next line's text, and in
+# {"a": "token=", "b": "c"} the "value" was `", "`, so the line stopped being JSON and the next key
+# was masked. An unquoted value now stops at a double quote and at a JSON escape (a lone backslash
+# stays part of it), a quoted value skips escaped quotes and must end at a non-word character (a
+# single-quoted one never spans a double quote, which in a JSON line is a string boundary), a
+# JSON-escaped \"...\" value is taken whole, and a value cut short after its opening quote keeps
+# that quote.
+_KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])"
+                         r"(\"(?:[^\"\\]|\\.)*\"(?!\w)|'[^'\"]*'(?!\w)|\\\"(?:[^\"\\]|\\\\|\\[^\"\\])*\\\""
+                         r"|(?!\{)(?:\[[ \t]*)?[\"']?(?:[^\s,;}\]\"\\]|\\(?![nrt\"\\/bfu]))+)")
 
 
 _NUM_RE = re.compile(r"[+-]?\d{1,9}(?:\.\d+)?")
@@ -145,6 +156,10 @@ def _redact_kv(s: str) -> str:
         out.append(s[last:tail.start(1)])
         if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
             out.append(val[0] + REDACTED + val[0])  # round 161: keep the quotes (JSON stayed invalid)
+        elif val[:1] in ("\"", "'", "["):
+            # round 57: an unclosed value keeps its opening quote (and a list's "[")
+            head = len(val) - len(val.lstrip("[ \t\"'"))
+            out.append(val[:head] + REDACTED)
         else:
             out.append(REDACTED)
         last = tail.end(1)
@@ -203,8 +218,14 @@ def redact(text: Any) -> str:
     low: str | None = None
     for i, (pat, rep) in enumerate(_PATTERNS):
         anyof = _ANY_GATES.get(i)
-        if anyof is not None and not any(w in s for w in anyof):
-            continue
+        if anyof is not None:
+            if i in _FOLDED_ANY:  # round 57: a (?i) rule's gate words are checked case-folded
+                if low is None:
+                    low = _fold(s)
+                if not any(w in low for w in anyof):
+                    continue
+            elif not any(w in s for w in anyof):
+                continue
         gate = _GATES[i] if i < len(_GATES) else None
         if gate is not None:
             need, words = gate
@@ -243,6 +264,9 @@ _ANY_GATES: dict[int, tuple[str, ...]] = {
     11: _shapes.PREFIX_GATE,
     **{12 + i: g for i, (_r, _p, g, _n) in enumerate(_shapes.CONTEXT_RULES)},
 }
+# round 57: CONTEXT_RULES compiled with (?i) keep lower-case gate words; test them on _fold(s)
+_FOLDED_ANY: frozenset[int] = frozenset(12 + i for i, (r, _p, _g, _n) in enumerate(_shapes.CONTEXT_RULES)
+                                        if _shapes.folded_gate(r))
 _KV_WORDS = ("token", "secret", "passw", "api", "private", "access", "_key", "credential")
 _GATES: list[tuple[tuple[str, ...], tuple[str, ...]] | None] = [
     (("PRIVATE KEY-----",), ()),

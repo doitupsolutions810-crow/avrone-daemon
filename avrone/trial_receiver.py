@@ -297,6 +297,32 @@ class TrialStore:
                     "trial source identity trigger integrity check failed: " + name
                 )
 
+    @staticmethod
+    def _assert_primary_key_schema(db: sqlite3.Connection) -> None:
+        """Refuse same-name tables whose primary keys have been weakened.
+
+        CREATE TABLE IF NOT EXISTS verifies neither constraints nor key types.
+        On a recreated table, a missing trial_id or receipt_id PRIMARY KEY can
+        permit duplicate first-seen evidence or ambiguous audit identities.
+        """
+        for table, column, expected_type in (
+            ("trials", "trial_id", "TEXT"),
+            ("trial_receipts", "receipt_id", "INTEGER"),
+            ("trial_quarantine", "quarantine_id", "INTEGER"),
+            ("trial_quarantined_senders", "sender", "TEXT"),
+        ):
+            columns = list(db.execute(f"PRAGMA table_info({table})"))
+            primary_keys = [row for row in columns if row["pk"]]
+            if (
+                len(primary_keys) != 1
+                or primary_keys[0]["name"] != column
+                or primary_keys[0]["pk"] != 1
+                or primary_keys[0]["type"].upper() != expected_type
+            ):
+                raise TrialStoreError(
+                    "trial database primary key integrity check failed: " + table
+                )
+
     def _initialize(self) -> None:
         db = self._connect()
         try:
@@ -405,6 +431,8 @@ class TrialStore:
                 if missing:
                     names = ", ".join(sorted(missing))
                     raise TrialStoreError(f"trial database schema is missing required columns in {table}: {names}")
+
+            self._assert_primary_key_schema(db)
 
             if version < DB_SCHEMA_VERSION:
                 rows = db.execute(
@@ -540,6 +568,7 @@ class TrialStore:
             "first_sender", "first_transport", "bridge_run_id", "received_at",
         )
         verified: list[dict[str, Any]] = []
+        trial_ids: set[str] = set()
         source_keys: set[str] = set()
         cursor = db.execute(
             "SELECT * FROM trials ORDER BY trial_id LIMIT ?",
@@ -549,6 +578,10 @@ class TrialStore:
             if len(verified) >= MAX_TRIAL_RECORDS:
                 raise TrialStoreError("stored trial count exceeds receiver capacity")
             self._verify_stored_trial(row)
+            trial_id = row["trial_id"]
+            if trial_id in trial_ids:
+                raise TrialStoreError("stored duplicate trial identity")
+            trial_ids.add(trial_id)
             key = row["source_identity_key"]
             if key in source_keys:
                 raise TrialStoreError("stored trial source identity alias collision")
@@ -646,6 +679,7 @@ class TrialStore:
             # receiver might outlive a replaced/removed uniqueness index.
             # Check while holding SQLite's writer lock, preventing a DDL swap
             # between the index proof and inserting first-seen evidence.
+            self._assert_primary_key_schema(db)
             self._assert_source_identity_unique_index(db)
             self._assert_source_identity_triggers(db)
             quarantined = self._assert_sender_quarantine_state(db, sender)
@@ -826,10 +860,15 @@ class TrialStore:
                 (MAX_RECEIPTS + 1,),
             )
             retained: list[dict[str, Any]] = []
+            receipt_ids: set[int] = set()
             for row in rows:
                 if len(retained) >= MAX_RECEIPTS:
                     raise TrialStoreError("stored trial receipt count exceeds capacity")
                 self._verify_receipt_row(db, row)
+                receipt_id = row["receipt_id"]
+                if receipt_id in receipt_ids:
+                    raise TrialStoreError("stored duplicate receipt identity")
+                receipt_ids.add(receipt_id)
                 retained.append(dict(row))
             return retained
         except sqlite3.Error as exc:

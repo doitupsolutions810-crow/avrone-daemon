@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v117",
+  "finding": "The script warns when the summary cannot be written to $OUT/MERGE_ME.md and continues. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "writeFail": "warn and continue",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The summary-write-fail check holds."
+}

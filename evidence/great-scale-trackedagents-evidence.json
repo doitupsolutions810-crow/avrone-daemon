@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v101",
+  "finding": "The script logs when agents/ is tracked in git and leaves it untouched. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "tracked": "log and leave untouched",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The tracked-agents check holds."
+}

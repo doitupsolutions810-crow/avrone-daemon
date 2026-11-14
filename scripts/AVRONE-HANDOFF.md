@@ -870,3 +870,20 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - A non-finite alpha is refused. Format matching is trimmed and case-insensitive.
 
 Tests: `tests/test_secrets_plugins_greatscale_robust.py`.
+
+## Hardening round 56 (Hark edge-case series): presence + bootstrap
+
+### presence
+- **Blocking the event loop.** `environment()` ran `ip -j addr` (up to 3 s) and getaddrinfo(hostname) on the event loop. Every directory call after the 60 s cache expired stalled the whole server. Both now run in a thread.
+- **Cache.** It was keyed by `id(core)` alone, so a new core at a recycled id got the old node's environment. The cache now stores a weakref to the core and checks it, and is bounded at 64 entries, dropping dead cores first.
+- **`_host_interfaces`.** An odd `ip -j` output (a dict, null addr_info, non-dict entries) raised AttributeError or TypeError out of presence. Such entries are now skipped.
+- **`agents()`.** started=None, a string or NaN made `sorted()` raise, and a non-dict entry or a non-dict `core.active` crashed. Order is unchanged otherwise.
+- **`find_agent`.** The ref is trimmed (" Builder-3" and "Builder-3\n" used to match nothing). A non-string or empty ref raises LookupError. The ambiguity message now escapes peer routes and names, which were joined raw, so a name containing a newline forged lines.
+
+### bootstrap
+- **`_describe`.** A self-referencing hook return value (a list holding itself, or a status() that includes self) recursed to RecursionError, and the hook's try turned that into a bogus "error". It now has a cycle guard, a depth cap of 12, and caps of 500 items and 2000-character strings. NaN and inf become strings, so the JSON stays valid. Raising properties, `__repr__` or `name` fall back to `<Type>`.
+- Hook error text in `/api/extensions` is clipped to 500 characters and escaped.
+- **`run_cleanups`.** A cleanup that calls `sys.exit()` no longer skips the remaining cleanups.
+- **`apply_tool_focus`.** An `AVRONE_TOOLS_ONLY` naming no known tool (a typo, or "none") removed every tool. It now keeps all tools and logs a warning. Partial matches still trim.
+
+Tests: `tests/test_presence_bootstrap_robust.py`.

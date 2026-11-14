@@ -23,7 +23,11 @@ if TYPE_CHECKING:
     from .trinity import TrinityCore
 
 MAX_AGENTS = 50
-_CACHE: dict[int, tuple[float, dict[str, Any]]] = {}
+# round 56: keyed by id(core) alone, a new core that reused a freed core's id got the old node's
+# environment for a minute, and the dict grew by one entry per core ever built (tests, reloads).
+# Entries now hold a weak reference that must still point at the same core.
+_CACHE: dict[int, tuple[float, dict[str, Any], Any]] = {}
+_CACHE_MAX = 64
 
 
 def _host_interfaces() -> list[dict[str, Any]]:
@@ -32,13 +36,20 @@ def _host_interfaces() -> list[dict[str, Any]]:
         try:
             out = subprocess.run(["ip", "-j", "addr"], capture_output=True, text=True, timeout=3).stdout
             ifs = []
-            for i in json.loads(out or "[]"):
-                addrs = [f"{a['local']}/{a.get('prefixlen')}" for a in i.get("addr_info", []) if a.get("local")]
+            data = json.loads(out or "[]")
+            # round 56: an odd `ip -j` (a dict, null addr_info, non-dict entries: busybox and old
+            # iproute2 differ) raised AttributeError/TypeError out of presence and every directory call
+            for i in data if isinstance(data, list) else []:
+                if not isinstance(i, dict):
+                    continue
+                ai = i.get("addr_info")
+                addrs = [f"{a['local']}/{a.get('prefixlen')}" for a in (ai if isinstance(ai, list) else [])
+                         if isinstance(a, dict) and a.get("local")]
                 if addrs:
                     ifs.append({"name": i.get("ifname"), "state": i.get("operstate"), "addrs": addrs})
             if ifs:
                 return ifs
-        except (OSError, ValueError, subprocess.SubprocessError):
+        except (OSError, ValueError, TypeError, subprocess.SubprocessError):
             pass
     addrs: set[str] = set()
     try:
@@ -56,10 +67,35 @@ def _host_interfaces() -> list[dict[str, Any]]:
     return [{"name": "host", "state": "UNKNOWN", "addrs": sorted(addrs)}]
 
 
-async def environment(core: "TrinityCore", ttl: float = 60) -> dict[str, Any]:
+def _cache_get(core: Any, ttl: float) -> dict[str, Any] | None:
     cached = _CACHE.get(id(core))
-    if cached and 0 <= time.monotonic() - cached[0] < ttl:  # round 112: monotonic (clock steps)
+    if not cached:
+        return None
+    ref = cached[2]
+    if ref is not None and ref() is not core:  # a different core at a recycled id
+        _CACHE.pop(id(core), None)
+        return None
+    if 0 <= time.monotonic() - cached[0] < ttl:  # round 112: monotonic (clock steps)
         return cached[1]
+    return None
+
+
+def _cache_put(core: Any, env: dict[str, Any]) -> None:
+    import weakref
+    try:
+        ref = weakref.ref(core)
+    except TypeError:
+        ref = None
+    if len(_CACHE) >= _CACHE_MAX and id(core) not in _CACHE:
+        for k in [k for k, v in _CACHE.items() if v[2] is not None and v[2]() is None] or list(_CACHE)[:1]:
+            _CACHE.pop(k, None)
+    _CACHE[id(core)] = (time.monotonic(), env, ref)
+
+
+async def environment(core: "TrinityCore", ttl: float = 60) -> dict[str, Any]:
+    cached = _cache_get(core, ttl)
+    if cached is not None:
+        return cached
     r = core.runner
     container: dict[str, Any] | None = None
     if getattr(r, "kind", "") == "docker":
@@ -75,19 +111,32 @@ async def environment(core: "TrinityCore", ttl: float = 60) -> dict[str, Any]:
         "device": {"hostname": socket.gethostname(), "os": f"{platform.system()} {platform.release()}",
                    "arch": platform.machine(), "python": platform.python_version(), "pid": os.getpid()},
         "runner": {"kind": getattr(r, "kind", "?"), "workspace": str(getattr(r, "workspace", "")), "container": container},
-        "networks": _host_interfaces(),
+        # round 56: `ip -j addr` (up to 3 s) and getaddrinfo(hostname) (a DNS lookup) ran on the
+        # event loop; every directory call after the cache expired stalled the whole server
+        "networks": await asyncio.to_thread(_host_interfaces),
         "services": {"public_url": getattr(fleet, "public_url", None) or None,
                      "tools": len(core.tools.names()),
                      "mcp_servers": sorted(mcp) if isinstance(mcp, dict) else mcp,
                      "model": getattr(core.settings, "llm_model", None),
                      "provider_url": getattr(core.settings, "llm_base_url", None)},
     }
-    _CACHE[id(core)] = (time.monotonic(), env)
+    _cache_put(core, env)
     return env
 
 
+def _started(a: dict[str, Any]) -> float:
+    v = a.get("started", 0)
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return 0.0
+    return float(v) if abs(v) < 1e300 else 0.0
+
+
 def agents(core: "TrinityCore") -> list[dict[str, Any]]:
-    items = sorted(core.active.items(), key=lambda kv: (kv[1].get("status") != "working", -kv[1].get("started", 0)))
+    # round 56: started=None (an agent registered before its clock was read) or a string made
+    # sorted() raise TypeError, and a non-dict entry raised AttributeError: presence went down
+    act = getattr(core, "active", None)
+    items = [(str(n), a) for n, a in (list(act.items()) if isinstance(act, dict) else []) if isinstance(a, dict)]
+    items.sort(key=lambda kv: (kv[1].get("status") != "working", -_started(kv[1])))
     return [{"name": n, **{k: a.get(k) for k in ("role", "status", "parent", "run_id", "task", "depth", "started")}}
             for n, a in items[:MAX_AGENTS]]
 
@@ -224,6 +273,11 @@ def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
     One pass over the directory. It used to rescan every row for every hit to find the live ones,
     so a fleet whose peers all run a "Worker-1" (2,000 rows x 50 agents) took 9.6 s on the event
     loop per fleet_tell / agent_message, and the ambiguity error listed all 100,000 matches."""
+    if not isinstance(ref, str):
+        raise LookupError("agent must be a name or route/name")
+    ref = ref.strip()  # round 56: " Builder-3" or "Builder-3\n" matched nothing
+    if not ref:
+        raise LookupError("no agent name given")
     if "/" in ref:
         route, name = ref.rsplit("/", 1)
         if not name:  # "edge/" or "/" resolved to an agent named "" (a tell to nobody)
@@ -244,7 +298,8 @@ def find_agent(rows: list[dict[str, Any]], ref: str) -> tuple[str, str]:
     live = [h for h in hits if h[0] in live_routes]
     pick = live or hits
     if len(pick) > 1:
-        shown = ", ".join(f"{r or '(this node)'}/{n}" for r, n in pick[:FIND_AMBIGUOUS_SHOWN])
+        # round 56: peer routes and names were joined raw, so a name with a newline forged lines
+        shown = ", ".join(f"{_one(r, 300) or '(this node)'}/{_one(n)}" for r, n in pick[:FIND_AMBIGUOUS_SHOWN])
         more = len(pick) - FIND_AMBIGUOUS_SHOWN
         raise LookupError(f"{ref!r} is ambiguous: {shown}" + (f" ... and {more} more; give route/name"
                                                                  if more > 0 else ""))

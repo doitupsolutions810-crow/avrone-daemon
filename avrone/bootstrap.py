@@ -72,23 +72,79 @@ async def _call(fn: Callable, env: dict[str, Any]) -> Any:
     return res
 
 
-def _describe(obj: Any) -> Any:
-    """Turn a hook's return value into something JSON-friendly for /api/extensions."""
-    if obj is None or isinstance(obj, (str, int, float, bool)):
+DESCRIBE_DEPTH = 12
+DESCRIBE_ITEMS = 500
+DESCRIBE_STR = 2000
+ERROR_MAX = 500
+
+
+def _errtext(e: BaseException) -> str:
+    """Round 56: hook errors went into /api/extensions whole and raw (a 10 MB message, newlines)."""
+    from .textsafe import escape
+    try:
+        msg = str(e)
+    except Exception:  # noqa: BLE001
+        msg = "<unprintable>"
+    return escape(f"{type(e).__name__}: {msg}"[:ERROR_MAX])
+
+
+def _describe(obj: Any, _depth: int = 0, _seen: frozenset = frozenset()) -> Any:
+    """Turn a hook's return value into something JSON-friendly for /api/extensions.
+
+    Round 56: a self-referencing return value (a manager whose status() includes itself, a list
+    holding itself) recursed until RecursionError, which the hook's own try turned into a bogus
+    "error" for a hook that had worked; a status attribute that raised escaped the same way; NaN
+    and inf made the JSON invalid; and a million-item list was copied whole."""
+    if obj is None or isinstance(obj, (bool, int)):
         return obj
+    if isinstance(obj, float):
+        return obj if obj == obj and obj not in (float("inf"), float("-inf")) else str(obj)
+    if isinstance(obj, str):
+        return obj[:DESCRIBE_STR]
+    if _depth >= DESCRIBE_DEPTH or id(obj) in _seen:
+        return "<...>"
+    seen = _seen | {id(obj)}
     if isinstance(obj, dict):
-        return {str(k): _describe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set)):
-        return [_describe(v) for v in obj]
+        try:
+            items = list(obj.items())
+        except Exception:  # noqa: BLE001
+            return "<unreadable>"
+        out = {str(k)[:200]: _describe(v, _depth + 1, seen) for k, v in items[:DESCRIBE_ITEMS]}
+        if len(items) > DESCRIBE_ITEMS:
+            out["..."] = f"{len(items) - DESCRIBE_ITEMS} more"
+        return out
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        try:
+            vals = list(obj)
+        except Exception:  # noqa: BLE001
+            return "<unreadable>"
+        out_l = [_describe(v, _depth + 1, seen) for v in vals[:DESCRIBE_ITEMS]]
+        if len(vals) > DESCRIBE_ITEMS:
+            out_l.append(f"... {len(vals) - DESCRIBE_ITEMS} more")
+        return out_l
     for attr in ("status", "to_dict", "as_dict"):
-        m = getattr(obj, attr, None)
+        try:
+            m = getattr(obj, attr, None)
+        except Exception:  # noqa: BLE001
+            continue
         if callable(m):
             try:
-                return _describe(m())
-            except Exception:
+                return _describe(m(), _depth + 1, seen)
+            except Exception:  # noqa: BLE001
                 pass
-    name = getattr(obj, "name", None)
-    return str(name) if name else repr(obj)[:200]
+    try:
+        name = getattr(obj, "name", None)
+    except Exception:  # noqa: BLE001
+        name = None
+    if name:
+        try:
+            return str(name)[:200]
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        return repr(obj)[:200]
+    except Exception:  # noqa: BLE001
+        return f"<{type(obj).__name__}>"
 
 
 def _sources(registry: ToolRegistry) -> dict[str, int]:
@@ -129,8 +185,8 @@ async def build_core(settings: Settings, *, extras: bool = True) -> tuple[Trinit
             ext["extra_tools"] = {"installed": True, "added": sorted(set(registry.names()) - before),
                                   "result": _describe(res)}
         except Exception as e:
-            ext["extra_tools"] = {"installed": True, "error": f"{type(e).__name__}: {e}"}
-            ext["errors"].append(f"tools_extra: {type(e).__name__}: {e}")
+            ext["extra_tools"] = {"installed": True, "error": _errtext(e)}
+            ext["errors"].append(f"tools_extra: {_errtext(e)}")
             log.exception("register_extra_tools failed")
 
     # 2. plugins
@@ -145,8 +201,8 @@ async def build_core(settings: Settings, *, extras: bool = True) -> tuple[Trinit
             ext["plugins"] = {"installed": True, "loaded": _describe(res),
                               "added": sorted(set(registry.names()) - before)}
         except Exception as e:
-            ext["plugins"] = {"installed": True, "error": f"{type(e).__name__}: {e}"}
-            ext["errors"].append(f"plugins: {type(e).__name__}: {e}")
+            ext["plugins"] = {"installed": True, "error": _errtext(e)}
+            ext["errors"].append(f"plugins: {_errtext(e)}")
             log.exception("load_plugins failed")
 
     # 3. MCP servers
@@ -180,8 +236,8 @@ async def build_core(settings: Settings, *, extras: bool = True) -> tuple[Trinit
             ext["mcp"] = {"installed": True, "servers": _describe(status),
                           "added": sorted(set(registry.names()) - before)}
         except Exception as e:
-            ext["mcp"] = {"installed": True, "error": f"{type(e).__name__}: {e}"}
-            ext["errors"].append(f"mcp: {type(e).__name__}: {e}")
+            ext["mcp"] = {"installed": True, "error": _errtext(e)}
+            ext["errors"].append(f"mcp: {_errtext(e)}")
             log.exception("MCPManager failed")
 
     # 4. fleet: link to other AVRONE nodes (needs AVRONE_FLEET_TOKEN)
@@ -196,8 +252,8 @@ async def build_core(settings: Settings, *, extras: bool = True) -> tuple[Trinit
             cleanups.append(fleet.stop)
         ext["fleet"] = fleet.info()
     except Exception as e:
-        ext["fleet"] = {"error": f"{type(e).__name__}: {e}"}
-        ext["errors"].append(f"fleet: {type(e).__name__}: {e}")
+        ext["fleet"] = {"error": _errtext(e)}
+        ext["errors"].append(f"fleet: {_errtext(e)}")
         log.exception("fleet failed")
 
     ext["tool_sources"] = _sources(registry)
@@ -212,7 +268,7 @@ async def run_cleanups(cleanups: list[Cleanup]) -> None:
             res = fn()
             if inspect.isawaitable(res):
                 await res
-        except Exception:
+        except (Exception, SystemExit):  # round 56: a stop() calling sys.exit() skipped the rest
             log.exception("cleanup failed")
 
 
@@ -226,8 +282,14 @@ def apply_tool_focus(registry, spec: str | None = None) -> list[str]:
     """
     import os
     spec = os.environ.get("AVRONE_TOOLS_ONLY", "") if spec is None else spec
-    keep = {s.strip() for s in spec.split(",") if s.strip()}
+    keep = {s.strip() for s in str(spec).split(",") if s.strip()}
     if not keep:
+        return []
+    names = list(registry.names())
+    if not keep & set(names):
+        # round 56: a spec naming no real tool (a typo, "AVRONE_TOOLS_ONLY=none") removed every tool
+        # and the node started with an agent that could do nothing; "unknown names are ignored"
+        log.warning("AVRONE_TOOLS_ONLY names no known tool (%s); keeping all tools", ", ".join(sorted(keep))[:300])
         return []
     removed = [n for n in registry.names() if n not in keep]
     for n in removed:

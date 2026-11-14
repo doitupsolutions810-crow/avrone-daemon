@@ -22,6 +22,9 @@ MAX_RECEIPTS = 100_000
 MAX_QUARANTINE_RECORDS = 1_000
 MAX_QUARANTINED_SENDERS = 1_000
 DB_SCHEMA_VERSION = 2  # v0 is unversioned; v1 adds per-delivery bridge provenance
+WAL_MODE_RETRY_SECONDS = 10.0
+WAL_MODE_RETRY_INITIAL_SECONDS = 0.01
+WAL_MODE_RETRY_MAX_SECONDS = 0.25
 
 
 class TrialStoreError(RuntimeError):
@@ -103,6 +106,39 @@ class TrialStore:
         except sqlite3.Error as exc:
             raise TrialStoreError("trial database is unavailable") from exc
 
+    @staticmethod
+    def _enable_wal(db: sqlite3.Connection) -> None:
+        """Enable WAL while tolerating bounded contention between first-time openers.
+
+        SQLite may return SQLITE_BUSY/SQLITE_LOCKED from journal_mode=WAL before
+        BEGIN IMMEDIATE is reached. The connection busy_timeout does not reliably
+        serialize this journal-mode transition across simultaneous fresh openers,
+        so retry only those transient lock errors with a bounded monotonic deadline.
+        """
+        deadline = time.monotonic() + WAL_MODE_RETRY_SECONDS
+        delay = WAL_MODE_RETRY_INITIAL_SECONDS
+        while True:
+            try:
+                mode = db.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                break
+            except sqlite3.OperationalError as exc:
+                error_code = getattr(exc, "sqlite_errorcode", None)
+                base_code = error_code & 0xFF if isinstance(error_code, int) else None
+                message = str(exc).lower()
+                transient_lock = (
+                    base_code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+                    or "database is locked" in message
+                    or "database is busy" in message
+                )
+                remaining = deadline - time.monotonic()
+                if not transient_lock or remaining <= 0:
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, WAL_MODE_RETRY_MAX_SECONDS)
+
+        if str(mode).lower() != "wal":
+            raise TrialStoreError("SQLite WAL mode is unavailable")
+
     def _initialize(self) -> None:
         db = self._connect()
         try:
@@ -110,9 +146,7 @@ class TrialStore:
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
             if version > DB_SCHEMA_VERSION:
                 raise TrialStoreError("trial database schema is newer than this receiver")
-            mode = db.execute("PRAGMA journal_mode=WAL").fetchone()[0]
-            if str(mode).lower() != "wal":
-                raise TrialStoreError("SQLite WAL mode is unavailable")
+            self._enable_wal(db)
             db.execute("BEGIN IMMEDIATE")
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
             if version > DB_SCHEMA_VERSION:

@@ -493,3 +493,53 @@ def test_source_identity_key_triggers_reject_noncanonical_values(tmp_path, bad_k
         assert row is not None and len(row["source_identity_key"]) == 64
     finally:
         db.close()
+
+def test_enable_wal_retries_transient_lock_errors(monkeypatch):
+    from avrone.trial_receiver import TrialStore
+
+    class Row:
+        @staticmethod
+        def fetchone():
+            return ("wal",)
+
+    class LockedThenReady:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            assert statement == "PRAGMA journal_mode=WAL"
+            self.calls += 1
+            if self.calls < 3:
+                raise sqlite3.OperationalError("database is locked")
+            return Row()
+
+    delays = []
+    monkeypatch.setattr("avrone.trial_receiver.time.sleep", delays.append)
+    connection = LockedThenReady()
+
+    TrialStore._enable_wal(connection)
+
+    assert connection.calls == 3
+    assert delays == pytest.approx([0.01, 0.02])
+
+
+def test_enable_wal_does_not_retry_non_lock_operational_errors(monkeypatch):
+    from avrone.trial_receiver import TrialStore
+
+    class BrokenConnection:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            self.calls += 1
+            raise sqlite3.OperationalError("no such pragma")
+
+    delays = []
+    monkeypatch.setattr("avrone.trial_receiver.time.sleep", delays.append)
+    connection = BrokenConnection()
+
+    with pytest.raises(sqlite3.OperationalError, match="no such pragma"):
+        TrialStore._enable_wal(connection)
+
+    assert connection.calls == 1
+    assert delays == []

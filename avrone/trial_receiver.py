@@ -319,6 +319,28 @@ class TrialStore:
                     "trial source identity required trigger integrity check failed"
                 )
 
+        # The two required source-key guards alone do not rule out an injected
+        # AFTER INSERT / DELETE trigger that rewrites or discards evidence.
+        # AVRONE owns these four tables; no additional persistent or TEMP
+        # triggers are part of the supported schema.
+        managed = ("trials", "trial_receipts", "trial_quarantine",
+                   "trial_quarantined_senders")
+        required = set(_REQUIRED_SOURCE_IDENTITY_TRIGGERS)
+        for catalog in ("sqlite_master", "sqlite_temp_master"):
+            extra = db.execute(
+                f"SELECT name,tbl_name FROM {catalog} WHERE type='trigger' "
+                "AND tbl_name IN (?,?,?,?)",
+                managed,
+            ).fetchall()
+            for trigger in extra:
+                if catalog != "sqlite_master" or (
+                    trigger["name"] not in required
+                    or trigger["tbl_name"] != "trials"
+                ):
+                    raise TrialStoreError(
+                        "trial database has an unexpected evidence trigger"
+                    )
+
     def _initialize(self) -> None:
         db = self._connect()
         try:

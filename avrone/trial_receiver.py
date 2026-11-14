@@ -613,6 +613,11 @@ class TrialStore:
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
+            # Startup schema validation alone is insufficient: a running
+            # receiver might outlive a replaced/removed uniqueness index.
+            # Check while holding SQLite's writer lock, preventing a DDL swap
+            # between the index proof and inserting first-seen evidence.
+            self._assert_source_identity_unique_index(db)
             quarantined = self._assert_sender_quarantine_state(db, sender)
             if quarantined:
                 status = "sender_quarantined"

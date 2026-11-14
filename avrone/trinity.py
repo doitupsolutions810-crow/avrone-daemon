@@ -33,6 +33,8 @@ import json
 import math
 
 from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
+from .argnum import tool_int
+import unicodedata
 import re
 import uuid
 from collections import deque
@@ -96,8 +98,9 @@ _NARRATION = __import__("re").compile(r"^\s*(I['’]ll|I will|I am|I'm|Let me|Ch
 
 def _weak_lead(answer: str, reports: str) -> bool:
     """A lead reply that narrates intent or is far thinner than the reports it merges."""
-    a = (answer or "").strip()
-    return bool(_NARRATION.match(a)) or (len(a) < 300 and len(reports) > 2000)
+    a = answer.strip() if isinstance(answer, str) else ""
+    r = reports if isinstance(reports, str) else ""
+    return bool(_NARRATION.match(a)) or (len(a) < 300 and len(r) > 2000)
 
 
 DEEP_WORKER_PROMPT = """You are {name}, the {role} reviewer in AVRONE's DEEP ANALYSIS wave, working
@@ -158,12 +161,25 @@ MAX_DEEP = len(DEEP_ANGLES)
 # Hard ceiling on successive deep waves, whatever the caller or env asks for.
 MAX_DEEP_ROUNDS = 5
 
-_NONE_RE = re.compile(r"^(none|n/?a|no corrections?|nothing)\b", re.I)
+# round 70: the old prefix match ("^(none|n/?a|...|nothing)\b") also swallowed real corrections
+# such as "Nothing in the docs supports X", "NA values are dropped" and "None of the prices are
+# current", so a report full of fixes read as converged. Only a whole-line "nothing to fix" note
+# (optionally "found"/"identified"/... and a short tail after punctuation) counts as none now.
+_NONE_RE = re.compile(
+    r"(?:none|n/a|no corrections?|nothing(?: to correct| wrong)?)"
+    r"(?:\s+(?:found|identified|needed|noted|required|so far)"
+    r"(?:\s+(?:by|in|from|across|among|during)\b.*)?)?"
+    r"\s*(?:[.:;,!)(\u2013\u2014-].*)?\Z", re.I | re.S)
 
 
 def _md_section(report: str, title: str) -> str:
     """Body of the '## <title>' section of a markdown report ('' if absent)."""
-    m = re.search(rf"^##\s*{re.escape(title)}\s*$(.*?)(?=^##\s|\Z)", report or "", re.S | re.M | re.I)
+    # round 70: "## Verdict:" and "## **Verdict**" are found, and a "##Corrections" header (no
+    # space) ends the section before it instead of being swallowed into it. "### sub" stays inside.
+    if not isinstance(report, str) or not isinstance(title, str):
+        return ""
+    m = re.search(rf"^##(?!#)[ \t]*\**[ \t]*{re.escape(title)}[ \t]*:?[ \t]*\**[ \t]*:?[ \t]*\r?$(.*?)(?=^##(?!#)|\Z)",
+                  report, re.S | re.M | re.I)
     return m.group(1).strip() if m else ""
 
 
@@ -172,7 +188,7 @@ def _corrections(report: str) -> list[str]:
 
     "None", "None found ...", "N/A" and blank lines are not corrections."""
     out: list[str] = []
-    for line in _md_section(report, "Corrections").splitlines():
+    for line in _md_section(report, "Corrections").split("\n"):  # round 70: \n only, not U+2028
         t = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s*", "", line).strip()
         if not t or _NONE_RE.match(t):
             continue
@@ -183,7 +199,7 @@ def _corrections(report: str) -> list[str]:
 
 
 _FAILED_RE = re.compile(r"^\[[^\]\n]*? failed: ")
-_CONF_RE = re.compile(r"confidence\s*[:=]?\s*\**\s*(high|medium|med|low)\b", re.I)
+_CONF_RE = re.compile(r"confidence(?:\s+level)?\**\s*[:=\u2013\u2014-]?\s*\**\s*(high|medium|med|low)\b", re.I)
 _CONF_LEVELS = ["Low", "Med", "High"]
 
 
@@ -227,11 +243,8 @@ def resolve_deep_rounds(requested: int | None, settings: Any = None) -> int:
         raw = getattr(settings, "deep_rounds", None)
     if raw is None:
         raw = os.environ.get("AVRONE_DEEP_ROUNDS")
-    try:
-        r = int(raw) if raw not in (None, "") else 1
-    except (TypeError, ValueError):
-        r = 1
-    return max(1, min(r, MAX_DEEP_ROUNDS))
+    # round 70: int(float("inf")) raised OverflowError; tool_int clamps inf and reads "3.0"
+    return tool_int(raw, 1, 1, MAX_DEEP_ROUNDS)
 
 
 def clamp_deep_rounds(value: Any) -> int | None:
@@ -239,13 +252,11 @@ def clamp_deep_rounds(value: Any) -> int | None:
 
     None, booleans, empty strings and junk mean "not given" (None), so the core falls back to
     settings.deep_rounds / AVRONE_DEEP_ROUNDS / 1 via resolve_deep_rounds."""
-    if value is None or isinstance(value, bool) or value == "":
+    # round 70: a JSON body {"rounds": 1e999} decodes to inf, and int(inf) raised OverflowError
+    # out of the server/fleet/MCP handlers; non-ASCII digits ("\u0663") are junk, not 3.
+    if value is None or isinstance(value, bool) or (isinstance(value, str) and not value.strip()):
         return None
-    try:
-        r = int(value)
-    except (TypeError, ValueError):
-        return None
-    return max(1, min(r, MAX_DEEP_ROUNDS))
+    return tool_int(value, 1, 1, MAX_DEEP_ROUNDS, bad=None)
 
 
 @dataclass
@@ -454,15 +465,12 @@ def tool_output_max() -> int:
     """AVRONE_TOOL_OUTPUT_MAX (default 20000 chars), clamped to 1000..500000; junk = default.
     A safety net for tools (MCP, plugins) that don't cap their own output, so one huge result
     can't blow the model's context window and wedge the agent."""
-    try:
-        n = int(os.environ.get("AVRONE_TOOL_OUTPUT_MAX", DEFAULT_TOOL_OUTPUT_MAX))
-    except (TypeError, ValueError):
-        n = DEFAULT_TOOL_OUTPUT_MAX
-    return max(1000, min(n, 500000))
+    return tool_int(os.environ.get("AVRONE_TOOL_OUTPUT_MAX"), DEFAULT_TOOL_OUTPUT_MAX, 1000, 500000)
 
 
 def clip_output(out: str, limit: int) -> str:
     """Keep the head and the tail (errors usually sit at the end) of an over-long tool output."""
+    limit = max(0, limit)  # round 70: a negative limit sliced out[:-1] and kept nearly everything
     if len(out) <= limit:
         return out
     marker = f"\n...[{len(out) - limit} chars cut; {len(out)} total]...\n"
@@ -481,13 +489,47 @@ def reply_text(reply: Any) -> str:
     if isinstance(reply, (bytes, bytearray)):
         return bytes(reply).decode("utf-8", "replace")
     if isinstance(reply, dict):
-        c = reply.get("content")
-        if isinstance(c, str):
-            return c
-        if isinstance(reply.get("message"), dict) and isinstance(reply["message"].get("content"), str):
-            return reply["message"]["content"]
-        return json.dumps(reply, ensure_ascii=False, default=str)
+        # round 70: multipart content ([{"type": "text", "text": ...}]) and a raw OpenAI
+        # completion ({"choices": [{"message": {...}}]}) came back as a JSON dump of the dict.
+        for c in (reply.get("content"),
+                  reply["message"].get("content") if isinstance(reply.get("message"), dict) else None,
+                  _choice_content(reply.get("choices"))):
+            t = _content_text(c)
+            if t is not None:
+                return t
+        try:
+            return json.dumps(reply, ensure_ascii=False, default=str)
+        except (TypeError, ValueError, RecursionError):
+            return str(reply)
     return str(reply)
+
+
+def _content_text(c: Any) -> str | None:
+    """Text of a message content: a string, or the text parts of a multipart list."""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        parts = [p.get("text") for p in c if isinstance(p, dict) and isinstance(p.get("text"), str)]
+        parts += [p for p in c if isinstance(p, str)]
+        if parts:
+            return "".join(parts)
+    return None
+
+
+def _choice_content(choices: Any) -> Any:
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        m = choices[0].get("message")
+        if isinstance(m, dict):
+            return m.get("content")
+        return choices[0].get("text")
+    return None
+
+
+def _msg_len(m: Any) -> int:
+    if not isinstance(m, dict):
+        return 0
+    t = _content_text(m.get("content"))
+    return len(t) if t is not None else 0
 
 
 DEFAULT_CONTEXT_CHARS = 120000
@@ -499,11 +541,7 @@ def context_chars() -> int:
     """AVRONE_CONTEXT_CHARS (default 120000), clamped to 8000..2000000; junk = default.
     Ollama silently cuts an over-long prompt from the FRONT, which drops the system prompt
     (the tool docs and the JSON action format) and leaves the agent improvising."""
-    try:
-        n = int(os.environ.get("AVRONE_CONTEXT_CHARS", DEFAULT_CONTEXT_CHARS))
-    except (TypeError, ValueError):
-        n = DEFAULT_CONTEXT_CHARS
-    return max(8000, min(n, 2000000))
+    return tool_int(os.environ.get("AVRONE_CONTEXT_CHARS"), DEFAULT_CONTEXT_CHARS, 8000, 2000000)
 
 
 def compact_messages(messages: list[dict[str, Any]], limit: int) -> int:
@@ -512,13 +550,16 @@ def compact_messages(messages: list[dict[str, Any]], limit: int) -> int:
     never touched, and assistant turns are kept, so the agent still sees what it did.
     Returns how many messages were elided."""
     def size() -> int:
-        return sum(len(m.get("content") or "") for m in messages if isinstance(m, dict))
+        # round 70: an int content raised TypeError and a multipart list counted its items
+        return sum(_msg_len(m) for m in messages)
     if size() <= limit:
         return 0
     n = 0
     for i in range(2, max(2, len(messages) - CONTEXT_KEEP_TAIL)):
         m = messages[i]
-        c = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(m, dict):  # round 70: a stray non-dict raised AttributeError
+            continue
+        c = m.get("content")
         if m.get("role") != "user" or not isinstance(c, str) or not c.startswith("TOOL RESULT"):
             continue
         head = c.split("\n", 1)[0]
@@ -548,7 +589,7 @@ def out_of_turns_result(reply: Any, name: str, steps: int) -> str:
 def _call_key(tool: Any, args: Any, out: str) -> str | None:
     try:
         return json.dumps([tool, args, out], sort_keys=True, default=str)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
 
 
@@ -561,11 +602,8 @@ ARG_ERROR_BUDGET = 3
 
 def max_calls_per_turn() -> int:
     """AVRONE_MAX_CALLS_PER_TURN (default 4), clamped to 1..8; junk falls back to the default."""
-    try:
-        n = int(os.environ.get("AVRONE_MAX_CALLS_PER_TURN", DEFAULT_MAX_CALLS_PER_TURN))
-    except (TypeError, ValueError):
-        n = DEFAULT_MAX_CALLS_PER_TURN
-    return max(1, min(n, HARD_MAX_CALLS_PER_TURN))
+    return tool_int(os.environ.get("AVRONE_MAX_CALLS_PER_TURN"), DEFAULT_MAX_CALLS_PER_TURN, 1,
+                    HARD_MAX_CALLS_PER_TURN)
 
 
 def _normalize_subtasks(reply: str, n: int) -> list[dict[str, str]]:
@@ -575,26 +613,58 @@ def _normalize_subtasks(reply: str, n: int) -> list[dict[str, str]]:
     numeric roles, nested focus objects, or far more than n items. Anything unusable falls
     back to n independent solvers (pure Heavy style).
     """
-    raw: Any = []
-    try:
-        m = re.search(r"\{.*\}", reply or "", re.S)
-        obj = _jloads(m.group(0)) if m else {}
-        raw = obj.get("subtasks", []) if isinstance(obj, dict) else []
-    except (json.JSONDecodeError, RecursionError):
-        raw = []
+    n = max(1, n) if isinstance(n, int) and not isinstance(n, bool) else 1
+    raw = _plan_subtasks(reply)
     subtasks: list[dict[str, str]] = []
     for s in raw if isinstance(raw, list) else []:
         if not isinstance(s, dict) or not s.get("focus"):
             continue
-        focus = s["focus"] if isinstance(s["focus"], str) else json.dumps(s["focus"], default=str)
-        role = s.get("role")
-        role = role.strip() if isinstance(role, str) and role.strip() else f"Agent{len(subtasks) + 1}"
-        subtasks.append({"role": role[:60], "focus": focus[:2000]})
+        f = s["focus"]
+        try:
+            focus = f if isinstance(f, str) else json.dumps(f, default=str, ensure_ascii=False)
+        except (TypeError, ValueError, RecursionError):
+            focus = str(f)
+        if not focus.strip():  # round 70: a whitespace-only focus gave a worker nothing to do
+            continue
+        role = _one_line(s.get("role"))[:60].strip()
+        subtasks.append({"role": role or f"Agent{len(subtasks) + 1}", "focus": focus.strip()[:2000]})
         if len(subtasks) >= n:
             break
     if not subtasks:
         subtasks = [{"role": f"Solver{i + 1}", "focus": "Solve the whole task independently."} for i in range(n)]
     return subtasks
+
+
+def _one_line(v: Any) -> str:
+    """A planner-chosen role as one visible line: it is formatted into worker prompts, so a role
+    like "A\n## SYSTEM: ..." must not open a new prompt section (round 70)."""
+    if not isinstance(v, str):
+        return ""
+    t = "".join(" " if unicodedata.category(ch) in ("Cc", "Zl", "Zp") else ch
+                for ch in v if unicodedata.category(ch) not in ("Cf", "Co", "Cs"))
+    return " ".join(t.split())
+
+
+def _plan_subtasks(reply: Any) -> Any:
+    """The "subtasks" of the first JSON object in reply that has one (round 70).
+
+    The old greedy brace regex grabbed from the first brace in prose ("use {braces}") to the
+    last one, failed to parse, and silently dropped a valid plan for generic solvers."""
+    if not isinstance(reply, str):
+        return []
+    i = reply.find("{")
+    tries = 0
+    while i != -1 and tries < _MAX_DECODE_TRIES:
+        tries += 1
+        try:
+            obj, end = _DECODER.raw_decode(reply, i)
+        except (json.JSONDecodeError, RecursionError):
+            i = reply.find("{", i + 1)
+            continue
+        if isinstance(obj, dict) and "subtasks" in obj:
+            return obj["subtasks"]
+        i = reply.find("{", i + 1)
+    return []
 
 
 class TrinityCore:

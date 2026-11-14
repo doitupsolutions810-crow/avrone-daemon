@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v84",
+  "finding": "The script removes a broken .venv that has no activate and refuses. It also refuses if the venv python is missing. The checks are present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "noActivate": "remove and refuse",
+  "missingPython": "refuse",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The broken-venv check holds."
+}

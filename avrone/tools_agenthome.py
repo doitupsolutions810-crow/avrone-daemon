@@ -71,11 +71,20 @@ def scan_home(d: Path, limit: int = SCAN_MAX_ENTRIES) -> dict[str, Any]:
     stack = [str(d)]
     while stack:
         cur = stack.pop()
+        # round 66: the whole directory was listed (and sorted) BEFORE the entry budget was checked,
+        # so one flat dir of 2M files was read into memory although only 50k entries are counted.
+        # Read at most the remaining budget + 1 names; one more than that means truncated.
+        budget = limit - seen + 1
+        names = []
         try:
             with os.scandir(cur) as it:
-                names = sorted(e.name for e in it)
+                for e in it:
+                    names.append(e.name)
+                    if len(names) >= budget:
+                        break
         except OSError:
             continue
+        names.sort()
         subdirs = []
         for name in names:
             seen += 1
@@ -130,7 +139,7 @@ def _container(ctx: "AgentContext", aid: str, node: str) -> dict[str, Any]:
 
 
 def _packs(data: Path, aid: str) -> dict[str, Any]:
-    rx = re.compile(re.escape(aid) + r"-(\d{1,12})\.tar\.gz")
+    rx = re.compile(re.escape(aid) + r"-([0-9]{1,12})\.tar\.gz")  # round 66: \d took "١٢٣"
     newest, count = None, 0
     d = agentpack.pack_dir(data)
     if not d.is_dir() or d.is_symlink():
@@ -141,13 +150,18 @@ def _packs(data: Path, aid: str) -> dict[str, Any]:
                 if i >= PACKS_MAX_SCAN:
                     break
                 m = rx.fullmatch(e.name)
-                if not m or e.is_symlink() or not e.is_file(follow_symlinks=False):
+                # round 66: one pack removed between the listing and its stat raised OSError out of
+                # the loop, so every pack after it was silently not counted
+                try:
+                    if not m or e.is_symlink() or not e.is_file(follow_symlinks=False):
+                        continue
+                    size = e.stat(follow_symlinks=False).st_size
+                except OSError:
                     continue
                 count += 1
                 created = int(m.group(1))
                 if newest is None or created > newest["created"]:
-                    newest = {"name": e.name, "created": created,
-                              "bytes": e.stat(follow_symlinks=False).st_size}
+                    newest = {"name": e.name, "created": created, "bytes": size}
     except OSError:
         pass
     return {"count": count, "newest": newest}

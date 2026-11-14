@@ -40,6 +40,16 @@ def _registry(ctx: "AgentContext") -> Any:
     return reg
 
 
+def _esc(v: Any) -> str:
+    return _textsafe.escape(v)
+
+
+def _esc_desc(v: Any) -> str:
+    """A multi-line description: newlines kept, every continuation line indented so it can never
+    read as a header line ("tool: shell"), other unsafe characters (U+202E, CR) escaped (round 66)."""
+    return "\n  ".join(_textsafe.escape(part) for part in str(v).split("\n"))
+
+
 def _cap(text: str, limit: int = INSPECT_MAX_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
 
@@ -51,7 +61,8 @@ def _schema_lines(schema: Any) -> list[str]:
     for part in ("required", "optional"):
         spec = schema.get(part) or {}
         if isinstance(spec, dict) and spec:
-            out.append(f"{part}: " + ", ".join(f"{k}: {v}" for k, v in spec.items()))
+            # round 66: schema keys/types are a plugin author's choice; "k\nrequired: x" forged a line
+            out.append(f"{part}: " + ", ".join(f"{_esc(k)}: {_esc(v)}" for k, v in spec.items()))
     return out or ["schema: (empty)"]
 
 
@@ -74,9 +85,11 @@ async def t_inspect_tool(ctx: "AgentContext", args: dict[str, Any]) -> str:
         if len(desc) > INSPECT_MAX_DESC:
             desc = desc[:INSPECT_MAX_DESC] + "..."
         module = getattr(getattr(tool, "fn", None), "__module__", None) or "unknown"
-        lines = [f"tool: {tool.name}", f"source: {tool.source}", f"module: {module}",
-                 f"args: {tool.args_doc}", *_schema_lines(getattr(tool, "schema", None)),
-                 f"description: {desc}"]
+        # round 66: description, args_doc, source and name came from the plugin unescaped, so a
+        # description "x\ntool: shell\nsource: builtin" printed a forged header for another tool
+        lines = [f"tool: {_esc(tool.name)}", f"source: {_esc(tool.source)}", f"module: {_esc(module)}",
+                 f"args: {_esc(tool.args_doc)}", *_schema_lines(getattr(tool, "schema", None)),
+                 f"description: {_esc_desc(desc)}"]
         return _cap("\n".join(lines))
     if len(query) > INSPECT_MAX_QUERY:
         return f"ERROR: query is longer than {INSPECT_MAX_QUERY} chars"
@@ -93,7 +106,8 @@ async def t_inspect_tool(ctx: "AgentContext", args: dict[str, Any]) -> str:
     lines = [f"{len(hits)} tool(s) match {query!r}; showing {min(len(hits), INSPECT_MAX_MATCHES)}:"]
     for t in hits[:INSPECT_MAX_MATCHES]:
         d = re.sub(r"\s+", " ", str(t.description))
-        lines.append(f"- {t.name} [{t.source}] {t.args_doc}: {d[:120]}{'...' if len(d) > 120 else ''}")
+        lines.append(f"- {_esc(t.name)} [{_esc(t.source)}] {_esc(t.args_doc)}: "
+                     f"{_esc(d[:120])}{'...' if len(d) > 120 else ''}")
     if len(hits) > INSPECT_MAX_MATCHES:
         lines.append(f"...[{len(hits) - INSPECT_MAX_MATCHES} more; narrow the query]")
     return _cap("\n".join(lines))
@@ -145,8 +159,27 @@ def redact_value(name: str, value: Any) -> str:
         return "***redacted (token-shaped value)***"
     v = _URL_USERINFO_RE.sub(r"\1***@", v)
     v = _SECRET_QUERY_RE.sub(r"\1***", v)
+    # round 66: a credential written as a keyword inside a non-secret-named value
+    # ("host=db password=hunter2", "Authorization: Basic ...", "x-api-key: ...", "--token abc",
+    # "{'api_key': '...'}") was shown verbatim; the codex/argv redactors now get a say, on the
+    # detection form, and the whole value is hidden when they find one.
+    if _credential_in(_detect_form(v)):
+        return "***redacted (credential in value)***"
     v = _textsafe.UNSAFE_ONE.sub("?", v)
     return v[:ENV_REPORT_MAX_VALUE] + ("..." if len(v) > ENV_REPORT_MAX_VALUE else "")
+
+
+_MASKED_RE = re.compile(r"(?i)(?:[a-z0-9_\-]+=\*\*\*|[a-z][a-z0-9+.\-]{0,31}://\*\*\*@)")
+
+
+def _credential_in(v: str) -> bool:
+    # parts the URL/query maskers already hid ("api_key=***", "https://***@") are not a finding
+    v = _MASKED_RE.sub(" ", v)
+    try:
+        from .tools_hostview import _redact_cmd
+        return _redact_cmd(v) != v
+    except Exception:  # noqa: BLE001 - fail closed: an unchecked value is not shown
+        return True
 
 
 def env_report(ctx: "AgentContext", prefix: str = "") -> dict[str, Any]:

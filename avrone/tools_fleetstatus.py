@@ -42,6 +42,19 @@ def _label(v: Any, n: int = 64) -> str:
     return s[:n] or "?"
 
 
+def _node_label(v: Any, n: int = 64) -> str:
+    """A node id for display. round 66: _label folded every unsafe character to "?" and cut at 64,
+    so "gpu\nbox", "gpu box" and "gpu?box" (or two ids sharing their first 64 chars) all printed as
+    the same node: a forged twin could pass for a real peer in the list and in "would pick next".
+    An id that had to be changed gets a short digest of the real one, so different ids stay apart."""
+    raw = str(v)
+    s = _label(raw, n)
+    if s == raw:
+        return s
+    import hashlib
+    return s[:n - 7] + "~" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:6]
+
+
 def _onoff(v: Any) -> str:
     return "on" if v else "off"
 
@@ -114,7 +127,7 @@ def fleet_status(ctx: "AgentContext", limit: int = 20, need: str = "") -> dict[s
                            "settings": None, "totals": None, "nodes": [], "more": 0, "would_pick": []}
     if f is None:
         return rep
-    rep["node_id"] = _label(getattr(f, "node_id", "?"))
+    rep["node_id"] = _node_label(getattr(f, "node_id", "?"))
     rep["settings"] = _settings(f)
     rep["fleet"] = rep["settings"]["fleet"]
     now = time.time()
@@ -166,10 +179,12 @@ def fleet_status(ctx: "AgentContext", limit: int = 20, need: str = "") -> dict[s
             except Exception:  # noqa: BLE001
                 score = None
         try:
-            ago = max(0, int(now - clean["last_seen"])) if clean["last_seen"] else None
+            # round 66: a last_seen in the future (clock stepped back, edited fleet.json) printed
+            # "0s ago" next to "offline"; it is reported as a negative age and shown as such
+            ago = int(now - clean["last_seen"]) if clean["last_seen"] else None
         except (OverflowError, ValueError):
             ago = None
-        rows.append({"node_id": _label(nid), "status": status, "state": state,
+        rows.append({"node_id": _node_label(nid), "status": status, "state": state,
                      "score": score,
                      "eligible": ok, "allowed": allowed, "load": clean["load"],
                      "headroom": h.get("headroom"), "temp_c": h.get("temp_c") if status == "online" else None,
@@ -180,7 +195,7 @@ def fleet_status(ctx: "AgentContext", limit: int = 20, need: str = "") -> dict[s
     rep["nodes"] = rows[:limit]
     rep["more"] = max(0, len(rows) - limit)
     try:
-        rep["would_pick"] = [_label(n.get("node_id")) for n in f.select_nodes(FLEET_STATUS_PICK, need or None)]
+        rep["would_pick"] = [_node_label(n.get("node_id")) for n in f.select_nodes(FLEET_STATUS_PICK, need or None)]
     except Exception:  # noqa: BLE001  -- a malformed record must not break the read-only view
         rep["would_pick"] = []
     rep["need"] = need or None
@@ -238,7 +253,8 @@ async def t_fleet_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
         extra = f" score={r['score']}" if r["score"] is not None else ""
         if r["temp_c"] is not None:
             extra += f" temp={r['temp_c']}C"
-        seen = "never" if r["seen_s_ago"] is None else f"{r['seen_s_ago']}s ago"
+        seen = ("never" if r["seen_s_ago"] is None else f"{r['seen_s_ago']}s ago" if r["seen_s_ago"] >= 0
+                else f"{-r['seen_s_ago']}s IN THE FUTURE (clock skew?)")
         lines.append(f"- {r['node_id']} [{r['status']}/{r['state']}]{extra} load={r['load']:g} "
                      f"runner={r['runner']} children={r['children']} seen={seen}"
                      f"{'' if r['allowed'] else ' NOT-ALLOWED'}{' eligible' if r['eligible'] else ''}")

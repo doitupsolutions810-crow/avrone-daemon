@@ -30,11 +30,13 @@ CMD_MAX = 160
 
 
 def _long_s() -> float:
+    import math
     try:
         v = float(os.getenv("AVRONE_PROC_LONG_S", "600") or 600)
     except ValueError:
         return 600.0
-    return v if v > 0 else 600.0
+    # round 54: "inf" disabled the runaway flag silently and printed "running >= infs"
+    return v if v > 0 and math.isfinite(v) else 600.0
 
 
 def _boot_time() -> float | None:
@@ -57,7 +59,13 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
         pids = [int(p.name) for p in PROC.iterdir() if p.name.isdigit()]
     except OSError:
         return {}
-    tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    try:  # round 54: sysconf can raise (ValueError/OSError) or report 0 -> ZeroDivisionError
+        tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        page_kb = os.sysconf("SC_PAGE_SIZE") // 1024 if hasattr(os, "sysconf") else 4
+    except (ValueError, OSError):
+        tck, page_kb = 100, 4
+    tck = tck if isinstance(tck, int) and tck > 0 else 100
+    page_kb = page_kb if isinstance(page_kb, int) and page_kb > 0 else 4
     btime = _boot_time()
     for pid in pids:
         try:
@@ -71,7 +79,7 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
         cmd = raw.replace(b"\x00", b" ").decode(errors="replace").strip() or stat[stat.index("(") + 1:rparen]
         started = btime + start_ticks / tck if btime is not None else None
         info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started,
-                     "rss_kb": rss_pages * (os.sysconf("SC_PAGE_SIZE") // 1024 if hasattr(os, "sysconf") else 4),
+                     "rss_kb": max(0, rss_pages) * page_kb,
                      "cmd": _escape(cmd[:CMD_MAX])}  # round 146: argv/comm are the process's own choice
     out: dict[int, dict[str, Any]] = {}
     frontier = {root_pid}
@@ -150,12 +158,31 @@ async def t_api_surface(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _token_strength(v: str | None) -> str:
-    if not v:
+_PLACEHOLDERS = ("changeme", "secret", "password", "token", "admin", "test", "default", "example",
+                 "your-token", "yourtoken")
+
+
+def _token_strength(v: Any) -> str:
+    if v is None:
         return "unset"
-    if v.lower() in ("changeme", "secret", "password", "token", "admin", "test"):
+    if hasattr(v, "get_secret_value"):  # a pydantic SecretStr
+        try:
+            v = v.get_secret_value()
+        except Exception:  # noqa: BLE001
+            return "unknown"
+    if not isinstance(v, str):  # round 54: a non-str token raised AttributeError -> "no HTTP app"
+        return "unknown"
+    t = v.strip()
+    if not t:
+        # round 54: a whitespace-only token was "unset" only if empty; 16 spaces read "ok"
+        return "unset" if not v else "weak"
+    low = t.lower()
+    # round 54: "changeme123", "CHANGEME" and "secret-secret-secret" all read "ok"
+    if low in _PLACEHOLDERS or any(low.startswith(p) and len(set(low[len(p):])) <= 3 for p in _PLACEHOLDERS):
         return "placeholder"
-    return "weak" if len(v) < 16 else "ok"
+    if len(t) < 16:  # round 54: measured on the stripped token ("short" + 12 spaces was "ok")
+        return "weak"
+    return "ok"
 
 
 def exposure() -> dict[str, Any]:
@@ -177,10 +204,17 @@ def exposure() -> dict[str, Any]:
     for name, st in (("admin", admin_tok), ("fleet", fleet_tok)):
         if st in ("weak", "placeholder"):
             issues.append(f"{name} token is {st}")
-    if admin_tok != "unset" and os.getenv("AVRONE_FLEET_TOKEN") and \
-            os.getenv("AVRONE_FLEET_TOKEN") == getattr(server.settings, "admin_token", None):
+    adm = getattr(server.settings, "admin_token", None)
+    if hasattr(adm, "get_secret_value"):
+        try:
+            adm = adm.get_secret_value()
+        except Exception:  # noqa: BLE001
+            adm = None
+    fl = os.getenv("AVRONE_FLEET_TOKEN") or ""
+    # round 54: "tok" and "tok\n" (a token pasted with its newline) were not seen as the same secret
+    if admin_tok != "unset" and fl.strip() and isinstance(adm, str) and adm.strip() == fl.strip():
         issues.append("admin and fleet tokens are the same secret")
-    return {"host": host, "exposed": exposed, "policy": policy, "admin_token": admin_tok,
+    return {"host": _escape(host), "exposed": exposed, "policy": policy, "admin_token": admin_tok,
             "fleet_token": fleet_tok if fleet_on else "unset", "remote_open": remote_open, "risky": risky,
             "issues": issues, "verdict": "AT RISK" if issues else ("LOCAL" if not exposed else "GUARDED")}
 

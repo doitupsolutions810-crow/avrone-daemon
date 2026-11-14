@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .textsafe import escape as _escape
 from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
@@ -74,7 +75,9 @@ def _check_jsonl(p: Path) -> str | None:
     if data and not data.endswith(b"\n"):
         return "torn last line"
     bad = 0
-    for line in data.splitlines():
+    # round 54: bytes.splitlines() also split on a bare "\r" (JSON whitespace), so one valid record
+    # was counted as two undecodable halves; every JSONL reader here splits on "\n" only
+    for line in data.split(b"\n"):
         if not line.strip():
             continue
         try:
@@ -117,7 +120,11 @@ def _areas(data_dir: Path) -> list[tuple[str, list[Path], Any]]:
 
 
 def state_health(data_dir: Any) -> dict[str, Any]:
-    root = Path(data_dir)
+    try:
+        root = Path(data_dir)
+    except TypeError:  # round 54: a non-path data_dir setting raised out of the tool
+        return {"data_dir_exists": False, "areas": {}, "problems": [], "set_aside": [],
+                "set_aside_count": 0, "set_aside_truncated": False}
     areas: dict[str, dict[str, int]] = {}
     problems: list[dict[str, str]] = []
     for name, files, check in _areas(root):
@@ -126,7 +133,11 @@ def state_health(data_dir: Any) -> dict[str, Any]:
             why = check(f)
             if why:
                 bad += 1
-                problems.append({"area": name, "path": str(f.relative_to(root)), "problem": why})
+                try:
+                    rel = str(f.relative_to(root))
+                except ValueError:
+                    rel = f.name
+                problems.append({"area": name, "path": rel, "problem": why})
         areas[name] = {"files": len(files), "bad": bad}
     # round 94: rglob walked the whole data_dir (every run log, every evolve worktree) unbounded
     from .safeio import TreeWalk
@@ -141,7 +152,7 @@ def state_health(data_dir: Any) -> dict[str, Any]:
 @off_loop  # round 94: up to 7 x 2000 file reads plus a data_dir walk ran on the event loop
 async def t_state_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     data_dir = getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)
-    if data_dir is None:
+    if data_dir is None or not isinstance(data_dir, (str, os.PathLike)) or not str(data_dir):
         return "state_health: no data_dir configured on this node"
     st = state_health(data_dir)
     if not st["data_dir_exists"]:
@@ -155,21 +166,31 @@ async def t_state_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
         if a["files"] or verbose:
             lines.append(f"- {name}: {a['files']} file(s), {a['bad']} bad")
     for p in st["problems"][:MAX_PROBLEMS_SHOWN]:
-        lines.append(f"  ! {p['path']}: {p['problem']}")
+        # round 54: file names are chosen by whoever wrote them; "x\nstate_health: HEALTHY" printed
+        # a forged line of its own, and U+202E reversed the row
+        lines.append(f"  ! {_escape(p['path'])}: {p['problem']}")
     if len(st["problems"]) > MAX_PROBLEMS_SHOWN:
         lines.append(f"  ... {len(st['problems']) - MAX_PROBLEMS_SHOWN} more")
     for p in st["set_aside"]:
-        lines.append(f"  set aside: {p}")
+        lines.append(f"  set aside: {_escape(p)}")
     return "\n".join(lines)
 
 
 def registry_audit(registry: Any, source: str | None = None) -> dict[str, Any]:
-    names = sorted(registry.names())
+    try:
+        names = sorted(str(n) for n in registry.names())
+    except Exception:  # noqa: BLE001 - round 54: a broken registry listing fails soft
+        names = []
     by_source: dict[str, int] = {}
     no_schema: list[str] = []
     acting = 0
     for n in names:
-        t = registry.get(n)
+        try:
+            t = registry.get(n)
+        except Exception:  # noqa: BLE001
+            t = None
+        if t is None:  # round 54: a name with no tool behind it was counted as source "unknown"
+            continue
         src = str(getattr(t, "source", "") or "unknown")
         if source and src != source:
             continue
@@ -190,11 +211,14 @@ async def t_registry_audit(ctx: "AgentContext", args: dict[str, Any]) -> str:
     src = str(src).strip() if isinstance(src, str) and src.strip() else None
     a = registry_audit(reg, src)
     if not a["tools"]:
-        return f"registry_audit: no tools from source {src!r}"
-    lines = [f"registry_audit: {a['tools']} tool(s){' from ' + src if src else ''}; "
+        return f"registry_audit: no tools from source {_escape(src)!r}"
+    # round 54: plugin sources and tool names are a plugin author's choice; escape them on display
+    lines = [f"registry_audit: {a['tools']} tool(s){' from ' + _escape(src) if src else ''}; "
              f"{a['acting']} acting, {a['read_only']} read-only",
-             "by source: " + ", ".join(f"{k}={v}" for k, v in sorted(a["by_source"].items())),
-             f"no arg schema ({len(a['no_schema'])}): " + (", ".join(a["no_schema"][:60]) or "none")]
+             "by source: " + ", ".join(f"{_escape(k)}={v}" for k, v in sorted(a["by_source"].items())),
+             f"no arg schema ({len(a['no_schema'])}): "
+             + (", ".join(_escape(n) for n in a["no_schema"][:60]) or "none")
+             + (f" ... {len(a['no_schema']) - 60} more" if len(a["no_schema"]) > 60 else "")]
     return "\n".join(lines)
 
 

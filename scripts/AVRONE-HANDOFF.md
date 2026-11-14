@@ -819,3 +819,28 @@ This is the attested-history bridge from daemon main. No test in the suite impor
 - A non-text `need` is refused. A format that isn't a string gives text output.
 - format=json is never cut. It falls back to compact JSON, then to an error object.
 - Tests: `tests/test_fleetstatus_routerstatus_robust.py`.
+
+## Hardening round 54 (Hark edge-case series): tools_statehealth + tools_hostview
+
+### state_health
+- File names under data_dir, both problem paths and set-aside paths, were printed raw. A file named "x\nstate_health: HEALTHY ..." produced a forged line of its own, and U+202E reversed the row. Both now go through `textsafe.escape`.
+- JSONL checks split with `bytes.splitlines()`, which also breaks on a bare `\r`. `\r` is JSON whitespace, so one valid record was reported as two undecodable halves. Lines now split on `\n` only, matching every reader.
+- A data_dir setting that isn't a path or string (an int, list, bytes or "") reads as "no data_dir" instead of raising.
+
+### registry_audit
+- If `names()` raises, the audit fails soft.
+- A name with no tool behind it is skipped (it used to be counted as source "unknown"). Names that aren't strings are handled.
+- Plugin source names and tool names are escaped on display.
+- The no-schema list says "... N more" past 60.
+
+### proc_status
+- `os.sysconf` raising, or reporting a clock tick of 0, no longer crashes the scan (it was a ZeroDivisionError). A negative RSS is clamped to 0.
+- `AVRONE_PROC_LONG_S=inf`, NaN or 1e999 used to silently disable the runaway flag. These now fall back to 600.
+
+### exposure_check
+- A whitespace-only token (16 spaces) read "ok". Strength is now measured on the stripped token.
+- "CHANGEME", "changeme123" and " secret " now read as placeholder.
+- A token that isn't a string, such as a non-str admin token, raised AttributeError, and the tool reported "no HTTP app". It now reads "unknown". A pydantic SecretStr is unwrapped.
+- Admin and fleet tokens that differ only by a trailing newline are now flagged as the same secret.
+- The bind host is escaped.
+- Tests: `tests/test_statehealth_hostview_robust.py`.

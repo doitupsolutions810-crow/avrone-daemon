@@ -28,6 +28,30 @@ WAL_MODE_RETRY_INITIAL_SECONDS = 0.01
 WAL_MODE_RETRY_MAX_SECONDS = 0.25
 
 
+SOURCE_IDENTITY_INSERT_TRIGGER_SQL = """
+    CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_insert
+    BEFORE INSERT ON trials
+    WHEN NEW.source_identity_key IS NULL
+        OR typeof(NEW.source_identity_key) != 'text'
+        OR length(NEW.source_identity_key) != 64
+        OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid source_identity_key');
+    END
+"""
+SOURCE_IDENTITY_UPDATE_TRIGGER_SQL = """
+    CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_update
+    BEFORE UPDATE OF source_identity_key ON trials
+    WHEN NEW.source_identity_key IS NULL
+        OR typeof(NEW.source_identity_key) != 'text'
+        OR length(NEW.source_identity_key) != 64
+        OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid source_identity_key');
+    END
+"""
+
+
 class TrialStoreError(RuntimeError):
     """The receiver cannot safely persist or continue accepting trial evidence."""
 
@@ -245,6 +269,34 @@ class TrialStore:
             return
         raise TrialStoreError("trial source identity unique index is missing")
 
+    @staticmethod
+    def _assert_source_identity_triggers(db: sqlite3.Connection) -> None:
+        """Prove the expected source-key guards still have their actual DDL.
+
+        SQLite's CREATE TRIGGER IF NOT EXISTS silently tolerates a same-name,
+        no-op replacement. Compare canonicalized sqlite_master definitions, not
+        merely trigger names. SQLite strips "IF NOT EXISTS" when storing SQL.
+        """
+        for name, expected_sql in (
+            ("trial_source_identity_key_required_insert", SOURCE_IDENTITY_INSERT_TRIGGER_SQL),
+            ("trial_source_identity_key_required_update", SOURCE_IDENTITY_UPDATE_TRIGGER_SQL),
+        ):
+            actual = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name=? AND tbl_name='trials'",
+                (name,),
+            ).fetchone()
+            expected = expected_sql.replace(
+                "CREATE TRIGGER IF NOT EXISTS", "CREATE TRIGGER", 1,
+            )
+            if actual is None or not isinstance(actual["sql"], str) or (
+                " ".join(actual["sql"].split())
+                != " ".join(expected.split())
+            ):
+                raise TrialStoreError(
+                    "trial source identity trigger integrity check failed: " + name
+                )
+
     def _initialize(self) -> None:
         db = self._connect()
         try:
@@ -393,32 +445,9 @@ class TrialStore:
                 "ON trials(source_identity_key)"
             )
             self._assert_source_identity_unique_index(db)
-            db.execute(
-                """
-                CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_insert
-                BEFORE INSERT ON trials
-                WHEN NEW.source_identity_key IS NULL
-                    OR typeof(NEW.source_identity_key) != 'text'
-                    OR length(NEW.source_identity_key) != 64
-                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
-                BEGIN
-                    SELECT RAISE(ABORT, 'invalid source_identity_key');
-                END
-                """
-            )
-            db.execute(
-                """
-                CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_update
-                BEFORE UPDATE OF source_identity_key ON trials
-                WHEN NEW.source_identity_key IS NULL
-                    OR typeof(NEW.source_identity_key) != 'text'
-                    OR length(NEW.source_identity_key) != 64
-                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
-                BEGIN
-                    SELECT RAISE(ABORT, 'invalid source_identity_key');
-                END
-                """
-            )
+            db.execute(SOURCE_IDENTITY_INSERT_TRIGGER_SQL)
+            db.execute(SOURCE_IDENTITY_UPDATE_TRIGGER_SQL)
+            self._assert_source_identity_triggers(db)
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trial_receipts_trial_id ON trial_receipts(trial_id)"
             )
@@ -618,6 +647,7 @@ class TrialStore:
             # Check while holding SQLite's writer lock, preventing a DDL swap
             # between the index proof and inserting first-seen evidence.
             self._assert_source_identity_unique_index(db)
+            self._assert_source_identity_triggers(db)
             quarantined = self._assert_sender_quarantine_state(db, sender)
             if quarantined:
                 status = "sender_quarantined"

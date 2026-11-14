@@ -338,6 +338,13 @@ class TrialStore:
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
             if version > DB_SCHEMA_VERSION:
                 raise TrialStoreError("trial database schema is newer than this receiver")
+            # SQLite creates -wal/-shm using the database file's mode. Under a
+            # normal 022 umask a fresh DB starts at 0644; enabling WAL before
+            # chmod makes legitimate concurrent readers encounter 0644
+            # sidecars after their own initialization and fail closed.
+            # The owner and single-link database were already verified in
+            # _connect(). Make the file private BEFORE the WAL transition.
+            os.chmod(self.path, 0o600)
             self._enable_wal(db)
             db.execute("BEGIN IMMEDIATE")
             version = int(db.execute("PRAGMA user_version").fetchone()[0])

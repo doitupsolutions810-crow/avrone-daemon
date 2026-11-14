@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v82",
+  "finding": "The script tries to bake the context into a derived model when a foreign Ollama is in use. If the create fails it warns and continues. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "fail": "warn and continue",
+  "success": "use derived model",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The context-model check holds."
+}

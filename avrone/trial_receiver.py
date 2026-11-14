@@ -174,6 +174,14 @@ class TrialStore:
                     "trial database sidecar must be a regular single-link file"
                 )
             self._assert_file_owner(info, "trial database sidecar")
+            # SQLite inherits WAL/SHM mode from the private 0600 database.
+            # A running receiver must not silently continue if permissions
+            # drift after trusted migration, even in a 0700 directory.
+            if self._initialized and stat.S_IMODE(info.st_mode) != 0o600:
+                raise TrialStoreError(
+                    "trial database sidecar permissions changed after initialization "
+                    "(expected 0600)"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")

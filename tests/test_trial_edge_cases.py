@@ -812,8 +812,24 @@ print(json.dumps({"sender": sender, **result["results"][0]}, sort_keys=True))
         while not all(ready.exists() for ready in ready_files):
             if time.monotonic() >= deadline:
                 raise AssertionError("conflicting workers did not become ready")
-            if any(proc.poll() is not None for proc in processes):
-                raise AssertionError("a conflicting worker exited before the start gate")
+            exited = [(index, proc) for index, proc in enumerate(processes)
+                      if proc.poll() is not None]
+            if exited:
+                # Preserve child stderr: without it, intermittent SQLite
+                # startup and WAL-lock failures all look like a vague gate
+                # failure and cannot be investigated in CI.
+                diagnostics = []
+                for index, proc in exited:
+                    stdout, stderr = proc.communicate(timeout=2)
+                    diagnostics.append({
+                        "sender": payloads[index][0],
+                        "exit_code": proc.returncode,
+                        "stdout": stdout[-2000:],
+                        "stderr": stderr[-4000:],
+                    })
+                raise AssertionError(
+                    f"conflicting worker exited before start gate: {diagnostics!r}"
+                )
             time.sleep(0.01)
         gate.touch()
         outputs = [proc.communicate(timeout=20) for proc in processes]

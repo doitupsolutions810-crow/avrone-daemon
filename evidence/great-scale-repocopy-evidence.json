@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v118",
+  "finding": "The script warns when the repo copy of MERGE_ME.md cannot be updated and continues. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "copyFail": "warn and continue",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The repo-copy-fail check holds."
+}

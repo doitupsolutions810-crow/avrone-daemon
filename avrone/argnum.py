@@ -69,3 +69,31 @@ def _from_float(f: float, lo: int | None, hi: int | None) -> int | None:
         b = hi if f > 0 else lo
         return b  # None when unbounded on that side
     return int(f)
+
+
+_TRUE_WORDS = frozenset({"1", "true", "yes", "y", "on", "t"})
+_FALSE_WORDS = frozenset({"0", "false", "no", "n", "off", "f", "", "none", "null"})
+
+
+def tool_bool(v: Any, default: bool = False) -> bool:
+    """A boolean tool argument (round 59). ``bool(args.get("recursive"))`` read the string
+    ``"false"`` (models often quote booleans) as True, so ``fs_delete {"recursive": "false"}``
+    deleted a non-empty directory and ``fs_write {"append": "false"}`` appended. True/False words
+    in any case and spacing, numbers (0 is False, NaN is the default), None is the default, and
+    anything else (a list, an unknown word) is the default rather than truthy."""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    if isinstance(v, int):
+        return v != 0
+    if isinstance(v, float):
+        return default if v != v else v != 0.0
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in _TRUE_WORDS:
+            return True
+        if t in _FALSE_WORDS:
+            return False
+        return default
+    return default

@@ -922,3 +922,20 @@ Tests: `tests/test_secretshapes_fusion_robust.py`.
 - **flock_wait.** `timeout_s=inf`/`1e308` waited forever. It's now NaN-safe and capped at 3600 s, matching `AVRONE_LOCK_WAIT_S`.
 
 Tests: `tests/test_safeio_robust.py` (59 tests).
+
+## Hardening round 59 (2026-11-14): agent fs tools + boolean tool args
+
+- **String booleans (destructive).** `bool(args.get(...))` read `"false"` as True. Models often quote booleans, so `fs_delete {"recursive": "false"}` deleted a non-empty directory, and `fs_write {"append": "false"}` appended. `fleet_agents live_only` and `agent_message wait` had the same bug. New `argnum.tool_bool(v, default)`:
+  - true/false words, in any case or spacing;
+  - numbers, where 0 is False;
+  - NaN, None, lists, objects and unknown words all fall back to the default.
+  It's used in `agentfs_tools` (3 places) and `fleet` (2).
+- **Host path disclosure.** OSErrors went out raw with absolute host paths. Examples: `fs_write a.txt/b` gave "[Errno 17] File exists: '/srv/.../agents/a1/a.txt'", ENAMETOOLONG echoed the whole absolute path, and rmtree's PermissionError did the same. `_fs_errors` turns each OSError into an AgentFSError naming the path relative to the agent dir (or just its basename if it's outside), clipped to 200 chars and escaped, and audits it as `agentfs.error`.
+- **Unescaped echoes.** fs_write/fs_list/fs_delete/fs_read echoed names like `"e\x1b[31m\nFORGED\u202e"` raw, so a name could print fake listing rows. Round 148 had escaped only "not found". `_shown()` now escapes every echoed name, including the agent id in the list header. The audit log keeps the raw path.
+- **Path type.** A non-string path (`["x"]`, `7`, `{}`) was str()-ed into a file name `"['x']"`. It's now refused and audited.
+- **Content edge cases.**
+  - A lone surrogate (half an emoji from a model's JSON) raised UnicodeEncodeError. It's now written as U+FFFD.
+  - `content: null` wrote the text `"None"`. It now writes an empty file.
+- **Kept on purpose.** `fs_delete` on a FIFO is still refused, per `test_cov7_config_agentfs::test_delete_special_file_refused`. Its message is now escaped.
+
+Tests: `tests/test_agentfs_tools_robust.py`.

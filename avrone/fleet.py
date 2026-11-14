@@ -2313,7 +2313,8 @@ async def t_fleet_agents(ctx: "AgentContext", args: dict[str, Any]) -> str:
     q = str(args.get("filter", "") or "").lower()
     if len(q) > 500:
         return "ERROR: filter is longer than 500 chars"
-    live_only = bool(args.get("live_only"))
+    from .argnum import tool_bool
+    live_only = tool_bool(args.get("live_only"), False)  # round 59: "false" read as True
 
     def build() -> str:  # filter + render of a 2,000-row tree cost seconds on the event loop
         rs = rows
@@ -2325,11 +2326,12 @@ async def t_fleet_agents(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 async def t_agent_message(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    from .argnum import tool_bool
     from .presence import directory, find_agent
     f = _fleet(ctx)
     route, name = find_agent(await directory(ctx.core), str(args["agent"]))
     res = await f.send_message([p for p in route.split("/") if p], name, str(args["message"]),
-                               f"{f.node_id}/{ctx.name}", getattr(ctx.core, "fleet_hops", 0), bool(args.get("wait")))
+                               f"{f.node_id}/{ctx.name}", getattr(ctx.core, "fleet_hops", 0), tool_bool(args.get("wait"), False))
     head = f"[{' -> '.join(res.get('path', []))}] {name}: {res.get('delivered')}"
     return head + (f"\n{res['answer']}" if res.get("answer") else f" ({res.get('note') or res.get('run_id')})")
 

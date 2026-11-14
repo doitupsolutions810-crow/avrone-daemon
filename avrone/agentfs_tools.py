@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .agentfs import AgentFSError, confine
+from .argnum import tool_bool
 from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
@@ -117,6 +118,77 @@ def _rel(root: Path, p: Path) -> str:
     return str(p.relative_to(root)) or "."
 
 
+def _shown(root: Path, p: Path) -> str:
+    """_rel for a message the model reads: control and bidi characters escaped (round 59: fs_write,
+    fs_list and fs_delete echoed "e\\x1b[31m\\n.txt" raw; round 148 only covered "not found")."""
+    return _tsesc(_rel(root, p))
+
+
+def _path_arg(ctx: "AgentContext", tool: str, raw: Any) -> Any:
+    """Round 59: a non-string path (["x"], {"a": 1}, 7) was str()-ed into a file name "['x']"."""
+    if raw is None or isinstance(raw, str):
+        return raw
+    _audit(ctx, "agentfs.denied", tool=tool, path=repr(raw)[:300], reason="path is not a string")
+    raise AgentFSError(f"path must be a string, not {type(raw).__name__}")
+
+
+def _content_bytes(v: Any) -> bytes:
+    """fs_write content as UTF-8. Round 59: None was written as the text "None", and a lone
+    surrogate (half an emoji from a model's JSON, "\\ud83d") raised UnicodeEncodeError; it is now
+    U+FFFD like any other undecodable character."""
+    if v is None:
+        return b""
+    s = v if isinstance(v, str) else str(v)
+    if _has_surrogate(s):
+        s = "".join("\ufffd" if 0xD800 <= ord(ch) <= 0xDFFF else ch for ch in s)
+    return s.encode("utf-8")
+
+
+def _has_surrogate(s: str) -> bool:
+    try:
+        s.encode("utf-8")
+        return False
+    except UnicodeEncodeError:
+        return True
+
+
+def _os_error(ctx: "AgentContext", tool: str, e: OSError) -> AgentFSError:
+    """An OSError as an agent-facing error naming the path relative to the agent dir. Round 59:
+    "a.txt/b" raised "[Errno 17] File exists: '/srv/avrone/workspace/agents/a1/a.txt'" (the host
+    layout) and a 300-char name echoed the whole absolute path."""
+    root = Path(getattr(ctx, "agent_dir", "") or ".").resolve()
+    name = e.filename
+    shown = ""
+    if name is not None:
+        q = Path(os.fsdecode(name))
+        try:
+            shown = str(q.relative_to(root)) or "."
+        except ValueError:
+            shown = q.name
+        shown = _tsesc(shown[:200] + ("…" if len(shown) > 200 else ""))
+    why = e.strerror or (os.strerror(e.errno) if e.errno else type(e).__name__)
+    if e.errno in (errno.EEXIST, errno.ENOTDIR) and tool in ("fs_write",):
+        why = "a parent in the path is a file, not a directory"
+    _audit(ctx, "agentfs.error", tool=tool, path=shown, reason=why)
+    return AgentFSError(f"{why}: {shown}" if shown else why)
+
+
+def _fs_errors(tool: str):
+    def deco(fn):
+        import functools
+
+        @functools.wraps(fn)
+        async def wrapper(ctx, args):
+            try:
+                return await fn(ctx, args)
+            except AgentFSError:
+                raise
+            except OSError as e:
+                raise _os_error(ctx, tool, e) from None
+        return wrapper
+    return deco
+
+
 def quota_write(ctx: "AgentContext", root: Path, p: Path, data: bytes, append: bool = False,
                 tool: str = "fs_write") -> tuple[int, int, int]:
     """Write `data` to `p` inside agent dir `root`, enforcing the per-file cap and dir quota.
@@ -188,27 +260,29 @@ def quota_write(ctx: "AgentContext", root: Path, p: Path, data: bytes, append: b
 
 # off_loop: quota checks walk the whole agent dir (100k files ~0.26 s), listing sorts it (~0.6 s)
 @off_loop
+@_fs_errors("fs_write")
 async def t_fs_write(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    root, p = _resolve(ctx, "fs_write", args.get("path", ""))
-    data = str(args.get("content", "")).encode("utf-8")
-    new_size, projected, quota = quota_write(ctx, root, p, data, bool(args.get("append", False)))
-    return f"wrote {_rel(root, p)} ({new_size} bytes; dir {projected}/{quota} bytes)"
+    root, p = _resolve(ctx, "fs_write", _path_arg(ctx, "fs_write", args.get("path", "")))
+    data = _content_bytes(args.get("content", ""))
+    new_size, projected, quota = quota_write(ctx, root, p, data, tool_bool(args.get("append"), False))
+    return f"wrote {_shown(root, p)} ({new_size} bytes; dir {projected}/{quota} bytes)"
 
 
 @off_loop
+@_fs_errors("fs_read")
 async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    root, p = _resolve(ctx, "fs_read", args.get("path", ""))
+    root, p = _resolve(ctx, "fs_read", _path_arg(ctx, "fs_read", args.get("path", "")))
     if not p.exists():
-        return f"ERROR: {_rel(root, p)} not found"
+        return f"ERROR: {_shown(root, p)} not found"
     if not p.is_file():
-        return f"ERROR: {_rel(root, p)} is a directory; use fs_list"
+        return f"ERROR: {_shown(root, p)} is a directory; use fs_list"
     from .argnum import tool_int
     limit = tool_int(args.get("max_chars"), READ_DEFAULT_CHARS, 1, READ_MAX_CHARS)
     from .safeio import NotRegularFile, open_read
     try:  # round 87: never block on a FIFO swapped in after the is_file() check
         f = open_read(p, follow=True)
     except NotRegularFile:
-        return f"ERROR: {_rel(root, p)} is not a regular file"
+        return f"ERROR: {_shown(root, p)} is not a regular file"
     with f:
         size = os.fstat(f.fileno()).st_size
         raw = f.read(limit * 4 + 4)
@@ -220,13 +294,14 @@ async def t_fs_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 @off_loop
+@_fs_errors("fs_list")
 async def t_fs_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    root, p = _resolve(ctx, "fs_list", args.get("path", ""))
+    root, p = _resolve(ctx, "fs_list", _path_arg(ctx, "fs_list", args.get("path", "")))
     if not p.exists():
-        return f"ERROR: {_rel(root, p)} not found"
+        return f"ERROR: {_shown(root, p)} not found"
     if p.is_file():
-        return f"{_rel(root, p)}  {p.stat().st_size} bytes"
-    recursive = bool(args.get("recursive", False))
+        return f"{_shown(root, p)}  {p.stat().st_size} bytes"
+    recursive = tool_bool(args.get("recursive"), False)
     # round 90: sorted(rglob("*")) listed and sorted the whole agent dir (empty files cost no
     # quota, so an agent could hold millions) before showing 500. TreeWalk yields the same order
     # lazily and reads at most FS_LIST_SCAN_MAX entries.
@@ -244,25 +319,26 @@ async def t_fs_list(ctx: "AgentContext", args: dict[str, Any]) -> str:
         q = Path(de.path)
         try:
             if de.is_symlink():
-                lines.append(f"{_rel(root, q)} -> (symlink)")
+                lines.append(f"{_shown(root, q)} -> (symlink)")
             elif de.is_dir():
-                lines.append(f"{_rel(root, q)}/")
+                lines.append(f"{_shown(root, q)}/")
             else:
-                lines.append(f"{_rel(root, q)}  {de.stat().st_size} bytes")
+                lines.append(f"{_shown(root, q)}  {de.stat().st_size} bytes")
         except OSError:
             continue
     if more and not recursive:
         lines.append(f"...[{more} more]")
     elif more or walk.truncated:
         lines.append(f"...[more entries not shown; listing stops after {LIST_MAX_ENTRIES}]")
-    head = f"[agent dir {getattr(ctx, 'agent_id', '') or root.name}: {dir_usage(root)}/{quota_bytes()} bytes used]"
+    head = f"[agent dir {_tsesc(getattr(ctx, 'agent_id', '') or root.name)}: {dir_usage(root)}/{quota_bytes()} bytes used]"
     return head + "\n" + ("\n".join(lines) if lines else "(empty)")
 
 
 @off_loop
+@_fs_errors("fs_delete")
 async def t_fs_delete(ctx: "AgentContext", args: dict[str, Any]) -> str:
     root = _agent_root(ctx)
-    raw = str(args.get("path", "")).strip().rstrip("/\\")
+    raw = str(_path_arg(ctx, "fs_delete", args.get("path", "")) or "").strip().rstrip("/\\")
     # Confine the PARENT (resolved), then act on the leaf un-resolved, so a symlink is
     # removed itself and never followed to what it points at.
     head, _, leaf = raw.replace("\\", "/").rpartition("/")
@@ -284,14 +360,14 @@ async def t_fs_delete(ctx: "AgentContext", args: dict[str, Any]) -> str:
             freed = target.lstat().st_size
             target.unlink()
         elif target.is_dir():
-            if not bool(args.get("recursive", False)) and any(target.iterdir()):
+            if not tool_bool(args.get("recursive"), False) and any(target.iterdir()):
                 return f"ERROR: {_tsesc(rel)} is a non-empty directory; pass recursive: true"
             freed = dir_usage(target)
             shutil.rmtree(target)
         else:
             return f"ERROR: {_tsesc(rel)} is not a file or directory"
     _audit(ctx, "agentfs.delete", path=rel, bytes=freed)
-    return f"deleted {rel} ({freed} bytes freed)"
+    return f"deleted {_tsesc(rel)} ({freed} bytes freed)"
 
 
 AGENT_FS_TOOLS = [

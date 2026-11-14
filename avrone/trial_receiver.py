@@ -65,6 +65,7 @@ class TrialStore:
         # Never chmod a pre-existing parent such as /tmp. Private storage
         # is required, and the same invariant is checked on every connection.
         self._parent_identity: tuple[int, int] | None = None
+        self._database_identity: tuple[int, int] | None = None
         self._assert_private_parent()
         self._assert_database_file()
         self._initialize()
@@ -98,12 +99,12 @@ class TrialStore:
         elif self._parent_identity != identity:
             raise TrialStoreError("trial data directory identity changed since initialization")
 
-    def _assert_database_file(self) -> None:
-        """Reject non-regular and multiply-linked database files before SQLite opens them."""
+    def _assert_database_file(self) -> tuple[int, int] | None:
+        """Return the regular single-link SQLite file identity, or None if absent."""
         try:
             info = self.path.lstat()
         except FileNotFoundError:
-            return
+            return None
         except OSError as exc:
             raise TrialStoreError("trial database path cannot be inspected") from exc
         if stat.S_ISLNK(info.st_mode):
@@ -112,19 +113,43 @@ class TrialStore:
             raise TrialStoreError("trial database must be a regular file")
         if info.st_nlink != 1:
             raise TrialStoreError("trial database must not be a hard link")
+        return info.st_dev, info.st_ino
 
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self._assert_private_parent()
-        self._assert_database_file()
+        before = self._assert_database_file()
+        # A running receiver cannot silently accept a deleted or replaced
+        # database and start a fresh evidence history under the same filename.
+        if self._database_identity is not None and before != self._database_identity:
+            raise TrialStoreError("trial database identity changed since initialization")
+        db: sqlite3.Connection | None = None
         try:
             db = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
+            # Revalidate after sqlite3.connect, which may have followed a changed
+            # pathname between the first lstat and its own file open.
+            self._assert_no_symlink_components(self.path.parent, "trial data directory")
+            self._assert_private_parent()
+            after = self._assert_database_file()
+            if after is None or (before is not None and after != before) or (
+                self._database_identity is not None and after != self._database_identity
+            ):
+                raise TrialStoreError("trial database identity changed during connection")
+            if self._database_identity is None:
+                self._database_identity = after
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA foreign_keys=ON")
             db.execute("PRAGMA busy_timeout=5000")
             db.execute("PRAGMA synchronous=FULL")
             return db
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, TrialStoreError, OSError) as exc:
+            if db is not None:
+                try:
+                    db.close()
+                except sqlite3.Error:
+                    pass
+            if isinstance(exc, TrialStoreError):
+                raise
             raise TrialStoreError("trial database is unavailable") from exc
 
     @staticmethod

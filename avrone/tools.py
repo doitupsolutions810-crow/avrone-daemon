@@ -608,9 +608,8 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
             raise OSError("symlink: use the default mode")
         mode = _stat.S_IMODE(st.st_mode) & ~(_stat.S_ISUID | _stat.S_ISGID)
     except OSError:
-        um = _os.umask(0)
-        _os.umask(um)
-        mode = 0o666 & ~um
+        from .safeio import current_umask as _cu  # round 58: no umask(0) window for other threads
+        mode = 0o666 & ~_cu()
     from .safeio import mkstemp_beside as _mkstemp_beside
     fd, tmp = _mkstemp_beside(p)
     try:
@@ -624,7 +623,7 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
         except OSError:
             pass
         from .safeio import with_target as _with_target
-        t = _with_target(e, p)
+        t = _with_target(e, p, tmp)  # round 58: never name the random temp file
         if t is e:
             raise
         raise t from e

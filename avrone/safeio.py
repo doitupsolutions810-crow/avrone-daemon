@@ -20,14 +20,41 @@ import tempfile
 from pathlib import Path
 
 _UMASK: int | None = None
+_UMASK_LOCK = __import__("threading").Lock()
+
+
+def _proc_umask() -> int | None:
+    """The umask from /proc/self/status (Linux 4.7+), read without changing it; None elsewhere."""
+    try:
+        with open("/proc/self/status", "rb") as f:
+            for line in f:
+                if line.startswith(b"Umask:"):
+                    v = int(line.split()[1], 8)
+                    return v if 0 <= v <= 0o777 else None
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def current_umask() -> int:
+    """The process umask. Round 58: reading it as umask(0) then umask(old) leaves a window where
+    the umask is 0 for every thread, so a file another thread created then came out 0666/0777
+    (world-writable), and two first calls racing could even read back that 0 and cache it.
+    /proc/self/status is read when present; otherwise the swap is done once, under a lock."""
+    global _UMASK
+    v = _proc_umask()
+    if v is not None:
+        return v
+    with _UMASK_LOCK:
+        if _UMASK is None:
+            old = os.umask(0o077)  # the brief window is restrictive, never world-writable
+            os.umask(old)
+            _UMASK = old
+        return _UMASK
 
 
 def _default_mode() -> int:
-    global _UMASK
-    if _UMASK is None:
-        _UMASK = os.umask(0)
-        os.umask(_UMASK)
-    return 0o666 & ~_UMASK
+    return 0o666 & ~current_umask()
 
 
 TMP_NAME_KEEP = 120  # bytes of the target's name kept in a temp name (NAME_MAX is 255)
@@ -58,10 +85,18 @@ def mkstemp_beside(p: Path) -> tuple[int, str]:
         raise type(e)(e.errno, e.strerror or os.strerror(e.errno), str(p)) from None
 
 
-def with_target(e: BaseException, p: Any) -> BaseException:
+def with_target(e: BaseException, p: Any, tmp: Any = None) -> BaseException:
     """`e` naming `p` when it names no file. Round 124: a full disk or file-size limit hit while
     writing raised a bare "[Errno 27] File too large" (write() errors carry no filename), so the
-    agent was not told which file failed. Same class and errno; anything else is returned as is."""
+    agent was not told which file failed. Same class and errno; anything else is returned as is.
+    Round 58: an error naming the random temp file `tmp` (os.replace onto a directory,
+    chmod refused: "'.f.x8k2.tmp' -> 'f'") names `p` instead."""
+    if isinstance(e, OSError) and e.errno is not None and tmp is not None and os.fspath(tmp) in (
+            e.filename, e.filename2):
+        try:
+            return type(e)(e.errno, e.strerror or os.strerror(e.errno), str(p))
+        except Exception:  # noqa: BLE001
+            return e
     if isinstance(e, OSError) and e.errno is not None and e.filename is None and e.filename2 is None:
         try:
             return type(e)(e.errno, e.strerror or os.strerror(e.errno), str(p))
@@ -88,10 +123,29 @@ def atomic_write(path: str | os.PathLike, data: str | bytes, *, encoding: str = 
             os.unlink(tmp)
         except OSError:
             pass
-        t = with_target(e, p)
+        t = with_target(e, p, tmp)
         if t is e:
             raise
         raise t from e
+    if fsync:
+        fsync_dir(p.parent)
+
+
+def fsync_dir(d: str | os.PathLike) -> None:
+    """fsync a directory so a rename into it survives power loss (round 58: atomic_write(fsync=True)
+    synced the data but not the rename, so after a crash the old file could come back). Best
+    effort: a platform or filesystem that cannot open or sync a directory is skipped."""
+    try:
+        fd = os.open(d, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | _CLOEXEC)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
 
 
 def open_nofollow(path: str | os.PathLike, flags: int, mode: int = 0o666) -> int:
@@ -128,10 +182,15 @@ def _open_regular(path: str | os.PathLike, flags: int, mode: int, follow: bool =
     return fd
 
 
+_APPEND_MODES = frozenset({"ab", "a", "a+b", "a+", "ba", "ab+", "a+t", "at"})
+
+
 def open_append(path: str | os.PathLike, mode: str = "ab"):
     """A file object appending to a regular file (created if missing). A symlink, FIFO or other
     special file at `path` raises NotRegularFile instead of being followed or blocking.
     mode: "ab", "a" (text, utf-8), "a+b" or "a+" (read too)."""
+    if mode not in _APPEND_MODES:  # round 58: a bad mode leaked the fd (fdopen raised after open)
+        raise ValueError(f"open_append mode must be one of {sorted(_APPEND_MODES)}, not {mode!r}")
     rw = "+" in mode
     fd = _open_regular(path, (os.O_RDWR if rw else os.O_WRONLY) | os.O_APPEND | os.O_CREAT, 0o666)
     if "b" in mode:
@@ -160,7 +219,9 @@ def flock_wait(fd: int, timeout_s: float | None = None) -> bool:
     import errno
     import fcntl
     import time as _t
-    wait = lock_wait_s() if timeout_s is None else max(0.0, float(timeout_s))
+    wait = lock_wait_s() if timeout_s is None else float(timeout_s)
+    # round 58: inf (or 1e308) waited forever and NaN slipped through max(); same 0..3600 as the env
+    wait = 0.0 if wait != wait or wait < 0 else min(wait, 3600.0)
     deadline = _t.monotonic() + wait
     delay = 0.002
     while True:
@@ -186,10 +247,11 @@ def read_regular(path: str | os.PathLike, max_bytes: int | None = None) -> bytes
     """Bytes of a regular file, or None when it is missing, a symlink or special file. With
     max_bytes, a bigger file yields only its last max_bytes bytes, starting after the first newline
     in them (whole lines only)."""
-    try:
-        fd = _open_regular(path, os.O_RDONLY, 0)
-    except (FileNotFoundError, NotRegularFile):
+    fd = _open_or_none(path)
+    if fd is None:
         return None
+    if max_bytes is not None:
+        max_bytes = max(0, int(max_bytes))  # round 58: a negative cap raised ValueError from read()
     with os.fdopen(fd, "rb") as f:
         size = os.fstat(f.fileno()).st_size
         if max_bytes is None or size <= max_bytes:
@@ -208,17 +270,46 @@ def read_capped(path: str | os.PathLike, max_bytes: int) -> bytes | None:
     """Bytes of a regular file of at most max_bytes. None when it is missing, a symlink or a special
     file (FIFO, socket, device, directory); FileTooBig when it is bigger than max_bytes (also when
     it grows past the cap while being read)."""
-    try:
-        fd = _open_regular(path, os.O_RDONLY, 0)
-    except (FileNotFoundError, NotRegularFile):
+    max_bytes = max(0, int(max_bytes))
+    fd = _open_or_none(path)
+    if fd is None:
         return None
-    with os.fdopen(fd, "rb") as f:
-        if os.fstat(f.fileno()).st_size > max_bytes:
+    # round 58: f.read(max_bytes + 1) allocated the whole cap up front, so a 2-byte file read under
+    # a 1 GB cap peaked at 1 GB (callers pass quota-sized caps) and a cap past ssize_t raised
+    # OverflowError. Reads now grow with the file: its size + 1, then 64 KiB steps if it grows.
+    with os.fdopen(fd, "rb", buffering=0) as f:
+        size = os.fstat(f.fileno()).st_size
+        if size > max_bytes:
             raise FileTooBig(f"{Path(path).name} is over {max_bytes} bytes")
-        data = f.read(max_bytes + 1)
-    if len(data) > max_bytes:
+        want = max_bytes + 1
+        parts: list[bytes] = []
+        got = 0
+        step = size + 1
+        while got < want:
+            chunk = f.read(min(want - got, step))
+            if not chunk:
+                break
+            parts.append(chunk)
+            got += len(chunk)
+            step = 65536
+    if got > max_bytes:
         raise FileTooBig(f"{Path(path).name} is over {max_bytes} bytes")
-    return data
+    return b"".join(parts)
+
+
+def _open_or_none(path: str | os.PathLike) -> int | None:
+    """_open_regular for reading, None when nothing readable can be there: missing, a symlink or
+    special file, a path through a regular file (ENOTDIR), or a NUL in the path (round 58: the last
+    two raised NotADirectoryError / ValueError past callers that expected None for "missing")."""
+    try:
+        return _open_regular(path, os.O_RDONLY, 0)
+    except (FileNotFoundError, NotADirectoryError, NotRegularFile):
+        return None
+    except ValueError:
+        raw = os.fspath(path)
+        if ("\0" if isinstance(raw, str) else b"\0") in raw:
+            return None
+        raise
 
 
 def open_read(path: str | os.PathLike, follow: bool = False):

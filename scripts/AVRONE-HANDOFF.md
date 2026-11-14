@@ -907,3 +907,18 @@ Tests: `tests/test_presence_bootstrap_robust.py`.
 - `prepare_event`: NaN/Infinity nested in the payload went out as bare `NaN` (not JSON). A lone surrogate in the payload or run_id raised UnicodeEncodeError. Non-string keys collided (`{1:..,"1":..}`) or made sort_keys raise TypeError. Sets and other objects reached the "too large" message. Each now gets an explicit `(None, detail)`.
 
 Tests: `tests/test_secretshapes_fusion_robust.py`.
+
+## Hardening round 58 (2026-11-14): safeio edges
+
+`avrone/safeio.py` is the shared primitive for every state write and capped read. Fixes:
+
+- **umask window.** `_default_mode()` and `tools.atomic_write_bytes` read the umask as `umask(0)` then `umask(old)`. For that moment the umask was 0 for every thread, so a file another thread created came out world-writable. Two racing first calls could also cache 0 forever. `current_umask()` now reads `/proc/self/status` (`Umask:`) without changing anything. Where `/proc` isn't available, it swaps once, under a lock, through `0o077` (so the window is restrictive).
+- **Temp-name leaks.** `os.replace` onto a directory, or a refused chmod, raised `'.d.39xnzo5r.tmp' -> 'd'`. Round 121 had removed exactly this from the mkstemp path. `with_target(e, p, tmp)` now renames those errors to the target, in both `atomic_write` and `tools.atomic_write_bytes`.
+- **fsync durability.** `atomic_write(fsync=True)` synced the data but not the rename, so after a power loss the old file could come back. It now calls `fsync_dir(parent)` (best effort).
+- **open_append fd leak.** With a bad mode, the fd was opened and then `fdopen` raised, leaking 1 fd per call. Modes like `"r"`/`"w"` were silently accepted, and it created the file anyway. The mode is now validated before the open.
+- **read_capped allocation.** `f.read(max_bytes + 1)` allocated the whole cap up front: a 2-byte file under a 1 GB cap peaked at 1,000,004,810 bytes (callers pass `quota_bytes()+1MB` and env-sized caps). A cap past ssize_t raised OverflowError. Reads now grow with the file (size+1, then 64 KiB steps), and the grew-past-cap check is kept.
+- **Negative caps.** `read_regular(p, -3)` raised ValueError from `read()`, and `read_capped(empty, -1)` raised FileTooBig. Both caps now clamp to 0.
+- **Impossible paths.** A NUL in the path (ValueError) and a path through a regular file (NotADirectoryError) escaped callers that catch only FileNotFoundError/FileTooBig. Both now read as None, meaning missing.
+- **flock_wait.** `timeout_s=inf`/`1e308` waited forever. It's now NaN-safe and capped at 3600 s, matching `AVRONE_LOCK_WAIT_S`.
+
+Tests: `tests/test_safeio_robust.py` (59 tests).

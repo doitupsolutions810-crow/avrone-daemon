@@ -140,7 +140,10 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
         if len(text) > LESSON_DIGEST:
             text = text[:LESSON_DIGEST] + "..."
         src = redact_text(one_line(r.get("task", "") or ""))[:80]
-        line = f"- [{when} ago] {one_line(r.get('key', '?'))}" + (f" ({src})" if src else "") + f": {text}"
+        # round 67: the key was the one field shown unredacted, so a lesson stored under a token-
+        # shaped key (a model naming a note after the credential it found) printed it in full
+        key = redact_text(one_line(r.get("key", "?")))[:120]
+        line = f"- [{when} ago] {key}" + (f" ({src})" if src else "") + f": {text}"
         if used + len(line) + 1 > LESSON_RECALL_MAX_CHARS:
             lines.append(f"... {len(ranked[:lim]) - shown} more not shown (output cap)")
             break

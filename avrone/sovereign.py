@@ -23,7 +23,19 @@ from . import agentcontainer, agentfs
 from .config import Settings
 
 
-_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+# round 67: the old pattern knew CSI, OSC and a few two-byte escapes only, so tput sgr0's "\x1b(B",
+# DECSC/DECRC "\x1b7"/"\x1b8", keypad "\x1b=", the 8-bit CSI U+009B and a trailing lone ESC
+# reached the transcript (and any terminal that renders it) raw, and a DCS/APC string (sixel,
+# tmux passthrough) lost only its introducer, leaving its payload as junk text. ECMA-48 in full:
+_ANSI_RE = re.compile(
+    r"(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])(?:[^\x1b\x9c]*(?:\x1b\\|\x9c)|[^\x1b\x9c\n]*)"  # DCS/SOS/PM/APC
+    #   string; one never terminated is dropped to its line end only, so it can't eat the error below
+    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"                                # CSI (7- and 8-bit)
+    r"|(?:\x1b\]|\x9d)[^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?"            # OSC (to BEL/ST, or line end)
+    r"|\x1b[ -/]+[0-~]"                                                # nF: charset "(B", "#8", "%G"
+    r"|\x1b[0-~]"                                                      # Fp/Fe/Fs: "7", "8", "=", "c"
+    r"|\x1b[ -/]*(?![ -~])"                                             # a lone/cut-off ESC (+ partial nF)
+    r"|[\x80-\x9f]")                                                    # any other C1 control (a lone 8-bit CSI)
 _SIGNALS = {int(v): v.name for v in signal.Signals}
 OUTPUT_HEAD_BYTES = 1024 * 1024   # per stream, kept in memory from the start ...
 OUTPUT_TAIL_BYTES = 256 * 1024    # ... plus the last 256 KB; the middle is counted, not kept
@@ -45,6 +57,8 @@ def clean_output(s: str) -> str:
     s = _ANSI_RE.sub("", s).replace("\r\n", "\n")
     if "\r" in s:
         s = "\n".join(seg.rstrip("\r").rsplit("\r", 1)[-1] for seg in s.split("\n"))
+        # round 67: collapsing a redrawn line can join the halves of an escape ("\x1b\r[m")
+        s = _ANSI_RE.sub("", s)
     return s
 
 

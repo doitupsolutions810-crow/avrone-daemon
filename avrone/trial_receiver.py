@@ -810,6 +810,11 @@ class TrialStore:
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
+            # A quarantine audit spans conflict rows, original trials and
+            # sender markers. Pin all SELECTs to one WAL read snapshot:
+            # concurrent legitimate writes must not create a mixed-state
+            # false corruption report between those queries.
+            db.execute("BEGIN")
             rows = db.execute(
                 "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
                 "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"

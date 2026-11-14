@@ -708,11 +708,15 @@ class TrialStore:
         # SQLite may silently turn NaN into NULL. Never commit a receipt,
         # first-seen trial, or quarantine marker with invalid chronology.
         # Check before opening a transaction so no partial evidence is written.
+        # Use exact built-in number types: a float/int subclass may override
+        # comparisons or conversion, and SQLite INTEGERs must fit in int64.
+        # Checking the integer bound before math.isfinite avoids OverflowError
+        # when the clock returns an enormous Python integer (e.g. 10**1000).
         if (
-            isinstance(now, bool)
-            or not isinstance(now, (int, float))
-            or not math.isfinite(now)
+            type(now) not in (int, float)
             or now < 0
+            or (type(now) is int and now > (1 << 63) - 1)
+            or not math.isfinite(now)
         ):
             raise TrialStoreError("receiver clock returned an invalid receipt timestamp")
         trial_id = envelope["trial_id"]

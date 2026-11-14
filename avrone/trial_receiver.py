@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -414,6 +415,32 @@ class TrialStore:
             db.close()
 
     @staticmethod
+    def _verify_stored_provenance(*, sender: Any, transport: Any,
+                                  bridge_run_id: Any, received_at: Any) -> None:
+        """Validate bounded receiver-authenticated metadata during evidence reads."""
+        if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
+            raise ValueError("stored sender is invalid")
+        if transport not in {"fleet", "bridge"}:
+            raise ValueError("stored transport is invalid")
+        if transport == "bridge":
+            if (not isinstance(bridge_run_id, str)
+                    or not bridge_run_id.strip()
+                    or len(bridge_run_id) > 128
+                    or any(unicodedata.category(ch) == "Cc" for ch in bridge_run_id)):
+                raise ValueError("stored bridge provenance is invalid")
+            try:
+                bridge_run_id.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ValueError("stored bridge provenance is not valid Unicode") from exc
+        elif bridge_run_id is not None:
+            raise ValueError("fleet transport must not have bridge provenance")
+        if (isinstance(received_at, bool)
+                or not isinstance(received_at, (int, float))
+                or not math.isfinite(received_at)
+                or received_at < 0):
+            raise ValueError("stored receipt time is invalid")
+
+    @staticmethod
     def _verify_stored_trial(row: sqlite3.Row) -> dict[str, Any]:
         """Detect stored projection/digest mismatches before presenting evidence.
 
@@ -437,6 +464,12 @@ class TrialStore:
                 raise ValueError("stored source identity differs from canonical bytes")
             if any(row[field] != envelope[field] for field in fields):
                 raise ValueError("stored trial projection differs from canonical bytes")
+            TrialStore._verify_stored_provenance(
+                sender=row["first_sender"],
+                transport=row["first_transport"],
+                bridge_run_id=row["bridge_run_id"],
+                received_at=row["received_at"],
+            )
             return envelope
         except (TypeError, ValueError, KeyError, UnicodeError, RecursionError,
                 OverflowError, sqlite3.Error) as exc:
@@ -682,6 +715,17 @@ class TrialStore:
                 raise ValueError("quarantine sender is invalid")
             if row["transport"] not in {"fleet", "bridge"}:
                 raise ValueError("quarantine transport is invalid")
+            if row["reason"] not in {
+                "canonical source/check/attempt identity arrived with a different trial_id",
+                "same trial_id arrived with a different canonical envelope",
+            }:
+                raise ValueError("quarantine reason is unrecognized")
+            TrialStore._verify_stored_provenance(
+                sender=row["sender"],
+                transport=row["transport"],
+                bridge_run_id=row["bridge_run_id"],
+                received_at=row["received_at"],
+            )
         except (TypeError, ValueError, KeyError, UnicodeError, RecursionError,
                 OverflowError, sqlite3.Error) as exc:
             raise TrialStoreError("stored trial quarantine integrity check failed") from exc

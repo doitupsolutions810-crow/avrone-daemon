@@ -54,6 +54,27 @@ def _source_identity_key(envelope: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+_REQUIRED_SOURCE_IDENTITY_TRIGGERS = {
+    "trial_source_identity_key_required_insert": """CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_insert
+                BEFORE INSERT ON trials
+                WHEN NEW.source_identity_key IS NULL
+                    OR typeof(NEW.source_identity_key) != 'text'
+                    OR length(NEW.source_identity_key) != 64
+                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid source_identity_key');
+                END""",
+    "trial_source_identity_key_required_update": """CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_update
+                BEFORE UPDATE OF source_identity_key ON trials
+                WHEN NEW.source_identity_key IS NULL
+                    OR typeof(NEW.source_identity_key) != 'text'
+                    OR length(NEW.source_identity_key) != 64
+                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid source_identity_key');
+                END""",
+}
+
 class TrialStore:
     """SQLite WAL store. One transaction per envelope; conflicts never replace first-seen data."""
 
@@ -205,6 +226,7 @@ class TrialStore:
             if self._initialized:
                 self._assert_live_schema_version(db)
                 self._assert_live_wal_mode(db)
+                self._assert_source_identity_required_triggers(db)
             return db
         except (sqlite3.Error, TrialStoreError, OSError) as exc:
             if db is not None:
@@ -270,6 +292,32 @@ class TrialStore:
                 raise TrialStoreError("trial source identity unique index integrity check failed")
             return
         raise TrialStoreError("trial source identity unique index is missing")
+
+    @staticmethod
+    def _assert_source_identity_required_triggers(db: sqlite3.Connection) -> None:
+        """Refuse missing or weakened named triggers under the expected schema.
+
+        SQLite's CREATE TRIGGER IF NOT EXISTS does not validate a preexisting
+        trigger with the requested name. Compare the stored SQL to our single
+        canonical definition (SQLite strips IF NOT EXISTS on storage).
+        """
+        for name, creation_sql in _REQUIRED_SOURCE_IDENTITY_TRIGGERS.items():
+            stored = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=? "
+                "AND tbl_name='trials'",
+                (name,),
+            ).fetchone()
+            if stored is None or not isinstance(stored["sql"], str):
+                raise TrialStoreError("trial source identity required trigger is missing")
+            expected = creation_sql.replace(
+                "CREATE TRIGGER IF NOT EXISTS", "CREATE TRIGGER", 1
+            )
+            if re.sub(r"\s+", " ", stored["sql"]).strip() != re.sub(
+                r"\s+", " ", expected
+            ).strip():
+                raise TrialStoreError(
+                    "trial source identity required trigger integrity check failed"
+                )
 
     def _initialize(self) -> None:
         db = self._connect()
@@ -467,32 +515,9 @@ class TrialStore:
                 "ON trials(source_identity_key)"
             )
             self._assert_source_identity_unique_index(db)
-            db.execute(
-                """
-                CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_insert
-                BEFORE INSERT ON trials
-                WHEN NEW.source_identity_key IS NULL
-                    OR typeof(NEW.source_identity_key) != 'text'
-                    OR length(NEW.source_identity_key) != 64
-                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
-                BEGIN
-                    SELECT RAISE(ABORT, 'invalid source_identity_key');
-                END
-                """
-            )
-            db.execute(
-                """
-                CREATE TRIGGER IF NOT EXISTS trial_source_identity_key_required_update
-                BEFORE UPDATE OF source_identity_key ON trials
-                WHEN NEW.source_identity_key IS NULL
-                    OR typeof(NEW.source_identity_key) != 'text'
-                    OR length(NEW.source_identity_key) != 64
-                    OR NEW.source_identity_key GLOB '*[^0-9a-f]*'
-                BEGIN
-                    SELECT RAISE(ABORT, 'invalid source_identity_key');
-                END
-                """
-            )
+            db.execute(_REQUIRED_SOURCE_IDENTITY_TRIGGERS["trial_source_identity_key_required_insert"])
+            db.execute(_REQUIRED_SOURCE_IDENTITY_TRIGGERS["trial_source_identity_key_required_update"])
+            self._assert_source_identity_required_triggers(db)
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trial_receipts_trial_id ON trial_receipts(trial_id)"
             )
@@ -691,6 +716,7 @@ class TrialStore:
             # and the write lock; the second check is inside that lock.
             self._assert_live_schema_version(db)
             self._assert_live_wal_mode(db)
+            self._assert_source_identity_required_triggers(db)
             # Startup schema validation alone is insufficient: a running
             # receiver might outlive a replaced/removed uniqueness index.
             # Check while holding SQLite's writer lock, preventing a DDL swap

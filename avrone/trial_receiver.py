@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .evidence_pool import canonical_source_key, pool_trials
-from .trial_contract import canonical_trial_bytes, validate_trial_envelope
+from .trial_contract import MAX_ENVELOPE_BYTES, canonical_trial_bytes, validate_trial_envelope
 
 SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
 MAX_BATCH = 10
@@ -414,6 +414,43 @@ class TrialStore:
             db.close()
 
     @staticmethod
+    def _verify_stored_trial(row: sqlite3.Row) -> dict[str, Any]:
+        """Detect stored projection/digest mismatches before presenting evidence.
+
+        This catches corruption and inconsistent edits. It is not a cryptographic
+        attestation against a privileged writer able to replace all fields.
+        """
+        fields = (
+            "trial_id", "system", "node", "source", "run_id", "check_id",
+            "check_version", "check_config_sha256", "attempt_id", "outcome",
+        )
+        try:
+            raw = row["canonical_json"]
+            if not isinstance(raw, bytes) or len(raw) > MAX_ENVELOPE_BYTES:
+                raise ValueError("stored canonical JSON must be bounded bytes")
+            envelope = json.loads(raw.decode("utf-8"))
+            if canonical_trial_bytes(envelope) != raw:
+                raise ValueError("stored envelope is not canonical")
+            if row["payload_sha256"] != hashlib.sha256(raw).hexdigest():
+                raise ValueError("stored digest differs from canonical bytes")
+            if row["source_identity_key"] != _source_identity_key(envelope):
+                raise ValueError("stored source identity differs from canonical bytes")
+            if any(row[field] != envelope[field] for field in fields):
+                raise ValueError("stored trial projection differs from canonical bytes")
+            return envelope
+        except (TypeError, ValueError, KeyError, UnicodeError, RecursionError,
+                OverflowError, sqlite3.Error) as exc:
+            raise TrialStoreError("stored trial evidence integrity check failed") from exc
+
+    def _verified_trial_rows(self, db: sqlite3.Connection) -> list[sqlite3.Row]:
+        rows = db.execute("SELECT * FROM trials ORDER BY trial_id").fetchall()
+        if len(rows) > MAX_TRIAL_RECORDS:
+            raise TrialStoreError("stored trial count exceeds receiver capacity")
+        for row in rows:
+            self._verify_stored_trial(row)
+        return rows
+
+    @staticmethod
     def _record_receipt(
         db: sqlite3.Connection, *, trial_id: str, sender: str, transport: str,
         result: str, payload_sha256: str, received_at: float,
@@ -506,15 +543,19 @@ class TrialStore:
                 status = "sender_quarantined"
             else:
                 existing = db.execute(
-                    "SELECT canonical_json FROM trials WHERE trial_id=?", (trial_id,)
+                    "SELECT * FROM trials WHERE trial_id=?", (trial_id,)
                 ).fetchone()
+                if existing is not None:
+                    self._verify_stored_trial(existing)
                 source_identity_key = _source_identity_key(envelope)
                 conflict_reason = None
                 if existing is None:
                     alias = db.execute(
-                        "SELECT trial_id FROM trials WHERE source_identity_key=?",
+                        "SELECT * FROM trials WHERE source_identity_key=?",
                         (source_identity_key,),
                     ).fetchone()
+                    if alias is not None:
+                        self._verify_stored_trial(alias)
                     if alias is None:
                         count = db.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
                         if count >= MAX_TRIAL_RECORDS:
@@ -595,14 +636,11 @@ class TrialStore:
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
         try:
-            rows = db.execute(
-                "SELECT trial_id,source,outcome FROM trials "
-                "WHERE outcome IN ('pass','fail') ORDER BY trial_id"
-            ).fetchall()
+            rows = self._verified_trial_rows(db)
             return pool_trials([
                 {"trial_id": row["trial_id"], "source": row["source"],
                  "failed": row["outcome"] == "fail"}
-                for row in rows
+                for row in rows if row["outcome"] in {"pass", "fail"}
             ])
         except sqlite3.Error as exc:
             raise TrialStoreError("trial pool read failed") from exc
@@ -612,13 +650,17 @@ class TrialStore:
     def non_pass_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
-            rows = db.execute(
-                "SELECT trial_id,source,system,node,run_id,check_id,check_version,"
-                "check_config_sha256,attempt_id,outcome,first_sender,first_transport,"
-                "bridge_run_id,received_at FROM trials "
-                "WHERE outcome NOT IN ('pass','fail') ORDER BY received_at,trial_id"
-            ).fetchall()
-            return [dict(row) for row in rows]
+            fields = (
+                "trial_id", "source", "system", "node", "run_id", "check_id",
+                "check_version", "check_config_sha256", "attempt_id", "outcome",
+                "first_sender", "first_transport", "bridge_run_id", "received_at",
+            )
+            rows = self._verified_trial_rows(db)
+            non_pass = (row for row in rows if row["outcome"] not in {"pass", "fail"})
+            return [
+                {field: row[field] for field in fields}
+                for row in sorted(non_pass, key=lambda r: (r["received_at"], r["trial_id"]))
+            ]
         except sqlite3.Error as exc:
             raise TrialStoreError("non-pass trial read failed") from exc
         finally:

@@ -666,14 +666,42 @@ class TrialStore:
         finally:
             db.close()
 
+    @staticmethod
+    def _verify_quarantine_row(row: sqlite3.Row) -> None:
+        """Refuse malformed conflict evidence instead of displaying an unverified digest."""
+        try:
+            raw = row["incoming_json"]
+            if not isinstance(raw, bytes) or len(raw) > MAX_ENVELOPE_BYTES:
+                raise ValueError("quarantine envelope is not bounded bytes")
+            envelope = json.loads(raw.decode("utf-8"))
+            if canonical_trial_bytes(envelope) != raw:
+                raise ValueError("quarantine envelope is not canonical")
+            if row["incoming_sha256"] != hashlib.sha256(raw).hexdigest():
+                raise ValueError("quarantine digest does not match incoming bytes")
+            if row["trial_id"] != envelope["trial_id"]:
+                raise ValueError("quarantine trial identity differs from incoming bytes")
+            if not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"]):
+                raise ValueError("quarantine sender is invalid")
+            if row["transport"] not in {"fleet", "bridge"}:
+                raise ValueError("quarantine transport is invalid")
+        except (TypeError, ValueError, KeyError, UnicodeError, RecursionError,
+                OverflowError, sqlite3.Error) as exc:
+            raise TrialStoreError("stored trial quarantine integrity check failed") from exc
+
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
             rows = db.execute(
-                "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,received_at "
-                "FROM trial_quarantine ORDER BY quarantine_id"
+                "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
+                "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"
             ).fetchall()
-            return [dict(row) for row in rows]
+            public = (
+                "trial_id", "sender", "transport", "bridge_run_id",
+                "reason", "incoming_sha256", "received_at",
+            )
+            for row in rows:
+                self._verify_quarantine_row(row)
+            return [{key: row[key] for key in public} for row in rows]
         except sqlite3.Error as exc:
             raise TrialStoreError("trial quarantine read failed") from exc
         finally:

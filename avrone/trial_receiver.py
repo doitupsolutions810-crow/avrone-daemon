@@ -115,9 +115,29 @@ class TrialStore:
             raise TrialStoreError("trial database must not be a hard link")
         return info.st_dev, info.st_ino
 
+    def _assert_sidecar_files(self) -> None:
+        """Do not let SQLite open planted symlink, device or multiply-linked sidecars.
+
+        SQLite may use -wal, -shm and -journal next to the database filename.
+        Legitimate absent or single-link regular sidecars are accepted.
+        """
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(str(self.path) + suffix)
+            try:
+                info = sidecar.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise TrialStoreError("trial database sidecar cannot be inspected") from exc
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise TrialStoreError(
+                    "trial database sidecar must be a regular single-link file"
+                )
+
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self._assert_private_parent()
+        self._assert_sidecar_files()
         before = self._assert_database_file()
         # A running receiver cannot silently accept a deleted or replaced
         # database and start a fresh evidence history under the same filename.
@@ -130,6 +150,7 @@ class TrialStore:
             # pathname between the first lstat and its own file open.
             self._assert_no_symlink_components(self.path.parent, "trial data directory")
             self._assert_private_parent()
+            self._assert_sidecar_files()
             after = self._assert_database_file()
             if after is None or (before is not None and after != before) or (
                 self._database_identity is not None and after != self._database_identity

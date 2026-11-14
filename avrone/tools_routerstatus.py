@@ -73,6 +73,21 @@ def _gateway(ctx: "AgentContext") -> Any:
     return gw if isinstance(gw, Gateway) else None
 
 
+def _httpx_route(base_url: str) -> str | None:
+    """httpx's own proxy choice for this url ("direct" | "env-proxy"), or None when it can not say
+    (e.g. a socks:// ALL_PROXY without socksio installed: building the client raises)."""
+    try:
+        import httpx
+        url = httpx.URL(base_url)
+        if not url.host:
+            return "direct"
+        with httpx.Client(trust_env=True) as c:
+            t = c._transport_for_url(url)
+            return "direct" if t is c._transport else "env-proxy"
+    except Exception:  # noqa: BLE001 - a read-only report falls back to the urllib view
+        return None
+
+
 def route_of(base_url: str) -> str:
     """How calls to this upstream leave the node: direct (loopback, or no proxy applies) or
     env-proxy (an HTTP(S)_PROXY in the environment will carry them). The proxy itself is never shown."""
@@ -86,11 +101,17 @@ def route_of(base_url: str) -> str:
         host = parts.hostname or ""
     except (ValueError, TypeError):
         return "direct"
+    # round 64: ask httpx itself (the gateway posts through httpx.AsyncClient with trust_env), so the
+    # report follows the real routing: urllib's view ignored ALL_PROXY, which httpx honours, and
+    # router_status said "direct" while every upstream call went through the proxy.
+    v = _httpx_route(str(base_url or ""))
+    if v is not None:
+        return v
     try:
         proxies = urllib.request.getproxies()
     except Exception:  # noqa: BLE001 - round 53: an odd proxy env never breaks a read-only report
         return "direct"
-    if not proxies.get(parts.scheme or "https") or not host:
+    if not host or not (proxies.get(parts.scheme or "https") or proxies.get("all")):
         return "direct"
     try:
         if urllib.request.proxy_bypass(host):
@@ -142,7 +163,9 @@ def router_status(ctx: "AgentContext") -> dict[str, Any]:
         lead = getattr(u, "lead_model", "") or ""
         rows.append({"position": i, "role": "primary" if i == 0 else "fallback", "upstream": ref,
                      "lead_model": _label(lead, secrets) if lead else None, "state": state,
-                     "route": route_of(str(getattr(u, "base_url", "") or "")),
+                     # round 64: only rows that are shown get a route (each builds an httpx client)
+                     "route": (route_of(str(getattr(u, "base_url", "") or ""))
+                               if i < ROUTER_STATUS_MAX_UPSTREAMS else "direct"),
                      "cooldown_s": remaining, "fails": int(_num(getattr(u, "fails", 0)) or 0),
                      "calls": int(_num(getattr(u, "calls", 0)) or 0),
                      "errors": int(_num(getattr(u, "errors", 0)) or 0)})

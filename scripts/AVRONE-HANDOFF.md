@@ -973,3 +973,13 @@ Tests: `tests/test_agentfs_tools_robust.py`.
 - **pack_list order.** Packs were listed in scandir (filesystem) order, so "first 50 shown" named a different 50 from one call to the next, and `flake_probe` would flag the tool nondeterministic. They're now sorted by name.
 - Reviewed with no bugs found: `tools_mempeek` (namespace sanitized by `agent_namespace`; values redacted before truncation) and `peer_audit` (check_node_url messages carry no url).
 - Tests: `tests/test_researchnote_lessons_robust.py` (32).
+
+## Hardening round 64: router_status route (`tools_routerstatus.py`), codex_stats JSON and line splitting (`tools_codexstats.py`)
+
+- **Wrong route under ALL_PROXY.** `route_of` used urllib's view, which only checked the url's own scheme key. httpx (the gateway's client, `trust_env=True` for non-loopback) also honors `ALL_PROXY`/`all_proxy`, so router_status said `route=direct` while every upstream call went through the proxy. `route_of` now asks httpx itself (`Client(trust_env=True)._transport_for_url`). If httpx can't say (for example a `socks5://` ALL_PROXY without socksio), it falls back to urllib with `all` included. Loopback stays direct. The proxy is never printed.
+- Only rows that are shown get a route, because each check builds an httpx client and a misconfigured chain of thousands built thousands of them.
+- **codex_stats format=json not parseable.** `_cap` cut an over-long indented dump mid-string (60 long kinds, 60 tools and 50 recent rows come to about 12k characters). A new `_json_capped` compacts first, then drops the oldest recent rows (`recent_trimmed`), then the smallest tool and kind counts (`tools_hidden`/`kinds_hidden`). The output always parses and stays under the cap.
+- **Records split at Unicode separators.** The log tail was split with `splitlines()`, so a raw U+2028/U+0085/`\x0b`/`\x0c`/`\x1c`–`\x1e` inside a JSON string from a non-codex writer broke the record in two and the event vanished from every count. It now splits on `\n` only; CRLF still parses.
+- Reviewed with no bugs found: `tools_gatewayview` (replay_guard, stream_status).
+- `test_route_of_getproxies_raising` now pins `_httpx_route` to None, so it still exercises the urllib fallback.
+- Tests: `tests/test_routerstatus_codexstats_robust.py` (33).

@@ -114,6 +114,8 @@ def test_route_of_never_raises(url):
 def test_route_of_getproxies_raising(monkeypatch):
     import urllib.request
     monkeypatch.setattr(urllib.request, "getproxies", lambda: 1 / 0)
+    # round 64: httpx answers first; this checks the urllib fallback when httpx can not say
+    monkeypatch.setattr(rs, "_httpx_route", lambda u: None)
     assert rs.route_of("https://api.example.com") == "direct"
 
 

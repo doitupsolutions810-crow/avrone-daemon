@@ -103,7 +103,10 @@ def _read_tail(p: Path) -> tuple[list[dict[str, Any]], bool]:
         if more or (budget <= 0 and i + 1 < len(chain)):
             truncated = True
             break
-    lines = b"".join(chunks).decode("utf-8", errors="replace").splitlines()
+    # round 64: split on "\n" only (the project rule): splitlines() also broke a record at a raw
+    # U+2028/U+0085/\x1c-\x1e/\x0b/\x0c inside a JSON string from a non-codex writer, and both
+    # halves then failed to parse, so the event vanished from every count
+    lines = b"".join(chunks).decode("utf-8", errors="replace").split("\n")
     if truncated and lines:
         lines = lines[1:]  # first line is almost certainly cut mid-record
     out = []
@@ -169,6 +172,30 @@ def _cap(text: str) -> str:
     return text if len(text) <= CODEX_STATS_MAX_CHARS else text[:CODEX_STATS_MAX_CHARS] + "\n...[truncated]"
 
 
+def _json_capped(rep: dict[str, Any]) -> str:
+    """JSON that always parses. Round 64: _cap cut an over-long dump (60 long kinds, 60 tools, 50
+    recent rows reach ~12k chars) mid-string, so format=json returned text no parser accepted.
+    Compact first, then drop recent rows, then the smallest tool and kind counts, and say so."""
+    out = json.dumps(rep, indent=1, sort_keys=True)
+    if len(out) <= CODEX_STATS_MAX_CHARS:
+        return out
+
+    def dump() -> str:
+        return json.dumps(rep, sort_keys=True, separators=(",", ":"))
+    out = dump()
+    while len(out) > CODEX_STATS_MAX_CHARS and rep["recent"]:
+        rep["recent"] = rep["recent"][1:]  # oldest of the recent rows first
+        rep["recent_trimmed"] = True
+        out = dump()
+    for key, hidden in (("tools_called", "tools_hidden"), ("by_kind", "kinds_hidden")):
+        while len(out) > CODEX_STATS_MAX_CHARS and rep[key]:
+            items = list(rep[key].items())  # most_common order: the last is the smallest
+            rep[key] = dict(items[:-1])
+            rep[hidden] = rep.get(hidden, 0) + 1
+            out = dump()
+    return out
+
+
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_codex_stats(ctx: "AgentContext", args: dict[str, Any]) -> str:
     scope = str(args.get("scope") or "self").strip().lower()
@@ -185,7 +212,7 @@ async def t_codex_stats(ctx: "AgentContext", args: dict[str, Any]) -> str:
     except LookupError as e:
         return f"ERROR: {e}"
     if str(args.get("format", "text")).lower() == "json":
-        return _cap(json.dumps(rep, indent=1, sort_keys=True))
+        return _json_capped(rep)
     who = f"agent {rep['agent']}" if scope == "self" else "whole run"
     lines = [f"codex_stats run {rep['run_id']} ({who}{', kind ' + kind + '*' if kind else ''}; "
              f"read-only, payloads never shown)",

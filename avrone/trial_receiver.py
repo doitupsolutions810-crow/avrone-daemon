@@ -1264,6 +1264,8 @@ class TrialStore:
             receipt_ids: set[int] = set()
             first_seen_trials: set[str] = set()
             conflict_senders: set[str] = set()
+            earlier_duplicates: set[str] = set()
+            earlier_blocked_senders: set[str] = set()
             for row in rows:
                 if len(retained) >= MAX_RECEIPTS:
                     raise TrialStoreError("stored trial receipt count exceeds capacity")
@@ -1283,16 +1285,33 @@ class TrialStore:
                         raise TrialStoreError(
                             "stored duplicate first-seen trial receipt"
                         )
+                    # Receipt IDs are delivery sequence numbers. A first-seen
+                    # receipt cannot arrive after a previously retained
+                    # duplicate for the same trial. If the first receipt was
+                    # pruned, only duplicates remain and that is valid.
+                    if row["trial_id"] in earlier_duplicates:
+                        raise TrialStoreError(
+                            "stored duplicate receipt precedes first-seen receipt"
+                        )
                     first_seen_trials.add(row["trial_id"])
+                elif row["result"] == "duplicate":
+                    earlier_duplicates.add(row["trial_id"])
                 # The first conflict quarantines its sender. Later deliveries
-                # from that sender must be sender_quarantined, not a second
-                # conflict_quarantined receipt for the same sender.
+                # from that sender must be sender_quarantined, not another
+                # conflict_quarantined event. If the first receipt was pruned,
+                # retained blocked receipts are still valid.
                 if row["result"] == "conflict_quarantined":
                     if row["sender"] in conflict_senders:
                         raise TrialStoreError(
                             "stored duplicate first-conflict sender receipt"
                         )
+                    if row["sender"] in earlier_blocked_senders:
+                        raise TrialStoreError(
+                            "stored blocked receipt precedes first-conflict receipt"
+                        )
                     conflict_senders.add(row["sender"])
+                elif row["result"] == "sender_quarantined":
+                    earlier_blocked_senders.add(row["sender"])
                 retained.append(dict(row))
             return retained
         except sqlite3.Error as exc:

@@ -582,7 +582,8 @@ class TrialStore:
                 "CREATE INDEX IF NOT EXISTS trial_quarantine_trial_id ON trial_quarantine(trial_id)"
             )
             db.execute(f"PRAGMA user_version = {DB_SCHEMA_VERSION}")
-            os.chmod(self.path, 0o600)
+            # DB permissions were pinned and finalized before enabling WAL;
+            # never follow the pathname a second time after migration.
             db.commit()
         except TrialStoreError:
             db.rollback()

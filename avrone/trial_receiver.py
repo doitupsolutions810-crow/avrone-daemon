@@ -202,10 +202,80 @@ class TrialStore:
                     "(expected 0600)"
                 )
 
+    def _create_private_database_once(self) -> None:
+        """Create a missing database at 0600 before SQLite can open it.
+
+        sqlite3.connect(path) defaults to creating an absent database using
+        ambient process umask. That leaves a short 0644 exposure under umask
+        022 before our pre-WAL fchmod runs. Create exclusively at 0600 with
+        O_NOFOLLOW and inspect the file descriptor before SQLite opens it.
+        Competing initializers are allowed: exactly one can win O_EXCL and
+        the others must revalidate the winner's regular single-link inode.
+        A previously pinned store must never recreate a missing database.
+        """
+        if self._database_identity is not None:
+            return
+        if self._assert_database_file() is not None:
+            return
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            raise TrialStoreError("secure exclusive database creation is unavailable")
+        flags = (
+            os.O_RDWR | os.O_CREAT | os.O_EXCL | nofollow
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        fd = None
+        try:
+            fd = os.open(self.path, flags, 0o600)
+        except FileExistsError:
+            # The winner may be an independent process initializing the same
+            # directory. Validate what actually won instead of chmodding it
+            # or overwriting a competing receiver's evidence. Because this
+            # filename was absent just before O_EXCL, a newly raced-in 0644
+            # file is not a trusted *preexisting* legacy database: refuse it.
+            if self._assert_database_file() is None:
+                raise TrialStoreError("trial database vanished during exclusive creation")
+            try:
+                raced_info = self.path.lstat()
+            except OSError as exc:
+                raise TrialStoreError(
+                    "raced database cannot be inspected securely"
+                ) from exc
+            if stat.S_IMODE(raced_info.st_mode) != 0o600:
+                raise TrialStoreError(
+                    "competing trial database creation must be private (0600)"
+                )
+            return
+        except OSError as exc:
+            raise TrialStoreError(
+                "trial database cannot be created securely"
+            ) from exc
+        try:
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                raise TrialStoreError(
+                    "new trial database must be a private regular single-link file"
+                )
+            self._assert_file_owner(info, "trial database")
+            if self._assert_database_file() != identity:
+                raise TrialStoreError(
+                    "trial database identity changed during exclusive creation"
+                )
+        finally:
+            os.close(fd)
+
     def _connect(self) -> sqlite3.Connection:
         self._assert_no_symlink_components(self.path.parent, "trial data directory")
         self._assert_private_parent()
         self._assert_sidecar_files()
+        # For a new store, atomically create an owned 0600 file before SQLite
+        # itself can create a permissive 0644 file under the process umask.
+        self._create_private_database_once()
         before = self._assert_database_file()
         # A running receiver cannot silently accept a deleted or replaced
         # database and start a fresh evidence history under the same filename.

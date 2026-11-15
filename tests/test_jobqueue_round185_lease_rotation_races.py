@@ -554,3 +554,49 @@ def test_requeue_invalidates_prior_owner_before_and_after_reclaim(tmp_path, oper
             await asyncio.gather(owner.close(), successor.close())
 
     asyncio.run(run())
+
+
+
+def test_cyclic_payload_rejected_atomically_and_connection_remains_usable(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "cyclic-payload.db")
+        try:
+            cyclic = {}
+            cyclic["self"] = cyclic
+            with pytest.raises(ValueError):
+                await queue.enqueue("cycle", cyclic)
+            assert await queue.stats() == {}
+            assert queue._db.in_transaction is False
+
+            jid = await queue.enqueue("after-cycle", {"safe": True})
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == jid
+            assert claim["payload"] == {"safe": True}
+            assert await queue.complete(jid, {"ok": True}, claim["token"]) is True
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("depth,accepted", [(63, True), (64, True), (65, False), (66, False)])
+def test_payload_nesting_boundary_is_stable_and_rejects_before_insert(tmp_path, depth, accepted):
+    async def run():
+        queue = JobQueue(tmp_path / f"depth-{depth}.db")
+        try:
+            payload = {"leaf": True}
+            for _ in range(depth):
+                payload = {"nested": payload}
+            if accepted:
+                jid = await queue.enqueue("depth", payload)
+                row = await queue.get(jid)
+                assert row is not None and row["status"] == "queued"
+            else:
+                with pytest.raises(ValueError, match="nested too deeply"):
+                    await queue.enqueue("depth", payload)
+                assert await queue.stats() == {}
+            assert queue._db.in_transaction is False
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

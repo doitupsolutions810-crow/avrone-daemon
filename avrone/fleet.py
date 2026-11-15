@@ -217,7 +217,7 @@ SPAWN_MODES = ("squad", "chat", "deep")
 PRIVILEGED_CAPABILITIES = {"priv:shell", "priv:admin"}
 PRIVILEGED_HEADER = "x-avrone-privileged"
 # non-spawn capabilities, kept apart from the (minimal) spawn/message table above
-SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}}
+SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}, "trials": {"evidence:trial:ingest"}}
 # netsquad: a squad subtask placed on this node (runs as a sub-squad/chat here, may recurse further down)
 NET_CAPABILITIES: dict[str, set[str]] = {"run": {"squad:net"}}
 NETSQUAD_CAP = "squad:net"
@@ -1289,6 +1289,13 @@ class FleetManager:
             if not self.allowed(sender):
                 why = "empty allowlist with AVRONE_FLEET_REQUIRE_ALLOW" if not self.allow else "AVRONE_FLEET_ALLOW"
                 raise self._refuse("sender_not_allowed", f"sender {sender} not in AVRONE_FLEET_ALLOW ({why})", **ctx)
+        if kind == "trials" and (not self.allow or sender not in self.allow):
+            # Evidence ingestion always requires an explicit, non-empty sender allowlist.
+            raise self._refuse(
+                "sender_not_allowed",
+                "trial ingestion requires sender in a non-empty AVRONE_FLEET_ALLOW",
+                **ctx,
+            )
         if kind == "agentpack" and (not self.allow or sender not in self.allow):
             # moving a whole agent home is never open to "any token holder": explicit allowlist only
             raise self._refuse("sender_not_allowed", f"agent migration from {sender or '?'} refused: sender must be "

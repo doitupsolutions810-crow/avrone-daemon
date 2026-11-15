@@ -1,6 +1,7 @@
 """Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD)."""
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 from typing import Any
 
 import hmac
@@ -173,10 +174,8 @@ HARD_MAX_MESSAGE_CHARS = 5_000_000
 
 def _env_cap(name: str, default: int, hard: int) -> int:
     """Positive int from env, clamped to 1..hard; junk or unset -> default."""
-    try:
-        n = int(str(os.environ.get(name, "")).strip() or default)
-    except (TypeError, ValueError):
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(1, min(hard, n))
 
 
@@ -911,10 +910,8 @@ def ws_send_timeout() -> float:
     """Seconds one event send may block before the client is dropped (AVRONE_WS_SEND_TIMEOUT)."""
     import math as _m
     import os
-    try:
-        v = float(os.environ.get("AVRONE_WS_SEND_TIMEOUT", "").strip() or 30)
-    except ValueError:
-        v = 30.0
+    v_raw = _env_num("AVRONE_WS_SEND_TIMEOUT")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    v = float(v_raw) if v_raw is not None else 30.0
     if not _m.isfinite(v):
         v = 30.0
     return max(1.0, min(600.0, v))

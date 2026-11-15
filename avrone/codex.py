@@ -6,6 +6,7 @@ run, so any run can be replayed or audited later.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import asyncio
 import hashlib
 import json
@@ -130,10 +131,8 @@ DEFAULT_MAX_SUBSCRIBERS, HARD_MAX_SUBSCRIBERS = 64, 1024
 def max_subscribers() -> int:
     """Live event-stream subscribers allowed at once (AVRONE_MAX_WS_SUBSCRIBERS)."""
     import os
-    try:
-        n = int(os.environ.get("AVRONE_MAX_WS_SUBSCRIBERS", "").strip() or DEFAULT_MAX_SUBSCRIBERS)
-    except ValueError:
-        n = DEFAULT_MAX_SUBSCRIBERS
+    n_raw = _env_num("AVRONE_MAX_WS_SUBSCRIBERS")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MAX_SUBSCRIBERS
     return max(1, min(HARD_MAX_SUBSCRIBERS, n))
 
 
@@ -144,10 +143,8 @@ MAX_LINE_BYTES = 4 * 1024 * 1024  # one event line; anything longer is skipped, 
 def replay_limit() -> int:
     """Newest events a replay returns (AVRONE_REPLAY_MAX_EVENTS)."""
     import os
-    try:
-        n = int(os.environ.get("AVRONE_REPLAY_MAX_EVENTS", "").strip() or DEFAULT_REPLAY_EVENTS)
-    except ValueError:
-        n = DEFAULT_REPLAY_EVENTS
+    n_raw = _env_num("AVRONE_REPLAY_MAX_EVENTS")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_REPLAY_EVENTS
     return max(1, min(HARD_REPLAY_EVENTS, n))
 
 
@@ -159,11 +156,10 @@ RUNS_START_CACHE_MAX = 20_000  # parsed run.start lines remembered, keyed by fil
 def runs_cache_s() -> float:
     """How long a runs() directory scan is reused (AVRONE_RUNS_CACHE_S, default 5, 0 = off). A new
     or deleted log (directory mtime), and any log this process appends to, refresh it sooner."""
-    try:
-        v = float(os.getenv("AVRONE_RUNS_CACHE_S", "5"))
-    except ValueError:
+    v = _env_num("AVRONE_RUNS_CACHE_S")  # round 85: shared reader
+    if v is None:
         return 5.0
-    return v if math.isfinite(v) and v > 0 else 0.0
+    return v if v > 0 else 0.0
 
 # Size-based rotation (round 72). A log never rotated: fleet.jsonl gains an event per heartbeat,
 # join, dispatch and refusal for the life of the node, and one long or looping run grew its own log
@@ -176,10 +172,8 @@ DEFAULT_LOG_KEEP, HARD_LOG_KEEP = 3, 100
 
 
 def _env_whole(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(os.environ.get(name, "").strip() or default)
-    except ValueError:
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(lo, min(hi, n))
 
 

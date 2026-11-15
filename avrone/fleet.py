@@ -88,6 +88,7 @@ integrity and auth, not confidentiality.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import asyncio
 import contextlib
 import hashlib
@@ -149,10 +150,8 @@ FLEET_SAVE_DEBOUNCE_S = 5.0
 
 
 def max_nodes() -> int:
-    try:
-        n = int(os.environ.get("AVRONE_FLEET_MAX_NODES", "").strip() or DEFAULT_MAX_NODES)
-    except ValueError:
-        n = DEFAULT_MAX_NODES
+    n_raw = _env_num("AVRONE_FLEET_MAX_NODES")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MAX_NODES
     return max(1, min(HARD_MAX_NODES, n))
 
 # Tests may set this to an httpx transport (e.g. ASGITransport routing to in-process apps).
@@ -642,10 +641,10 @@ NONCE_LOCK_WAIT: "_cv.ContextVar[float | None]" = _cv.ContextVar("avrone_nonce_l
 def nonce_lock_wait_s() -> float:
     """AVRONE_FLEET_NONCE_LOCK_S: deadline for the cross-process nonce lock (default 5 s, 0..60).
     It is taken under the manager's thread lock, so it is kept much shorter than AVRONE_LOCK_WAIT_S."""
-    try:
-        v = float(os.environ.get("AVRONE_FLEET_NONCE_LOCK_S", "").strip() or 5)
-    except ValueError:
+    v_raw = _env_num("AVRONE_FLEET_NONCE_LOCK_S")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    if v_raw is None:
         return 5.0
+    v = float(v_raw)
     if v != v or v < 0:
         return 5.0
     return min(v, 60.0)

@@ -1465,10 +1465,9 @@ def priv_shell_allowlist() -> set[str]:
 
 
 def priv_shell_timeout(requested: Any = None) -> int:
-    try:
-        ceiling = int(os.environ.get("AVRONE_PRIV_SHELL_TIMEOUT", "") or PRIV_SHELL_TIMEOUT_DEFAULT)
-    except ValueError:
-        ceiling = PRIV_SHELL_TIMEOUT_DEFAULT
+    from .config import env_num  # round 85: " 30" and '"30"' were the default, fullwidth digits counted
+    raw = env_num("AVRONE_PRIV_SHELL_TIMEOUT")
+    ceiling = int(raw) if raw is not None else PRIV_SHELL_TIMEOUT_DEFAULT
     ceiling = max(1, min(PRIV_SHELL_TIMEOUT_MAX, ceiling))
     return _int(requested, ceiling, 1, ceiling) if requested is not None else ceiling
 

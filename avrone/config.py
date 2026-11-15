@@ -95,6 +95,45 @@ def shared_key_text(env: Any = None) -> str:
     return env_secret("AVRONE_CAPGATE_KEY", env) or env_secret("AVRONE_FLEET_TOKEN", env)
 
 
+_NUM_WARNED: set[str] = set()
+NUM_WARN_CAP = 32
+
+
+def parse_env_number(raw: Any) -> float | None:
+    """A numeric env value as text -> a finite float, or None for unset/blank/junk. Round 85: the
+    module readers (codex, fleet, mcp, memstore, telemetry, server, safeio, logsafe, checkpoint,
+    jobqueue, ctxspawn, bridge) each did int(os.environ.get(..).strip()), so "\uff11\uff10\uff10"
+    (fullwidth digits) was accepted as 100, '"100"' from a compose .env silently became the
+    default, and "1e3" was junk for ints but 1000 for floats. One reading now: cleaned like a
+    secret, "_" separators allowed, ASCII only, finite."""
+    if not isinstance(raw, str):
+        return None
+    v = clean_secret(raw).replace("_", "")
+    if not v or not v.isascii() or len(v) > 64:
+        return None
+    try:
+        f = float(v)
+    except ValueError:
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def env_num(name: str, env: Any = None) -> float | None:
+    """parse_env_number for one variable; a value set but unreadable is reported once per
+    (name, value), capped, so a per-request reader never floods the log."""
+    raw = (os.environ if env is None else env).get(name)
+    f = parse_env_number(raw)
+    if f is None and isinstance(raw, str) and clean_secret(raw):
+        key = f"{name}={raw[:40]}"
+        if key not in _NUM_WARNED and len(_NUM_WARNED) < NUM_WARN_CAP:
+            _NUM_WARNED.add(key)
+            import sys
+            from .textsafe import escape
+            print(f"AVRONE: ignoring bad number for {name} ('{escape(raw[:40])}'); using the default",
+                  file=sys.stderr)
+    return f
+
+
 def switch_word(raw: Any, default: str) -> str:
     """A policy word as every reader should see it: cleaned like a secret, lower-cased, blank = default."""
     return clean_secret(raw).lower() or default

@@ -22,6 +22,7 @@ breaks the run (the checkpoint is best effort).
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import logging
 import math
 import hashlib
@@ -45,10 +46,10 @@ STALE_TMP_SECONDS = 3600
 def max_bytes() -> int:
     """AVRONE_CHECKPOINT_MAX_BYTES (default 64 MiB, clamped 64 KiB..1 GiB). A bigger file is not
     loaded into memory; it is set aside like a corrupt one."""
-    try:
-        v = int(str(os.getenv("AVRONE_CHECKPOINT_MAX_BYTES", "")).strip())
-    except ValueError:
+    v_raw = _env_num("AVRONE_CHECKPOINT_MAX_BYTES")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    if v_raw is None:
         return MAX_BYTES_DEFAULT
+    v = int(v_raw)
     return max(64 * 1024, min(v, 1024 * 1024 * 1024))
 
 

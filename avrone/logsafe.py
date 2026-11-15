@@ -13,6 +13,7 @@ install(); it chains whatever record factory was already set.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import logging
 import numbers
 import os
@@ -36,10 +37,8 @@ def arg_chars() -> int:
     """AVRONE_LOG_ARG_MAX_CHARS (default 65536, clamped 256..4 MiB): the most of one argument a log
     line keeps. An MCP server writing a 50 MB stderr line put all of it into one server-log line and
     ran every redaction pattern over it."""
-    try:
-        n = int(str(os.environ.get("AVRONE_LOG_ARG_MAX_CHARS", "")).strip() or DEFAULT_ARG_CHARS)
-    except (TypeError, ValueError):
-        n = DEFAULT_ARG_CHARS
+    n_raw = _env_num("AVRONE_LOG_ARG_MAX_CHARS")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_ARG_CHARS
     return max(MIN_ARG_CHARS, min(HARD_ARG_CHARS, n))
 
 

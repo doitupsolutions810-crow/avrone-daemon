@@ -7,6 +7,7 @@ For a large fleet, swap this for NATS JetStream or Redis Streams behind the same
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import asyncio
 import json
 
@@ -46,10 +47,10 @@ class QueueFull(Exception):
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
     import os
-    try:
-        v = int(str(os.getenv(name, "")).strip() or default)
-    except (TypeError, ValueError, OverflowError):
+    v_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    if v_raw is None:
         return default
+    v = int(v_raw)
     return max(lo, min(hi, v))
 
 

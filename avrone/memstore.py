@@ -30,6 +30,7 @@ so a crash mid-write leaves either the old or the new file, never a torn one.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import heapq
 import json
 import math
@@ -91,10 +92,8 @@ _LOCKS_GUARD = threading.Lock()
 
 
 def _cap(env: str, default: int, hard: int) -> int:
-    try:
-        n = int(os.getenv(env, "").strip() or default)
-    except ValueError:
-        n = default
+    n_raw = _env_num(env)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(1, min(hard, n))
 
 

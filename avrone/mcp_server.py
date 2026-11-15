@@ -12,6 +12,7 @@ stdout carries JSON-RPC only; all logging goes to stderr.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import asyncio
 import contextlib
 import json
@@ -408,10 +409,8 @@ HARD_MCP_INFLIGHT = 64
 
 def max_inflight() -> int:
     """Concurrent agent-running tool calls one MCP client may hold (AVRONE_MCP_MAX_INFLIGHT, 1..64)."""
-    try:
-        n = int(str(os.environ.get("AVRONE_MCP_MAX_INFLIGHT", "")).strip() or DEFAULT_MCP_INFLIGHT)
-    except (TypeError, ValueError):
-        n = DEFAULT_MCP_INFLIGHT
+    n_raw = _env_num("AVRONE_MCP_MAX_INFLIGHT")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MCP_INFLIGHT
     return max(1, min(HARD_MCP_INFLIGHT, n))
 
 
@@ -422,19 +421,15 @@ DEFAULT_SHUTDOWN_GRACE = 30.0
 def max_batch() -> int:
     """Largest JSON-RPC batch accepted on one line (AVRONE_MCP_MAX_BATCH, 1..1024, default 64).
     A 100k-element batch used to spawn 100k tasks at once."""
-    try:
-        n = int(str(os.environ.get("AVRONE_MCP_MAX_BATCH", "")).strip() or DEFAULT_MCP_BATCH)
-    except (TypeError, ValueError):
-        n = DEFAULT_MCP_BATCH
+    n_raw = _env_num("AVRONE_MCP_MAX_BATCH")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MCP_BATCH
     return max(1, min(1024, n))
 
 
 def shutdown_grace() -> float:
     """Seconds in-flight work may finish after stdin closes (AVRONE_MCP_SHUTDOWN_GRACE, 0..3600, default 30)."""
-    try:
-        v = float(str(os.environ.get("AVRONE_MCP_SHUTDOWN_GRACE", "")).strip() or DEFAULT_SHUTDOWN_GRACE)
-    except (TypeError, ValueError):
-        v = DEFAULT_SHUTDOWN_GRACE
+    v_raw = _env_num("AVRONE_MCP_SHUTDOWN_GRACE")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    v = float(v_raw) if v_raw is not None else DEFAULT_SHUTDOWN_GRACE
     if v != v:
         v = DEFAULT_SHUTDOWN_GRACE
     return max(0.0, min(3600.0, v))

@@ -25,6 +25,7 @@ reviewers read what the first wave concluded.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import json
 import math
 import contextlib
@@ -52,10 +53,8 @@ _LOCKS_GUARD = threading.Lock()
 
 
 def _int_env(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(os.getenv(name, "").strip() or default)
-    except ValueError:
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(lo, min(hi, n))
 
 

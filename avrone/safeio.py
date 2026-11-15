@@ -13,6 +13,7 @@ file is removed and the error is raised unchanged.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import os
 from typing import Any
 import stat
@@ -201,10 +202,10 @@ def open_append(path: str | os.PathLike, mode: str = "ab"):
 def lock_wait_s() -> float:
     """AVRONE_LOCK_WAIT_S: how long a cross-process flock waits before giving up (default 30 s,
     0..3600). Junk reads as the default."""
-    try:
-        v = float(os.environ.get("AVRONE_LOCK_WAIT_S", "").strip() or 30)
-    except ValueError:
+    v_raw = _env_num("AVRONE_LOCK_WAIT_S")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    if v_raw is None:
         return 30.0
+    v = float(v_raw)
     if v != v or v < 0:
         return 30.0
     return min(v, 3600.0)

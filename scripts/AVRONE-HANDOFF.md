@@ -1167,3 +1167,11 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **`AVRONE_ALLOW_ABS_READ`**: doctor said blank meant on, but agentkit had it off; also `" 1"` and `"1"` with quotes read as off. Both now use `config.abs_read_allowed`: unset or 1 means on, anything else is off.
 - **Quoted values** for `AVRONE_RECON`, `AVRONE_LESSONS`, `AVRONE_AGENT_CONTAINER` and `AVRONE_EVOLVE_LONG` are now cleaned via `config.switch_word`. For example, `'"off"'` had kept lessons ON.
 - Tests: `tests/test_policy_switches_r84_robust.py` (83).
+
+## Hardening round 85: one reading of numeric env settings (`config.py` and 16 readers)
+
+- **`AVRONE_MCP_TIMEOUT` crashed the import.** `mcp_client` parsed it with `float(os.getenv(...))` at import time, so `60s` or a blank line made `import avrone.mcp_client` raise, taking every MCP tool down. Also `nan` and `inf` reached `httpx.Timeout`, and `-1` meant no wait. It's now `_default_timeout()`: 1..3600, default 60.
+- **There was no shared reader.** 19 int/float readers across codex, fleet, mcp_server, memstore, telemetry, server, safeio, logsafe, mcp_client, checkpoint, jobqueue, ctxspawn and bridge did `int(os.environ.get(..).strip())` each. As a result, fullwidth digits (`\uff11\uff10\uff10`) counted as 100, compose quotes (`"100"`) silently became the default, and `1e3` was junk for an int but 1000 for a float. `config.env_num` / `parse_env_number` now give one reading: cleaned like a secret, `_` allowed, ASCII only, finite. A value that's set but unreadable warns once per (name, value), capped at 32 and escaped, so per-request readers never flood the log. Each caller keeps its own clamp.
+- **`AVRONE_SHELL_PIPE_GRACE=nan`** gave 10 s of grace (`min(10, nan)` returns 10). It's now the default, 0.5 s.
+- **`AVRONE_PRIV_SHELL_TIMEOUT`** with a space or quotes read as the default. **`AVRONE_RUNS_CACHE_S`** now uses the shared reader too.
+- Tests: `tests/test_env_numbers_r85_robust.py` (100).

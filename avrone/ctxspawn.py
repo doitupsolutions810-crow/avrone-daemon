@@ -26,6 +26,7 @@ Every pack is passed through :func:`redact` (token shapes, keys, Authorization h
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import os
 import re
 from collections import deque
@@ -54,10 +55,8 @@ TRUNC = "...[truncated]"
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(str(os.environ.get(name, "")).strip() or default)
-    except (TypeError, ValueError):
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(lo, min(hi, n))
 
 

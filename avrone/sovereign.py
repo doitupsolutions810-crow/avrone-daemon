@@ -43,10 +43,10 @@ CMD_ECHO_MAX = 400
 
 
 def _pipe_grace() -> float:
-    try:
-        return max(0.0, min(10.0, float(os.environ.get("AVRONE_SHELL_PIPE_GRACE", "0.5"))))
-    except ValueError:
-        return 0.5
+    # round 85: "nan" was min(10, nan) = 10 s of grace; blank/quoted/fullwidth handled by env_num
+    from .config import env_num
+    v = env_num("AVRONE_SHELL_PIPE_GRACE")
+    return 0.5 if v is None else max(0.0, min(10.0, v))
 
 
 def clean_output(s: str) -> str:

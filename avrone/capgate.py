@@ -58,15 +58,15 @@ def mode() -> str:
 
 
 def _key() -> bytes:
-    k = (os.environ.get("AVRONE_CAPGATE_KEY") or os.environ.get("AVRONE_FLEET_TOKEN") or "").strip()
+    from .config import shared_key_text  # round 82: "  " key hid the fleet token default
+    k = shared_key_text()
     return (k or _PROC_KEY).encode()
 
 
 def ttl() -> int:
-    try:
-        n = int(os.environ.get("AVRONE_CAPGATE_TTL", "3600"))
-    except (TypeError, ValueError):
-        n = 3600
+    raw = (os.environ.get("AVRONE_CAPGATE_TTL") or "").strip().strip("'\"").strip()
+    # round 82: int() took fullwidth digits, and a quoted '"600"' became 3600 silently
+    n = int(raw) if raw.isascii() and raw.isdigit() else 3600
     return max(30, min(n, 86400))
 
 

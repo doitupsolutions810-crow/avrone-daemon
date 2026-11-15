@@ -1142,3 +1142,12 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **Bad ports.** A blank `AVRONE_PORT=` raised ValueError out of `server.main`. `0` bound a random port. `int()` took fullwidth digits. `config.bind_port` now accepts only ASCII 1–65535, and anything else falls back to 8710 with a capped warning.
 - **proc_status:** `AVRONE_PROC_LONG_S` is unquoted and ASCII-only. Each child's cmdline is read up to 8 KB (`CMDLINE_READ`), not 2 MB+, before redaction and the 160-char cut.
 - Tests: `tests/test_bindhost_hostview_r81_robust.py` (56).
+
+## Hardening round 82: one reading of the fleet token and capgate key (`config.py`, `capgate.py`, `capgate_head_attest.py`, `fleet.py`, `doctor.py`, `tools_hostview.py`)
+
+- **A whitespace capgate key silently broke verification.** `AVRONE_CAPGATE_KEY="  "` is truthy, so the `or AVRONE_FLEET_TOKEN` default was never consulted, and after `.strip()` the key was empty. capgate then used its random per-process key, so no capability or receipt verified across nodes or restarts. `capgate_head_attest` copied the same expression. The new `config.shared_key_text()` cleans each value first, and both modules now use it.
+- **A quoted fleet token signed differently.** capgate only stripped, while fleet also unquoted (`clean_token`), so a compose `.env` with `"tok"` signed capabilities with a different key than the fleet used. The new `config.clean_secret` is now the single implementation, and `fleet.clean_token` delegates to it.
+- **The checks judged tokens differently from the node.** `exposure_check` counted `AVRONE_FLEET_TOKEN="   "` as fleet ON, while the fleet treats it as off. `doctor` called `'"changeme"'` "weak" rather than "placeholder", and `"   "` "weak" rather than unset. Its token-reuse check missed `tok` vs `"tok"`. Both now read tokens through `clean_secret` and `env_secret`.
+- **`AVRONE_CAPGATE_TTL`** is now ASCII-only and unquoted. Fullwidth digits used to parse, and a quoted `"600"` silently became 3600.
+- **Not changed, on purpose:** admin tokens stay exact and untrimmed. `test_previous_token_is_exact_and_untrimmed` pins that design.
+- Tests: `tests/test_secret_readers_r82_robust.py` (52).

@@ -164,7 +164,8 @@ def api_surface() -> dict[str, Any]:
     return {"routes": sorted(routes, key=lambda x: x["path"]),
             "admin_enabled": bool(getattr(server.settings, "admin_token", None)),
             "access_policy": server.access_policy(),
-            "fleet_enabled": bool(os.getenv("AVRONE_FLEET_TOKEN"))}
+            # round 82: "  " counted as fleet ON, though fleet.clean_token makes it "" (fleet off)
+            "fleet_enabled": bool(_fleet_token())}
 
 
 async def t_api_surface(ctx: "AgentContext", args: dict[str, Any]) -> str:
@@ -186,6 +187,11 @@ async def t_api_surface(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 _PLACEHOLDERS = ("changeme", "secret", "password", "token", "admin", "test", "default", "example",
                  "your-token", "yourtoken")
+
+
+def _fleet_token() -> str:
+    from .config import env_secret
+    return env_secret("AVRONE_FLEET_TOKEN")
 
 
 def _token_strength(v: Any) -> str:
@@ -239,7 +245,7 @@ def exposure() -> dict[str, Any]:
     risky = [x for x in remote_open if any(k in x for k in ("/api/chat", "/api/runs", "/ws/events", "/api/telemetry"))]
     from . import server
     admin_tok = _token_strength(getattr(server.settings, "admin_token", None))
-    fleet_tok = _token_strength(os.getenv("AVRONE_FLEET_TOKEN"))
+    fleet_tok = _token_strength(_fleet_token() or None)
     issues = []
     if exposed and risky:
         issues.append(f"bound to {host} with {len(risky)} agent/run route(s) open to anyone")
@@ -252,9 +258,10 @@ def exposure() -> dict[str, Any]:
             adm = adm.get_secret_value()
         except Exception:  # noqa: BLE001
             adm = None
-    fl = os.getenv("AVRONE_FLEET_TOKEN") or ""
+    fl = _fleet_token()
     # round 54: "tok" and "tok\n" (a token pasted with its newline) were not seen as the same secret
-    if admin_tok != "unset" and fl.strip() and isinstance(adm, str) and adm.strip() == fl.strip():
+    from .config import clean_secret
+    if admin_tok != "unset" and fl and clean_secret(adm) == fl:
         issues.append("admin and fleet tokens are the same secret")
     return {"host": _escape(host), "exposed": exposed, "policy": policy, "admin_token": admin_tok,
             "fleet_token": fleet_tok if fleet_on else "unset", "remote_open": remote_open, "risky": risky,

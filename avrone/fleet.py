@@ -605,10 +605,8 @@ def clean_token(raw: Any) -> str:
     """AVRONE_FLEET_TOKEN as both sides should see it: whitespace trimmed and one pair of matching
     surrounding quotes removed. A .env read by docker compose keeps "quotes" that a shell export
     drops, so two nodes with the same line in their .env computed different signatures."""
-    t = str(raw or "").strip()
-    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
-        t = t[1:-1].strip()
-    return t
+    from .config import clean_secret
+    return clean_secret(raw if isinstance(raw, str) else str(raw or ""))
 
 
 def skew_text(ts_i: int, now: float) -> str:

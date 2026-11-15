@@ -70,6 +70,31 @@ def _load_dotenv(path: Path) -> None:
             os.environ.setdefault(*kv)
 
 
+def clean_secret(raw: Any) -> str:
+    """A token as every reader should see it: text only, whitespace trimmed, one pair of matching
+    surrounding quotes removed (a .env read by docker compose keeps quotes a shell export drops).
+    fleet.clean_token has done this for the fleet token since round 30-something; round 82 makes
+    the admin token, capgate key, doctor and exposure_check read tokens the same way."""
+    if not isinstance(raw, str):
+        return ""
+    t = raw.strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
+        t = t[1:-1].strip()
+    return t
+
+
+def env_secret(name: str, env: Any = None) -> str:
+    return clean_secret((os.environ if env is None else env).get(name))
+
+
+def shared_key_text(env: Any = None) -> str:
+    """The capgate HMAC key text: AVRONE_CAPGATE_KEY, else AVRONE_FLEET_TOKEN, each cleaned first.
+    Round 82: a whitespace-only AVRONE_CAPGATE_KEY ("  ") was truthy, so the fleet token was never
+    consulted, and after .strip() the key was empty: every node fell back to a random per-process
+    key and no capability or receipt verified across nodes or restarts."""
+    return env_secret("AVRONE_CAPGATE_KEY", env) or env_secret("AVRONE_FLEET_TOKEN", env)
+
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8710
 
@@ -321,6 +346,7 @@ class Settings:
         self.provider, self.llm_base_url, self.llm_model, self.llm_api_key = resolve_provider(
             self.provider, self.llm_base_url, self.llm_model, self.llm_api_key)
         bound_settings(self)
+        # admin tokens stay exact and untrimmed on purpose (test_previous_token_is_exact_and_untrimmed)
 
 
 # round 78/79: field -> (lowest allowed, highest allowed, value used below the lowest).

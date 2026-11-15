@@ -185,7 +185,8 @@ def _residual(ok: bool) -> dict:
     (correlation-immune floor, Descent VIII); a fail is 1 failure in 1 trial, Jeffreys-smoothed
     p_J = (0 + 0.5)/(1 + 1) = 0.25, S = heat(0.25) = 0.1875. A per-process key makes the head
     unverifiable across restarts: that state is UNMEASURED and must be named, never implied."""
-    key_shared = bool((os.environ.get("AVRONE_CAPGATE_KEY") or os.environ.get("AVRONE_FLEET_TOKEN") or "").strip())
+    from .config import shared_key_text  # round 82: the same reading capgate._key signs with
+    key_shared = bool(shared_key_text())
     if not key_shared:
         return {"S": None, "orientation": "unmeasured", "cone": None}
     if ok:

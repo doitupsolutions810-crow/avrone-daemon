@@ -61,9 +61,10 @@ def redact_url(url: str) -> str:
 
 def token_state(value: str | None) -> str:
     """Presence/strength of a secret, never its value: unset | set | weak | placeholder."""
-    if not value:
+    from .config import clean_secret  # round 82: '"changeme"' was "weak", "   " was "weak" (fleet off)
+    v = clean_secret(value)
+    if not v:
         return "unset"
-    v = value.strip()
     if v.lower() in PLACEHOLDERS:
         return "placeholder"
     if len(v) < WEAK_TOKEN_LEN:
@@ -275,7 +276,8 @@ def _insecure_combos(settings: Any, env: Mapping[str, str], toggles: dict[str, s
     if fleet in ("weak", "placeholder"):
         out.append(Check("security.fleet_token", FAIL if fleet == "placeholder" else WARN,
                          f"AVRONE_FLEET_TOKEN is {fleet}", f"use >= {WEAK_TOKEN_LEN} random chars"))
-    a, f = env.get("AVRONE_ADMIN_TOKEN"), env.get("AVRONE_FLEET_TOKEN")
+    from .config import env_secret  # round 82: '"tok"' and "tok" are the same secret to the node
+    a, f = env_secret("AVRONE_ADMIN_TOKEN", env), env_secret("AVRONE_FLEET_TOKEN", env)
     if a and f and a == f:
         out.append(Check("security.token_reuse", WARN, "admin and fleet tokens are identical",
                          "a fleet peer could then call admin endpoints; use different secrets"))

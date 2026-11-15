@@ -9,14 +9,14 @@ def trial(source, trial_id, failed=False):
 
 
 def test_source_key_collapses_nfkc_case_and_format_character_aliases():
-    assert canonical_source_key("GROKBOT") == canonical_source_key("ＧｒｏｋＢｏｔ\\u200b")
-    assert canonical_source_key("  CycleKernel\\tNode-A  ") == "cyclekernel node-a"
+    assert canonical_source_key("GROKBOT") == canonical_source_key("ＧｒｏｋＢｏｔ\u200b")
+    assert canonical_source_key("  CycleKernel\tNode-A  ") == "cyclekernel node-a"
 
 
 def test_pool_groups_compatibility_aliases_into_one_source():
     result = pool_trials([
         trial("GROKBOT", "trial-1", False),
-        trial("ＧｒｏｋＢｏｔ\\u200b", "trial-2", True),
+        trial("ＧｒｏｋＢｏｔ\u200b", "trial-2", True),
     ])
     assert result["runs"] == 2
     assert len(result["sources"]) == 1
@@ -24,7 +24,7 @@ def test_pool_groups_compatibility_aliases_into_one_source():
     assert result["independence"] == "not_assessed"
 
 
-@pytest.mark.parametrize("source", ["", " " * 2, "x" * 600, "bad\\ud800"])
+@pytest.mark.parametrize("source", ["", " " * 2, "x" * 600, "bad\ud800"])
 def test_source_key_rejects_empty_oversized_or_invalid_unicode(source):
     with pytest.raises(ValueError):
         canonical_source_key(source)

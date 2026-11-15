@@ -315,3 +315,109 @@ def test_constructor_normalizes_invalid_lease_defaults(tmp_path, lease_s):
             await queue.close()
 
     asyncio.run(run())
+
+
+def test_dead_job_rejects_every_late_owner_mutation(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "terminal-fence.db")
+        try:
+            jid = await queue.enqueue("terminal-fence", {}, max_attempts=1)
+            claim = await queue.claim()
+            assert claim is not None
+            assert await queue.fail(jid, "permanent terminal failure", claim["token"]) == "dead"
+
+            before = await queue.get(jid)
+            assert before is not None and before["status"] == "dead"
+            assert await queue.complete(jid, {"late": True}, claim["token"]) is False
+            assert await queue.fail(jid, "late second failure", claim["token"]) == "stale"
+            assert await queue.extend(jid, claim["token"], 60) is False
+            assert await queue.release(jid, claim["token"]) is False
+            assert await queue.complete(jid, {"tokenless late": True}) is False
+
+            after = await queue.get(jid)
+            assert after is not None
+            assert after["status"] == "dead"
+            assert after["error"] == before["error"]
+            assert after["result"] is None
+            assert after["attempts"] == 1
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+def test_priority_order_is_descending_and_stable_for_ties(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "priority-order.db")
+        try:
+            low = await queue.enqueue("priority", {"name": "low"}, priority=-10)
+            high_first = await queue.enqueue("priority", {"name": "high-first"}, priority=50)
+            high_second = await queue.enqueue("priority", {"name": "high-second"}, priority=50)
+            extreme = await queue.enqueue("priority", {"name": "extreme"}, priority=10 ** 100)
+            negative_extreme = await queue.enqueue("priority", {"name": "negative"}, priority=-(10 ** 100))
+
+            claimed = [await queue.claim() for _ in range(5)]
+            assert [job["id"] for job in claimed] == [
+                extreme, high_first, high_second, low, negative_extreme
+            ]
+            assert [job["payload"]["name"] for job in claimed] == [
+                "extreme", "high-first", "high-second", "low", "negative"
+            ]
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("bad", [
+    float("nan"), float("inf"), float("-inf"),
+    {"nested": [float("nan")]}, {"nested": {"value": float("inf")}},
+])
+def test_non_json_payload_numbers_are_rejected_without_partial_enqueue(tmp_path, bad):
+    async def run():
+        queue = JobQueue(tmp_path / "strict-payload.db")
+        try:
+            with pytest.raises(ValueError):
+                await queue.enqueue("strict-json", {"bad": bad})
+            assert await queue.stats() == {}
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+def test_prune_never_deletes_queued_or_running_jobs(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "prune-active.db")
+        try:
+            queued = await queue.enqueue("retention", {"state": "queued"})
+            running = await queue.enqueue("retention", {"state": "running"})
+            done = await queue.enqueue("retention", {"state": "done"})
+            dead = await queue.enqueue("retention", {"state": "dead"}, max_attempts=1)
+            running_claim = await queue.claim()
+            assert running_claim is not None and running_claim["id"] == queued
+            # The first claim is deliberately marked as running; complete a separate job by id.
+            # Release the first lease so the selected queued/running identities remain explicit.
+            assert await queue.release(running_claim["id"], running_claim["token"]) is True
+            done_claim = await queue.claim()
+            assert done_claim is not None
+            assert await queue.complete(done_claim["id"], {"ok": True}, done_claim["token"]) is True
+            dead_claim = await queue.claim()
+            assert dead_claim is not None
+            assert await queue.fail(dead_claim["id"], "terminal", dead_claim["token"], permanent=True) == "dead"
+
+            # Establish one active running row and one queued row, then prune all finished rows.
+            active = await queue.claim()
+            assert active is not None
+            assert await queue.prune(keep=0, older_than_s=0) == 2
+            assert await queue.get(active["id"]) is not None
+            assert await queue.get(running) is not None
+            assert await queue.get(done) is None
+            assert await queue.get(dead) is None
+            remaining = await queue.stats()
+            assert remaining.get("running", 0) == 1
+            assert remaining.get("queued", 0) == 1
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

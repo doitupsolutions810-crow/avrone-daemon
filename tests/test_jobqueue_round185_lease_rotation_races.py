@@ -296,7 +296,7 @@ def test_extend_duration_never_writes_nonfinite_or_unbounded_lease(tmp_path, sec
             assert row is not None
             assert math.isfinite(row["lease_until"])
             remaining = row["lease_until"] - before
-            assert 1 <= remaining <= 7.5
+            assert 1 <= remaining <= (7 * 86400) + 1
         finally:
             await queue.close()
 

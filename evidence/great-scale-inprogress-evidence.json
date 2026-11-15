@@ -1,12 +1,13 @@
 {
-  "schema": "great-scale-evidence/v98",
-  "finding": "The script refuses when a MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD, BISECT_LOG, or rebase-merge marker exists. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v160",
+  "finding": "The script refuses when git is mid-merge/cherry-pick/revert/bisect/rebase, and soft-aborts a leftover git am. The checks are present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "markers": ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge"],
+  "inProgress": "refuse",
+  "rebaseApply": "soft abort",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,
   "effectiveRuns": 1,
   "docker": false,
-  "mitigation": "None needed. The in-progress-op check holds."
+  "mitigation": "None needed. The in-progress-op checks hold."
 }

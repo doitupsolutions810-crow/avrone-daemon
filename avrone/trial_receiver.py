@@ -1008,6 +1008,14 @@ class TrialStore:
             self._assert_source_identity_triggers(db)
             quarantined = self._assert_sender_quarantine_state(db, sender)
             if quarantined:
+                marker = db.execute(
+                    "SELECT quarantined_at FROM trial_quarantined_senders WHERE sender=?",
+                    (sender,),
+                ).fetchone()
+                if marker is None or now < marker["quarantined_at"]:
+                    raise TrialStoreError(
+                        "receiver clock precedes sender quarantine evidence"
+                    )
                 status = "sender_quarantined"
             else:
                 existing = db.execute(
@@ -1050,11 +1058,24 @@ class TrialStore:
                             "canonical source/check/attempt identity arrived with a different trial_id"
                         )
                 elif bytes(existing["canonical_json"]) == raw:
+                    if now < existing["received_at"]:
+                        raise TrialStoreError(
+                            "receiver clock precedes original trial evidence"
+                        )
                     status = "duplicate"
                 else:
                     conflict_reason = "same trial_id arrived with a different canonical envelope"
 
                 if conflict_reason is not None:
+                    # A conflict is causally later than its first-seen
+                    # canonical trial, even if the system wall clock steps
+                    # backward. Refuse a new inconsistent record before any
+                    # quarantine or delivery receipt can be persisted.
+                    original = existing if existing is not None else alias
+                    if original is None or now < original["received_at"]:
+                        raise TrialStoreError(
+                            "receiver clock precedes original trial evidence"
+                        )
                     q_count = db.execute("SELECT COUNT(*) FROM trial_quarantine").fetchone()[0]
                     sender_count = db.execute(
                         "SELECT COUNT(*) FROM trial_quarantined_senders"
@@ -1132,6 +1153,8 @@ class TrialStore:
                 self._verify_stored_trial(first)
                 if first["payload_sha256"] != digest:
                     raise ValueError("receipt digest disagrees with first-seen evidence")
+                if status == "duplicate" and row["received_at"] < first["received_at"]:
+                    raise ValueError("duplicate receipt precedes its first-seen trial")
                 if status == "accepted" and first["outcome"] not in {"pass", "fail"}:
                     raise ValueError("accepted receipt contradicts outcome")
                 if status == "non_pass_stored" and first["outcome"] in {"pass", "fail"}:
@@ -1165,6 +1188,12 @@ class TrialStore:
             elif status == "sender_quarantined":
                 if not self._assert_sender_quarantine_state(db, row["sender"]):
                     raise ValueError("blocked receipt has no quarantine marker")
+                marker = db.execute(
+                    "SELECT quarantined_at FROM trial_quarantined_senders WHERE sender=?",
+                    (row["sender"],),
+                ).fetchone()
+                if marker is None or row["received_at"] < marker["quarantined_at"]:
+                    raise ValueError("blocked receipt predates sender quarantine")
                 # The original rejected envelope is intentionally not retained
                 # for repeat deliveries. Only the digest's syntax is verifiable.
             else:
@@ -1340,6 +1369,8 @@ class TrialStore:
                 or bytes(exact["canonical_json"]) == row["incoming_json"]
             ):
                 raise TrialStoreError("stored trial quarantine conflict reason is inconsistent")
+            if row["received_at"] < exact["received_at"]:
+                raise TrialStoreError("stored quarantine precedes first-seen evidence")
             return
         alias = db.execute(
             f"SELECT {BOUNDED_TRIAL_COLUMNS} FROM trials WHERE source_identity_key=?",
@@ -1353,6 +1384,8 @@ class TrialStore:
             or alias["trial_id"] == row["trial_id"]
         ):
             raise TrialStoreError("stored trial quarantine conflict reason is inconsistent")
+        if row["received_at"] < alias["received_at"]:
+            raise TrialStoreError("stored quarantine precedes first-seen evidence")
 
     @staticmethod
     def _verify_sender_quarantine_pair(marker: sqlite3.Row | None,

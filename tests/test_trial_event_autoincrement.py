@@ -208,3 +208,84 @@ def test_healthy_triggers_and_indexes_remain_compatible_with_ddl_attestation(
                              transport="fleet")["duplicates"] == 1
     assert TrialStore(path).pool_snapshot()["runs"] == 1
     assert len(store.quarantine_records()) == 1
+
+@pytest.mark.parametrize("table,sequence_key", EVENT_TABLES)
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "delete-sequence-entry", "zero-sequence", "negative-sequence",
+        "string-sequence", "null-sequence", "duplicate-sequence",
+        "lag-retained-maximum",
+    ],
+)
+def test_sqlite_sequence_drift_rejected_even_with_correct_table_ddl(
+    tmp_path, table, sequence_key, corruption,
+):
+    store, path, _ = seeded(tmp_path)
+    # Populate at least two events in both tables. A sequence of 1 then
+    # becomes provably smaller than the largest retained event identifier.
+    assert store.ingest_many(
+        [trial("fail")], sender="peer-c", transport="fleet"
+    )["quarantined"] == 1
+    before = totals(store)
+    db = store._connect()
+    try:
+        store._assert_primary_key_schema(db)
+        store._assert_event_sequence_schema(db)
+        max_id = db.execute(
+            f"SELECT MAX({sequence_key}) FROM {table}"
+        ).fetchone()[0]
+        assert max_id >= 2
+
+        if corruption == "delete-sequence-entry":
+            db.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+        elif corruption == "duplicate-sequence":
+            db.execute(
+                "INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)",
+                (table, max_id + 1),
+            )
+        else:
+            altered = {
+                "zero-sequence": 0,
+                "negative-sequence": -1,
+                "string-sequence": "not-an-integer",
+                "null-sequence": None,
+                "lag-retained-maximum": 1,
+            }[corruption]
+            db.execute(
+                "UPDATE sqlite_sequence SET seq=? WHERE name=?",
+                (altered, table),
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="event sequence state integrity"):
+        store.receipt_records()
+    with pytest.raises(TrialStoreError, match="event sequence state integrity"):
+        store.quarantine_records()
+    with pytest.raises(TrialStoreError, match="event sequence state integrity"):
+        store.ingest_many(
+            [trial(attempt="new-attempt")], sender="peer-d", transport="fleet"
+        )
+    with pytest.raises(TrialStoreError, match="event sequence state integrity"):
+        TrialStore(path)
+    assert totals(store) == before
+
+
+def test_unused_event_tables_have_no_sequence_rows_and_initialize_normally(tmp_path):
+    path = tmp_path / "private" / "trials.sqlite3"
+    store = TrialStore(path)
+    db = store._connect()
+    try:
+        rows = list(db.execute(
+            "SELECT name,seq FROM sqlite_sequence "
+            "WHERE name IN ('trial_receipts','trial_quarantine')"
+        ))
+        assert rows == []
+        store._assert_event_sequence_schema(db)
+    finally:
+        db.close()
+    assert store.receipt_records() == []
+    assert store.quarantine_records() == []
+    assert TrialStore(path).pool_snapshot()["runs"] == 0

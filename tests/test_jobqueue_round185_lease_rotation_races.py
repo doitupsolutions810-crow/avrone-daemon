@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+import math
 
 import pytest
 
@@ -276,3 +278,40 @@ def test_forged_owner_token_cannot_mutate_live_lease(tmp_path, operation, expect
     asyncio.run(run())
 
 
+
+
+@pytest.mark.parametrize("seconds", [
+    float("nan"), float("inf"), float("-inf"), 1e300, -1e300, "not-a-number", None,
+])
+def test_extend_duration_never_writes_nonfinite_or_unbounded_lease(tmp_path, seconds):
+    async def run():
+        queue = JobQueue(tmp_path / "bounded-extension.db", lease_s=7)
+        try:
+            jid = await queue.enqueue("bounded-lease", {})
+            claim = await queue.claim()
+            assert claim is not None
+            before = time.time()
+            assert await queue.extend(jid, claim["token"], seconds) is True
+            row = await queue.get(jid)
+            assert row is not None
+            assert math.isfinite(row["lease_until"])
+            remaining = row["lease_until"] - before
+            assert 1 <= remaining <= 7.5
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("lease_s", [
+    0, -1, float("nan"), float("inf"), float("-inf"), "bad", None,
+])
+def test_constructor_normalizes_invalid_lease_defaults(tmp_path, lease_s):
+    async def run():
+        queue = JobQueue(tmp_path / "normalized-lease.db", lease_s=lease_s)
+        try:
+            assert queue.lease_s == 900.0
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

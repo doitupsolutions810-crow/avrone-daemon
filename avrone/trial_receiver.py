@@ -1262,6 +1262,8 @@ class TrialStore:
             )
             retained: list[dict[str, Any]] = []
             receipt_ids: set[int] = set()
+            first_seen_trials: set[str] = set()
+            conflict_senders: set[str] = set()
             for row in rows:
                 if len(retained) >= MAX_RECEIPTS:
                     raise TrialStoreError("stored trial receipt count exceeds capacity")
@@ -1270,6 +1272,27 @@ class TrialStore:
                 if receipt_id in receipt_ids:
                     raise TrialStoreError("stored duplicate receipt identity")
                 receipt_ids.add(receipt_id)
+                # A first-seen trial has exactly one initial delivery,
+                # accepted (pass/fail) or non_pass_stored (skipped).
+                # Duplicate deliveries are separate receipts and are allowed
+                # without a retained original because old receipts are
+                # pruned. Two still-retained first-seen receipts for one
+                # trial are never a valid history, however.
+                if row["result"] in {"accepted", "non_pass_stored"}:
+                    if row["trial_id"] in first_seen_trials:
+                        raise TrialStoreError(
+                            "stored duplicate first-seen trial receipt"
+                        )
+                    first_seen_trials.add(row["trial_id"])
+                # The first conflict quarantines its sender. Later deliveries
+                # from that sender must be sender_quarantined, not a second
+                # conflict_quarantined receipt for the same sender.
+                if row["result"] == "conflict_quarantined":
+                    if row["sender"] in conflict_senders:
+                        raise TrialStoreError(
+                            "stored duplicate first-conflict sender receipt"
+                        )
+                    conflict_senders.add(row["sender"])
                 retained.append(dict(row))
             return retained
         except sqlite3.Error as exc:

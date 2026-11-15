@@ -491,6 +491,37 @@ class TrialStore:
                 raise TrialStoreError(
                     "trial event sequence schema integrity check failed: " + table
                 )
+            # sqlite_sequence can be edited separately from sqlite_master.
+            # Without this check, deleting/replacing its row or rewinding
+            # seq can undermine monotone event provenance despite a valid
+            # AUTOINCREMENT table declaration. An unused table legitimately
+            # has no sqlite_sequence entry; a used table cannot.
+            key = "receipt_id" if table == "trial_receipts" else "quarantine_id"
+            largest = db.execute(
+                f"SELECT MAX({key}) FROM {table}"
+            ).fetchone()[0]
+            sequences = list(db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name=? LIMIT 2",
+                (table,),
+            ))
+            if (
+                len(sequences) > 1
+                or (largest is not None and not sequences)
+                or (
+                    sequences
+                    and (
+                        type(sequences[0]["seq"]) is not int
+                        or sequences[0]["seq"] < 1
+                        or (
+                            largest is not None
+                            and sequences[0]["seq"] < largest
+                        )
+                    )
+                )
+            ):
+                raise TrialStoreError(
+                    "trial event sequence state integrity check failed: " + table
+                )
 
     def _make_database_private_before_wal(self) -> None:
         """Set 0600 on the pinned database inode, never on an unchecked path.

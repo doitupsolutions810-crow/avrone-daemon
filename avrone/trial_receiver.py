@@ -230,9 +230,21 @@ class TrialStore:
         except FileExistsError:
             # The winner may be an independent process initializing the same
             # directory. Validate what actually won instead of chmodding it
-            # or overwriting a competing receiver's evidence.
+            # or overwriting a competing receiver's evidence. Because this
+            # filename was absent just before O_EXCL, a newly raced-in 0644
+            # file is not a trusted *preexisting* legacy database: refuse it.
             if self._assert_database_file() is None:
                 raise TrialStoreError("trial database vanished during exclusive creation")
+            try:
+                raced_info = self.path.lstat()
+            except OSError as exc:
+                raise TrialStoreError(
+                    "raced database cannot be inspected securely"
+                ) from exc
+            if stat.S_IMODE(raced_info.st_mode) != 0o600:
+                raise TrialStoreError(
+                    "competing trial database creation must be private (0600)"
+                )
             return
         except OSError as exc:
             raise TrialStoreError(

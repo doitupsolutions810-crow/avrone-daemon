@@ -84,7 +84,8 @@ _ALLOW_WORDS = {"", "allow", "on", "true", "yes", "1", "enabled", "enable"}
 
 
 def _denied() -> str | None:
-    mode = os.getenv("AVRONE_RECON", "allow").strip().lower()
+    from .config import switch_word  # round 84: '"allow"' from compose was "unrecognised"
+    mode = switch_word(os.environ.get("AVRONE_RECON"), "allow")
     if mode in _DENY_WORDS:
         return "ERROR: reconnaissance is disabled on this node (AVRONE_RECON=deny)"
     if mode not in _ALLOW_WORDS:  # unknown value: fail closed, never open

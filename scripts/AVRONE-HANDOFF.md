@@ -1159,3 +1159,11 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **`AVRONE_CAPGATE_ATTEST='"on"'`** read as off; it is cleaned now, with the same word set, so "enable" stays off. **`AVRONE_ATTESTED_HISTORY_LOG`** with quotes made a path containing the quote characters; it is now unquoted and `~` is expanded.
 - **proc_status ages came from the wall clock.** Ages were `time.time() - (btime + ticks)`, so a clock stepped back (an NTP step, a VM snapshot resume) showed negative ages and hid every long-running child. Ages now come from `/proc/uptime` minus start ticks, clamped at 0. When uptime is missing they fall back to the wall clock, clamped. Rows are sorted oldest first by age.
 - Tests: `tests/test_capgate_env_procage_r83_robust.py` (63).
+
+## Hardening round 84: policy switches read the same everywhere (`config.py`, `agentkit.py`, `evolve.py`, `recon.py`, `bridge.py`, `agentcontainer.py`, `doctor.py`, `tools_extra.py`)
+
+- **The lock switches failed open.** Both `AVRONE_SELF_CHANGES` and `AVRONE_SELF_EVOLVE` were read as `os.getenv(...).lower() == "deny"`. A trailing space, a newline, or compose quotes (`"deny"`) therefore let package installs and self-evolution run on a node the operator had locked. `config.self_changes_policy` (allow|log|deny) and `config.self_evolve_denied` now clean the value first, and an unrecognised word denies.
+- **doctor and capabilities_report repeated the raw lower-cased text**, so they showed `"deny"` in quotes while the node allowed. Both now report the effective policy from the same helpers.
+- **`AVRONE_ALLOW_ABS_READ`**: doctor said blank meant on, but agentkit had it off; also `" 1"` and `"1"` with quotes read as off. Both now use `config.abs_read_allowed`: unset or 1 means on, anything else is off.
+- **Quoted values** for `AVRONE_RECON`, `AVRONE_LESSONS`, `AVRONE_AGENT_CONTAINER` and `AVRONE_EVOLVE_LONG` are now cleaned via `config.switch_word`. For example, `'"off"'` had kept lessons ON.
+- Tests: `tests/test_policy_switches_r84_robust.py` (83).

@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?\Z")
 
 
+def _abs_read_ok() -> bool:
+    from .config import abs_read_allowed  # round 84: one reading shared with doctor
+    return abs_read_allowed()
+
+
 def _ws(ctx: "AgentContext") -> Path:
     return Path(ctx.core.runner.workspace).resolve()
 
@@ -57,7 +62,7 @@ def _emit(ctx: "AgentContext", kind: str, **data: Any) -> None:
 
 def _img_path(ctx: "AgentContext", p: str) -> Path:
     path = Path(p)
-    if path.is_absolute() and path.exists() and os.getenv("AVRONE_ALLOW_ABS_READ", "1") == "1":
+    if path.is_absolute() and path.exists() and _abs_read_ok():
         return path
     return _safe_path(_ws(ctx), p)
 
@@ -415,8 +420,14 @@ def record_change(ctx: "AgentContext", action: str, target: str, ok: bool, detai
     _emit(ctx, "env.change", **{k: v for k, v in entry.items() if k not in ("run_id", "agent")})
 
 
+def switch_is_deny() -> bool:
+    from .config import switch_word
+    return switch_word(os.environ.get("AVRONE_SELF_CHANGES"), "allow") == "deny"
+
+
 async def t_env_install(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    policy = os.getenv("AVRONE_SELF_CHANGES", "allow").lower()
+    from .config import self_changes_policy  # round 84: "deny " / '"deny"' allowed installs
+    policy = self_changes_policy()
     pkg, mgr = str(args.get("package") or "").strip(), str(args.get("manager", "pip")).lower()
     if not PKG_RE.match(pkg):
         return "ERROR: invalid package name"
@@ -426,7 +437,8 @@ async def t_env_install(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: manager must be pip or apt"
     if policy == "deny":
         await asyncio.to_thread(record_change, ctx, f"{mgr} install (denied)", pkg, False, "AVRONE_SELF_CHANGES=deny")
-        return "ERROR: self-changes are disabled on this node (AVRONE_SELF_CHANGES=deny)"
+        return ("ERROR: self-changes are disabled on this node (AVRONE_SELF_CHANGES=deny"
+                + ("" if switch_is_deny() else "; unrecognised values deny") + ")")
     # round 101: the ledger scan (up to 16 MB parsed) and the lock open ran on the event loop
     prior = await asyncio.to_thread(_installed_before, ctx, mgr, pkg)
     if prior:

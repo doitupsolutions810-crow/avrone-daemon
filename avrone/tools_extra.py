@@ -1301,6 +1301,7 @@ def self_inventory(ctx: "AgentContext") -> dict[str, Any]:
         hostname = socket.gethostname()
     except OSError:
         hostname = "unknown"
+    from . import config as _cfg  # round 84: report the effective policy, as the readers see it
     allowlist = [h.strip() for h in os.getenv("AVRONE_RECON_ALLOWLIST", "").split(",") if h.strip()]
     secret_names = set(KNOWN_SECRET_ENV) | {k for k in os.environ if is_secret_name(k)}
     secrets = {k: redact_env(k, os.environ.get(k)) for k in sorted(secret_names)[:SELF_SCAN_MAX_SECRET_NAMES]}
@@ -1312,12 +1313,12 @@ def self_inventory(ctx: "AgentContext") -> dict[str, Any]:
         "runner": {"kind": getattr(runner, "kind", "unknown"), "configured": str(_setting(ctx, "runner", "auto")),
                    "docker_available": bool(shutil.which("docker"))},
         "toggles": {
-            "AVRONE_RECON": os.getenv("AVRONE_RECON", "allow").lower(),
+            "AVRONE_RECON": _cfg.switch_word(os.environ.get("AVRONE_RECON"), "allow"),
             "AVRONE_RECON_ALLOWLIST": ",".join(allowlist)[:300] or "(none: default-deny)",
             "AVRONE_ALLOW_NETWORK": bool(_setting(ctx, "allow_network", True)),
             "AVRONE_AGENTS_CAN_SHELL": bool(_setting(ctx, "agents_can_shell", True)),
-            "AVRONE_SELF_EVOLVE": os.getenv("AVRONE_SELF_EVOLVE", "allow").lower(),
-            "AVRONE_SELF_CHANGES": os.getenv("AVRONE_SELF_CHANGES", "allow").lower(),
+            "AVRONE_SELF_EVOLVE": "deny" if _cfg.self_evolve_denied() else "allow",
+            "AVRONE_SELF_CHANGES": _cfg.self_changes_policy(),
             "admin_token": "on" if _setting(ctx, "admin_token", "") else "off",
         },
         "tools": {"registered": tool_count},

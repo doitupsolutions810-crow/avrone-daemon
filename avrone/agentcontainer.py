@@ -54,7 +54,8 @@ _NAME_BAD = re.compile(r"[^a-z0-9_.-]+")
 
 def container_mode() -> str:
     """'persistent' or 'off' (anything unrecognised is off: fails closed to v0.16 behaviour)."""
-    v = (os.environ.get("AVRONE_AGENT_CONTAINER") or "off").strip().lower()
+    from .config import switch_word
+    v = switch_word(os.environ.get("AVRONE_AGENT_CONTAINER"), "off")
     return "persistent" if v == "persistent" else "off"
 
 

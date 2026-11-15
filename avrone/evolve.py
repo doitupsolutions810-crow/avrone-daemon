@@ -279,7 +279,8 @@ def _in_repo(wt: Path, rel: str) -> Path:
 
 
 def _denied() -> bool:
-    return os.getenv("AVRONE_SELF_EVOLVE", "allow").lower() == "deny"
+    from .config import self_evolve_denied  # round 84: "deny " / '"deny"' left evolution ON
+    return self_evolve_denied()
 
 
 DENIED_MSG = "ERROR: self-evolution is disabled on this node (AVRONE_SELF_EVOLVE=deny)"
@@ -464,7 +465,8 @@ LONG_TIME_BUDGET_CAP_S = 7200
 
 def long_loops_allowed() -> bool:
     """Exactly "allow" (case-insensitive) opts in; anything else, including unset, keeps the normal caps."""
-    return os.getenv("AVRONE_EVOLVE_LONG", "").strip().lower() == "allow"
+    from .config import switch_word
+    return switch_word(os.environ.get("AVRONE_EVOLVE_LONG"), "") == "allow"
 
 
 def hard_caps() -> tuple[int, int]:

@@ -95,6 +95,35 @@ def shared_key_text(env: Any = None) -> str:
     return env_secret("AVRONE_CAPGATE_KEY", env) or env_secret("AVRONE_FLEET_TOKEN", env)
 
 
+def switch_word(raw: Any, default: str) -> str:
+    """A policy word as every reader should see it: cleaned like a secret, lower-cased, blank = default."""
+    return clean_secret(raw).lower() or default
+
+
+SELF_CHANGE_WORDS = ("allow", "log", "deny")
+
+
+def self_changes_policy(env: Any = None) -> str:
+    """AVRONE_SELF_CHANGES: allow (default) | log | deny. Round 84: the reader was
+    os.getenv(...).lower() == "deny", so "deny " (trailing space), "deny\n" or '"deny"' from a
+    compose .env ALLOWED package installs on a node the operator had locked. Unknown words now deny."""
+    w = switch_word((os.environ if env is None else env).get("AVRONE_SELF_CHANGES"), "allow")
+    return w if w in SELF_CHANGE_WORDS else "deny"
+
+
+def self_evolve_denied(env: Any = None) -> bool:
+    """AVRONE_SELF_EVOLVE: allow (default) | deny; round 84: cleaned, and an unknown word denies."""
+    return switch_word((os.environ if env is None else env).get("AVRONE_SELF_EVOLVE"), "allow") != "allow"
+
+
+def abs_read_allowed(env: Any = None) -> bool:
+    """AVRONE_ALLOW_ABS_READ: unset = on, "1" = on, anything else (blank included) = off, as
+    agentkit always read it. Round 84: doctor read blank as on while the reader had it off, and
+    " 1" / '"1"' were off in the reader."""
+    raw = (os.environ if env is None else env).get("AVRONE_ALLOW_ABS_READ")
+    return raw is None or clean_secret(raw) == "1"
+
+
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8710
 

@@ -607,7 +607,8 @@ _STOP = frozenset("the and for with that this from what are was were has have ha
 
 
 def lessons_enabled() -> bool:
-    return os.getenv("AVRONE_LESSONS", "on").strip().lower() not in ("off", "0", "false", "no", "disabled")
+    from .config import switch_word  # round 84: '"off"' from a compose .env kept lessons ON
+    return switch_word(os.environ.get("AVRONE_LESSONS"), "on") not in ("off", "0", "false", "no", "disabled")
 
 
 def lessons_max() -> int:

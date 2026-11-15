@@ -200,7 +200,8 @@ def run_doctor(settings: Any = None, *, env: Mapping[str, str] | None = None,
     effective_local = runner == "local" or (runner == "auto" and not which("docker")) or runner not in RUNNERS
 
     # ---- toggles
-    recon_raw = (env.get("AVRONE_RECON") or "allow").strip().lower()
+    from .config import abs_read_allowed, self_changes_policy, self_evolve_denied, switch_word
+    recon_raw = switch_word(env.get("AVRONE_RECON"), "allow")
     recon_on = recon_raw in {"allow", "on", "true", "yes", "1"}
     allowlist = [h for h in (env.get("AVRONE_RECON_ALLOWLIST") or "").split(",") if h.strip()]
     recon_any = (env.get("AVRONE_RECON_ALLOWLIST") or "").strip() == "*"
@@ -212,9 +213,10 @@ def run_doctor(settings: Any = None, *, env: Mapping[str, str] | None = None,
                            else ("* (any public host)" if recon_any else "(none: default-deny)"),
         "network": "on" if settings.allow_network else "off",
         "shell": "on" if settings.agents_can_shell else "off",
-        "self_evolve": (env.get("AVRONE_SELF_EVOLVE") or "allow").lower(),
-        "self_changes": (env.get("AVRONE_SELF_CHANGES") or "allow").lower(),
-        "abs_read": "on" if (env.get("AVRONE_ALLOW_ABS_READ") or "1") == "1" else "off",
+        # round 84: the effective policy, read exactly as evolve/agentkit read it
+        "self_evolve": "deny" if self_evolve_denied(env) else "allow",
+        "self_changes": self_changes_policy(env),
+        "abs_read": "on" if abs_read_allowed(env) else "off",
         "fleet": "on" if fleet_tok != "unset" else "off",
         "fleet_allowlist": f"{len(fleet_allow)} node(s)" if fleet_allow else "(any node)",
         "host_shell": "on" if (settings.agents_can_shell and effective_local) else "off",

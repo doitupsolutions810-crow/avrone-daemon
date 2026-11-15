@@ -132,7 +132,7 @@ def test_scalar_junk_ignored_and_server_lives(junk):
     '{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}',
     '{"jsonrpc":"2.0","id":1,"method":"ping","params":{},"params":{"x":1}}',
     '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":1,"x":2}}',
-    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":1,"\u0061":2}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":1,"\\u0061":2}}',
     '[{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"},' + json.dumps(PING) + ']',
 ])
 def test_duplicate_json_object_member_is_parse_error(raw):

@@ -631,3 +631,34 @@ def test_non_object_non_null_jsonrpc_params_are_invalid_params(params):
     assert out[0] == {"jsonrpc": "2.0", "id": 42,
                       "error": {"code": -32602, "message": "Invalid params: params must be an object"}}
     assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_oversized_jsonrpc_line_is_discarded_and_server_recovers():
+    async def go():
+        core = Core()
+        srv = server(core)
+        reader = asyncio.StreamReader(limit=64)
+        reader.feed_data(b"x" * 512 + b"\\n" + json.dumps(PING).encode() + b"\\n")
+        reader.feed_eof()
+        out = Out()
+        await asyncio.wait_for(srv.serve(reader, out), 5)
+        return lines_of(out)
+
+    out = asyncio.run(go())
+    assert out[0]["error"]["code"] == -32600
+    assert "line exceeds the size limit" in out[0]["error"]["message"]
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("raw", [
+    '{"jsonrpc":"2.0","id":1,"method":"ping",}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\\\x"}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"raw\x01control"}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping"} trailing',
+    '{"jsonrpc":"2.0","id":1,"method":"ping"',
+])
+def test_malformed_json_lexical_edges_return_parse_error_and_recover(raw):
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}

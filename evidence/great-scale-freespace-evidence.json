@@ -1,13 +1,13 @@
 {
-  "schema": "great-scale-evidence/v58",
-  "finding": "The script refuses when the drive is nearly full and continues when there is enough space. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v154",
+  "finding": "The script refuses when free space is below MIN_FREE_GB (before pull) or MIN_RUN_FREE_GB (during the loop). The checks are present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "nearlyFull": "refuse",
-  "enoughSpace": "continue",
+  "minFree": "refuse before pull",
+  "minRunFree": "refuse during loop",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,
   "effectiveRuns": 1,
   "docker": false,
-  "mitigation": "None needed. The free-space check holds."
+  "mitigation": "None needed. The free-space checks hold."
 }

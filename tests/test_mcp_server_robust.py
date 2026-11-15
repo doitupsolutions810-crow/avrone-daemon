@@ -669,3 +669,37 @@ def test_raw_control_character_in_json_string_is_parse_error():
     assert out[0] == {"jsonrpc": "2.0", "id": None,
                       "error": {"code": -32700, "message": "Parse error"}}
     assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+
+@pytest.mark.parametrize("bad_id", [True, False, 1.5, [], {}, {"nested": 1}])
+def test_jsonrpc_rejects_boolean_float_and_container_request_ids(bad_id):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": bad_id, "method": "ping"}, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32600, "message": "Invalid Request: id must be a string, an integer or null"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("valid_id", [None, 0, -1, 2**53 + 1, "", "0", "unicode-雪"])
+def test_jsonrpc_preserves_valid_null_integer_and_string_request_ids(valid_id):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": valid_id, "method": "ping"}])
+    assert out == [{"jsonrpc": "2.0", "id": valid_id, "result": {}}]
+
+
+def test_notifications_never_emit_responses_even_when_handler_rejects_method():
+    out, _, _ = serve([
+        {"jsonrpc": "2.0", "method": "notifications/unknown", "params": {}},
+        {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "missing"}},
+        PING,
+    ])
+    assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]
+
+
+def test_invalid_jsonrpc_version_does_not_prevent_next_request():
+    out, _, _ = serve([
+        {"jsonrpc": "1.0", "id": "bad-version", "method": "ping"},
+        PING,
+    ])
+    assert out[0] == {"jsonrpc": "2.0", "id": "bad-version",
+                      "error": {"code": -32600, "message": 'Invalid Request: jsonrpc must be "2.0"'}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}

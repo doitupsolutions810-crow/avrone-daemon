@@ -976,28 +976,37 @@ class TrialStore:
         if not validate_trial_envelope(envelope):
             raise ValueError("invalid avrone.trial/v2 envelope")
         digest = hashlib.sha256(raw).hexdigest()
-        try:
-            now = time.time()
-        except (OSError, OverflowError, ValueError) as exc:
-            raise TrialStoreError("receiver clock could not provide a receipt timestamp") from exc
-        # SQLite may silently turn NaN into NULL. Never commit a receipt,
-        # first-seen trial, or quarantine marker with invalid chronology.
-        # Check before opening a transaction so no partial evidence is written.
-        # Use exact built-in number types: a float/int subclass may override
-        # comparisons or conversion, and SQLite INTEGERs must fit in int64.
-        # Checking the integer bound before math.isfinite avoids OverflowError
-        # when the clock returns an enormous Python integer (e.g. 10**1000).
-        if (
-            type(now) not in (int, float)
-            or now < 0
-            or (type(now) is int and now > (1 << 63) - 1)
-            or not math.isfinite(now)
-        ):
-            raise TrialStoreError("receiver clock returned an invalid receipt timestamp")
         trial_id = envelope["trial_id"]
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
+            # Sample the wall clock only after acquiring SQLite's writer lock.
+            # Sampling before BEGIN lets a contending writer commit first with
+            # a later timestamp, making this serialized delivery look as if
+            # the receiver clock moved backward. The lock orders both writes
+            # and their receipt timestamps.
+            try:
+                now = time.time()
+            except (OSError, OverflowError, ValueError) as exc:
+                raise TrialStoreError(
+                    "receiver clock could not provide a receipt timestamp"
+                ) from exc
+            # SQLite may silently turn NaN into NULL. Never commit a receipt,
+            # first-seen trial, or quarantine marker with invalid chronology.
+            # Validate under the writer lock, before any evidence mutation.
+            # Use exact built-in number types: a float/int subclass may override
+            # comparisons or conversion, and SQLite INTEGERs must fit in int64.
+            # Checking the integer bound before math.isfinite avoids OverflowError
+            # when the clock returns an enormous Python integer (e.g. 10**1000).
+            if (
+                type(now) not in (int, float)
+                or now < 0
+                or (type(now) is int and now > (1 << 63) - 1)
+                or not math.isfinite(now)
+            ):
+                raise TrialStoreError(
+                    "receiver clock returned an invalid receipt timestamp"
+                )
             # Startup schema validation alone is insufficient: a running
             # receiver might outlive a replaced/removed uniqueness index.
             # Check while holding SQLite's writer lock, preventing a DDL swap
@@ -1264,6 +1273,8 @@ class TrialStore:
             receipt_ids: set[int] = set()
             first_seen_trials: set[str] = set()
             conflict_senders: set[str] = set()
+            earlier_duplicates: set[str] = set()
+            earlier_blocked_senders: set[str] = set()
             for row in rows:
                 if len(retained) >= MAX_RECEIPTS:
                     raise TrialStoreError("stored trial receipt count exceeds capacity")
@@ -1283,16 +1294,33 @@ class TrialStore:
                         raise TrialStoreError(
                             "stored duplicate first-seen trial receipt"
                         )
+                    # Receipt IDs are delivery sequence numbers. A first-seen
+                    # receipt cannot arrive after a previously retained
+                    # duplicate for the same trial. If the first receipt was
+                    # pruned, only duplicates remain and that is valid.
+                    if row["trial_id"] in earlier_duplicates:
+                        raise TrialStoreError(
+                            "stored duplicate receipt precedes first-seen receipt"
+                        )
                     first_seen_trials.add(row["trial_id"])
+                elif row["result"] == "duplicate":
+                    earlier_duplicates.add(row["trial_id"])
                 # The first conflict quarantines its sender. Later deliveries
-                # from that sender must be sender_quarantined, not a second
-                # conflict_quarantined receipt for the same sender.
+                # from that sender must be sender_quarantined, not another
+                # conflict_quarantined event. If the first receipt was pruned,
+                # retained blocked receipts are still valid.
                 if row["result"] == "conflict_quarantined":
                     if row["sender"] in conflict_senders:
                         raise TrialStoreError(
                             "stored duplicate first-conflict sender receipt"
                         )
+                    if row["sender"] in earlier_blocked_senders:
+                        raise TrialStoreError(
+                            "stored blocked receipt precedes first-conflict receipt"
+                        )
                     conflict_senders.add(row["sender"])
+                elif row["result"] == "sender_quarantined":
+                    earlier_blocked_senders.add(row["sender"])
                 retained.append(dict(row))
             return retained
         except sqlite3.Error as exc:

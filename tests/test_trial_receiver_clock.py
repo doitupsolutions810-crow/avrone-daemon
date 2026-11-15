@@ -6,7 +6,9 @@ produce accepted, duplicate, rejected or quarantined delivery receipts.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Event
 
 import pytest
 
@@ -140,3 +142,40 @@ def test_finite_nonnegative_clock_is_representable_across_all_provenance(
     assert records[0]["bridge_run_id"] == "clock-207"
     assert store.receipt_records()[-1]["received_at"] == timestamp
     assert TrialStore(path).pool_snapshot()["runs"] == 1
+
+
+def test_receiver_clock_is_sampled_only_after_writer_lock_is_acquired(tmp_path, monkeypatch):
+    """Lock contention must not let an earlier timestamp commit after a later one."""
+    store = TrialStore(tmp_path / "private" / "trials.sqlite3")
+    blocker = store._connect()
+    blocker.execute("BEGIN IMMEDIATE")
+    started = Event()
+    clock_sampled = Event()
+    real_time = trial_receiver.time.time
+
+    def observed_clock():
+        clock_sampled.set()
+        return real_time()
+
+    monkeypatch.setattr(trial_receiver.time, "time", observed_clock)
+
+    def deliver():
+        started.set()
+        return store.ingest_many(
+            [envelope("clock-after-lock")], sender="peer-c", transport="fleet"
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(deliver)
+            assert started.wait(timeout=2)
+            # The worker is blocked at BEGIN IMMEDIATE; it must not have
+            # sampled a receipt timestamp before it owns the write lock.
+            assert not clock_sampled.wait(timeout=0.2)
+            blocker.commit()
+            assert clock_sampled.wait(timeout=2)
+            assert future.result(timeout=5)["accepted"] == 1
+    finally:
+        if blocker.in_transaction:
+            blocker.rollback()
+        blocker.close()

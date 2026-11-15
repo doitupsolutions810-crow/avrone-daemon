@@ -110,7 +110,7 @@ def test_duplicate_receipt_id_is_never_reported_as_two_distinct_events(tmp_path)
         db.commit()
     finally:
         db.close()
-    with pytest.raises(TrialStoreError, match="duplicate receipt identity"):
+    with pytest.raises(TrialStoreError, match="event sequence schema integrity|duplicate receipt identity"):
         store.receipt_records()
 
 

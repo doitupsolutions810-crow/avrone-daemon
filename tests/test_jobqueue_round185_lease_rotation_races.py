@@ -506,3 +506,51 @@ def test_retry_backoff_grows_exponentially_and_caps_at_sixty_seconds(tmp_path):
             await queue.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("operation,expected", [
+    ("complete", False),
+    ("fail", "stale"),
+    ("extend", False),
+    ("release", False),
+])
+def test_requeue_invalidates_prior_owner_before_and_after_reclaim(tmp_path, operation, expected):
+    async def run():
+        owner, successor = (
+            JobQueue(tmp_path / "requeue-fence.db"),
+            JobQueue(tmp_path / "requeue-fence.db"),
+        )
+        try:
+            jid = await owner.enqueue("requeue-fence", {}, max_attempts=3)
+            first = await owner.claim()
+            assert first is not None
+            old_token = first["token"]
+            assert await owner.fail(jid, "retryable failure", old_token) == "requeued"
+
+            def invoke(token, queue):
+                if operation == "complete":
+                    return queue.complete(jid, {"stale": True}, token)
+                if operation == "fail":
+                    return queue.fail(jid, "stale failure", token)
+                if operation == "extend":
+                    return queue.extend(jid, token, 60)
+                return queue.release(jid, token)
+
+            assert await invoke(old_token, successor) == expected
+            queued = await owner.get(jid)
+            assert queued is not None and queued["status"] == "queued"
+            assert queued["attempts"] == 1
+
+            owner._db.execute("UPDATE jobs SET lease_until=0 WHERE id=?", (jid,))
+            second = await successor.claim()
+            assert second is not None and second["id"] == jid
+            assert second["token"] != old_token
+            assert await invoke(old_token, owner) == expected
+            live = await owner.get(jid)
+            assert live is not None and live["status"] == "running"
+            assert live["attempts"] == 2
+            assert await successor.complete(jid, {"successor": True}, second["token"]) is True
+        finally:
+            await asyncio.gather(owner.close(), successor.close())
+
+    asyncio.run(run())

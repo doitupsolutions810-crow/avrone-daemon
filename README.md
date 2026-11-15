@@ -81,6 +81,13 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.160: Round 167: Checkpoint previews redacted
+
+- **Before:** `checkpoint.describe` and `list_managed` returned the task preview and the answer preview raw. These feed `/api/checkpoints` and the checkpoint list, so a key or `--password` in the task text was served back unchanged.
+- **Now:** `_preview` redacts the text first and cuts it second, so a cut can't leave part of a secret behind.
+- **Unchanged:** stored steps stay exactly as written, so resume works as before.
+- **Tests:** `tests/test_round167_checkpoint_preview.py` (3). 2 fail on v0.159.
+
 ## v0.159: Round 166: Job ids that sqlite cannot bind
 
 - **Before:** `JobQueue.get("\ud800")` raised `UnicodeEncodeError`, and `queue_status` passed `job_id` straight through to it.

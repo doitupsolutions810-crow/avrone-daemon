@@ -576,7 +576,11 @@ def claimed(path: str | Path):
 
 
 def _preview(task: Any, n: int = 120) -> str:
-    t = " ".join(str(task or "").split())
+    # round 167: /api/checkpoints and the checkpoint list showed the task and answer raw, so a key in
+    # the task text was served back verbatim. Redact first, then cut, so a cut cannot split a secret
+    # into a prefix the patterns no longer recognise.
+    from .ctxspawn import redact
+    t = " ".join(redact(str(task or "")).split())
     return t if len(t) <= n else t[: n - 1] + "…"
 
 

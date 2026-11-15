@@ -289,3 +289,115 @@ def test_unused_event_tables_have_no_sequence_rows_and_initialize_normally(tmp_p
     assert store.receipt_records() == []
     assert store.quarantine_records() == []
     assert TrialStore(path).pool_snapshot()["runs"] == 0
+
+
+def _make_event_tables_real_legacy(store, tables):
+    """Rebuild selected event tables without bridge_run_id, as a v1 DB did."""
+    from avrone.trial_receiver import EXPECTED_EVENT_SEQUENCE_TABLE_SQL
+    db = store._connect()
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        for table in tables:
+            old_table = "former_" + table
+            columns = [
+                item["name"] for item in db.execute(
+                    f"PRAGMA table_info({table})"
+                ) if item["name"] != "bridge_run_id"
+            ]
+            assert len(columns) == (7 if table == "trial_receipts" else 8)
+            db.execute(f"ALTER TABLE {table} RENAME TO {old_table}")
+            legacy_ddl = EXPECTED_EVENT_SEQUENCE_TABLE_SQL[table].replace(
+                "bridge_run_id TEXT,", ""
+            )
+            db.execute(legacy_ddl)
+            fields = ",".join(columns)
+            db.execute(
+                f"INSERT INTO {table} ({fields}) "
+                f"SELECT {fields} FROM {old_table}"
+            )
+            db.execute(f"DROP TABLE {old_table}")
+        db.execute("PRAGMA user_version=1")
+        db.commit()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "legacy_tables",
+    [
+        ("trial_receipts",),
+        ("trial_quarantine",),
+        ("trial_receipts", "trial_quarantine"),
+    ],
+    ids=["receipts-only", "quarantine-only", "both-event-tables"],
+)
+def test_trusted_legacy_bridge_column_append_is_attested_after_migration(
+    tmp_path, legacy_tables,
+):
+    """Real ALTER ADD COLUMN appends bridge_run_id at the end of the DDL."""
+    store, path, original = seeded(tmp_path)
+    before_receipts = store.receipt_records()
+    before_quarantines = store.quarantine_records()
+    _make_event_tables_real_legacy(store, legacy_tables)
+
+    db = store._connect()
+    try:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        for table in legacy_tables:
+            names = [x["name"] for x in db.execute(
+                f"PRAGMA table_info({table})"
+            )]
+            assert "bridge_run_id" not in names
+    finally:
+        db.close()
+
+    migrated = TrialStore(path)
+    db = migrated._connect()
+    try:
+        migrated._assert_event_sequence_schema(db)
+        for table in legacy_tables:
+            ddl = db.execute(
+                "SELECT sql FROM sqlite_master WHERE name=?", (table,)
+            ).fetchone()[0].upper()
+            assert ddl.index("BRIDGE_RUN_ID") > ddl.index("RECEIVED_AT")
+        assert db.execute("PRAGMA user_version").fetchone()[0] == DB_SCHEMA_VERSION
+    finally:
+        db.close()
+
+    assert migrated.receipt_records() == before_receipts
+    assert migrated.quarantine_records() == before_quarantines
+    assert TrialStore(path).pool_snapshot()["runs"] == 1
+    assert TrialStore(path).receipt_records() == before_receipts
+
+
+@pytest.mark.parametrize("table", ["trial_receipts", "trial_quarantine"])
+def test_migrated_legacy_event_schema_still_rejects_constraint_downgrades(
+    tmp_path, table,
+):
+    """Permit exactly the legacy order; reject weakening even one constraint."""
+    store, path, _ = seeded(tmp_path)
+    _make_event_tables_real_legacy(store, (table,))
+    migrated = TrialStore(path)
+    db = migrated._connect()
+    try:
+        ddl = db.execute(
+            "SELECT sql FROM sqlite_master WHERE name=?", (table,)
+        ).fetchone()[0]
+        assert "bridge_run_id" in ddl
+        db.execute("BEGIN IMMEDIATE")
+        db.execute(f"ALTER TABLE {table} RENAME TO prior_event")
+        downgraded = ddl.replace("trial_id TEXT NOT NULL", "trial_id TEXT")
+        assert downgraded != ddl
+        db.execute(downgraded)
+        columns = [x["name"] for x in db.execute("PRAGMA table_info(prior_event)")]
+        cols = ",".join(columns)
+        db.execute(
+            f"INSERT INTO {table} ({cols}) SELECT {cols} FROM prior_event"
+        )
+        db.execute("DROP TABLE prior_event")
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="event sequence schema integrity"):
+        TrialStore(path)

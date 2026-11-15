@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import time
+import unicodedata
 from typing import TYPE_CHECKING, Any
 
 from . import bridge as bridgemod
@@ -80,6 +81,32 @@ def age(seconds: float) -> str:
     return f"{s // 86400}d"
 
 
+MAX_MARKS = 4  # combining marks kept after one base character (Hebrew niqqud + cantillation can stack 3-4)
+
+
+def _calm(text: str) -> str:
+    """Round 74: a lesson of "docker" + 400 U+0301 spent the whole digest on one stacked glyph
+    ("zalgo" text) that paints over neighbouring lines. Keep at most MAX_MARKS (4) combining marks
+    (Mn/Me) in a row; real accents, Vietnamese NFD and pointed Hebrew are untouched."""
+    out: list[str] = []
+    run = 0
+    for ch in text:
+        if unicodedata.category(ch) in ("Mn", "Me"):
+            run += 1
+            if run > MAX_MARKS:
+                continue
+        else:
+            run = 0
+        out.append(ch)
+    return "".join(out)
+
+
+def _field(r: dict[str, Any], name: str, default: str = "") -> str:
+    """A text field of a record. Round 74: a dict/list task printed as its Python repr."""
+    v = r.get(name)
+    return v if isinstance(v, str) else default
+
+
 def rank(recs: list[dict[str, Any]], topic: str) -> tuple[list[dict[str, Any]], bool]:
     """(ranked records, matched_by_topic)."""
     want = bridgemod._words(topic or "")
@@ -98,6 +125,8 @@ def rank(recs: list[dict[str, Any]], topic: str) -> tuple[list[dict[str, Any]], 
 
 @off_loop
 async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    if not isinstance(args, dict):  # round 74: null/list/str args raised AttributeError
+        args = {}
     topic = args.get("topic")
     if topic is not None and not isinstance(topic, str):
         # round 50: {"a": 1} was str()-ed, and its quote/brace-free words matched lessons
@@ -111,7 +140,8 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not bridgemod.lessons_enabled():
         return "lessons are off on this node (AVRONE_LESSONS); nothing is learned or recalled"
     data_dir = getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)
-    if data_dir is None:
+    if data_dir is None or (isinstance(data_dir, str) and not data_dir.strip()):
+        # round 74: "" is Path("") = the process cwd, so a blank data_dir read ./memory.jsonl
         return "lesson_recall: no data_dir on this node, so no lessons are stored"
     try:
         recs = list(bridgemod._store(data_dir).load(bridgemod.LESSONS_NS).values())
@@ -136,13 +166,13 @@ async def t_lesson_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
         t = _ts(r, now)
         when = age(now - t) if t else "?"
         from .tools import one_line  # round 134: \r / U+2028 forged extra lesson lines
-        text = redact_text(one_line(r.get("value", "")))
+        text = _calm(redact_text(one_line(r.get("value", ""))))
         if len(text) > LESSON_DIGEST:
             text = text[:LESSON_DIGEST] + "..."
-        src = redact_text(one_line(r.get("task", "") or ""))[:80]
+        src = _calm(redact_text(one_line(_field(r, "task"))))[:80]
         # round 67: the key was the one field shown unredacted, so a lesson stored under a token-
         # shaped key (a model naming a note after the credential it found) printed it in full
-        key = redact_text(one_line(r.get("key", "?")))[:120]
+        key = _calm(redact_text(one_line(_field(r, "key", "?") or "?")))[:120]
         line = f"- [{when} ago] {key}" + (f" ({src})" if src else "") + f": {text}"
         if used + len(line) + 1 > LESSON_RECALL_MAX_CHARS:
             lines.append(f"... {len(ranked[:lim]) - shown} more not shown (output cap)")

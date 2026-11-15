@@ -1066,3 +1066,11 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **`mem=True` / `cpu=True` meant the minimum** (1.0 was clamped to 256 MiB / 0.1 CPU). Bools now fall back to the default.
 - **"could not start agent container" carried raw stderr**: a bytes repr, ANSI escapes, and newlines that could forge log lines. It's now decoded, folded to one line, escaped with `textsafe.escape`, and capped at 300 characters.
 - Tests: `tests/test_agentcontainer_r73_robust.py` (45).
+
+## Hardening round 74: lesson recall (`tools_lessonrecall.py`)
+
+- **Non-dict args crashed.** null, a list or a string as args raised AttributeError out of `lesson_recall`. They're treated as `{}` now, which lists the newest lessons.
+- **A blank data_dir read the process cwd.** `""` is `Path("")`, which is `.`, so lessons were read from whatever `./memory.jsonl` the server started beside. Whitespace read a directory literally named `"  "`. Blank now means no data_dir.
+- **Non-text task and key fields printed as Python reprs**, for example `(… {'t': 1})`. Only text is shown now. A missing or non-text key shows as `?`.
+- **Combining-mark floods.** A lesson of `docker` plus 400 U+0301 spent the whole 300-character digest on one stacked glyph that paints over neighbouring lines. Runs of combining marks (Mn/Me) are capped at 4 in the value, key and task. Real accents, Vietnamese NFD, pointed Hebrew and Devanagari conjuncts are untouched.
+- Tests: `tests/test_lessonrecall_r74_robust.py` (30). They set `AVRONE_LESSONS=on`, because the suite's default is off.

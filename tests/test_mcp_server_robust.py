@@ -596,3 +596,22 @@ def test_protocol_stdout_fallback(monkeypatch):
     fake = io.TextIOWrapper(buf)
     monkeypatch.setattr(ms.sys, "stdout", fake)
     assert ms.protocol_stdout() is buf
+
+
+@pytest.mark.parametrize("member", [None, True, False, 0, 1, "junk", [], {}])
+def test_all_non_object_batch_members_return_invalid_request(member):
+    out, _, _ = serve([[member, PING]])
+    errors = [m for m in out if m.get("error", {}).get("code") == -32600]
+    successes = [m for m in out if m.get("id") == 99 and m.get("result") == {}]
+    assert len(errors) == 1
+    assert errors[0] == {"jsonrpc": "2.0", "id": None,
+                         "error": {"code": -32600, "message": "Invalid Request"}}
+    assert len(successes) == 1
+
+
+def test_duplicate_jsonrpc_member_after_unicode_escape_is_parse_error():
+    raw = '{"jsonrpc":"2.0","\\u0069d":1,"id":2,"method":"ping"}'
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}

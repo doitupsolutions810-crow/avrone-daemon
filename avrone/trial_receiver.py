@@ -350,6 +350,58 @@ class TrialStore:
                     "trial database primary key integrity check failed: " + table
                 )
 
+    def _make_database_private_before_wal(self) -> None:
+        """Set 0600 on the pinned database inode, never on an unchecked path.
+
+        SQLite's WAL/SHM files inherit the main DB mode, so this must run
+        before switching journal_mode=WAL. os.chmod(path) would follow a
+        symlink planted after _connect() and could change unrelated files.
+        The verified O_NOFOLLOW descriptor is also checked against the
+        database inode observed after sqlite3.connect.
+        """
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None or not hasattr(os, "fchmod"):
+            raise TrialStoreError(
+                "secure descriptor-based database permissions are unavailable"
+            )
+        flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+        fd = None
+        try:
+            self._assert_no_symlink_components(
+                self.path.parent, "trial data directory"
+            )
+            self._assert_private_parent()
+            fd = os.open(self.path, flags)
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise TrialStoreError(
+                    "trial database descriptor must be a regular single-link file"
+                )
+            self._assert_file_owner(info, "trial database")
+            if (
+                self._database_identity is None
+                or identity != self._database_identity
+                or self._assert_database_file() != identity
+            ):
+                raise TrialStoreError(
+                    "trial database identity changed before permission finalization"
+                )
+            os.fchmod(fd, 0o600)
+            # Detect a pathname replacement during fchmod. The verified
+            # descriptor ensures a swapped target was never chmodded.
+            if self._assert_database_file() != identity:
+                raise TrialStoreError(
+                    "trial database identity changed during permission finalization"
+                )
+        except OSError as exc:
+            raise TrialStoreError(
+                "trial database cannot be secured before SQLite WAL mode"
+            ) from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
+
     def _initialize(self) -> None:
         db = self._connect()
         try:
@@ -357,13 +409,10 @@ class TrialStore:
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
             if version > DB_SCHEMA_VERSION:
                 raise TrialStoreError("trial database schema is newer than this receiver")
-            # SQLite creates -wal/-shm using the database file's mode. Under a
-            # normal 022 umask a fresh DB starts at 0644; enabling WAL before
-            # chmod makes legitimate concurrent readers encounter 0644
-            # sidecars after their own initialization and fail closed.
-            # The owner and single-link database were already verified in
-            # _connect(). Make the file private BEFORE the WAL transition.
-            os.chmod(self.path, 0o600)
+            # Make the SQLite inode private before WAL/SHM creation. Pin the
+            # inode and refuse path swaps rather than following unchecked
+            # symlinks with os.chmod(path).
+            self._make_database_private_before_wal()
             self._enable_wal(db)
             db.execute("BEGIN IMMEDIATE")
             version = int(db.execute("PRAGMA user_version").fetchone()[0])
@@ -533,8 +582,21 @@ class TrialStore:
                 "CREATE INDEX IF NOT EXISTS trial_quarantine_trial_id ON trial_quarantine(trial_id)"
             )
             db.execute(f"PRAGMA user_version = {DB_SCHEMA_VERSION}")
-            os.chmod(self.path, 0o600)
+            # DB permissions were pinned and finalized before enabling WAL;
+            # never follow the pathname a second time after migration.
             db.commit()
+            # Detect replacement between the pre-WAL descriptor verification
+            # and the end of schema initialization. SQLite itself still uses a
+            # pathname-based open, so this check is defense in depth, not a
+            # substitute for an openat-style SQLite VFS.
+            self._assert_no_symlink_components(
+                self.path.parent, "trial data directory"
+            )
+            self._assert_private_parent()
+            if self._assert_database_file() != self._database_identity:
+                raise TrialStoreError(
+                    "trial database identity changed during initialization"
+                )
         except TrialStoreError:
             db.rollback()
             raise

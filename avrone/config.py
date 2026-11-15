@@ -258,7 +258,8 @@ def resolve_provider(provider: str | None, base_url: str | None = None, model: s
     An empty api key is allowed (a proxy may inject auth, or the backend needs none).
     """
     env = os.environ if env is None else env
-    name = (provider or "openclaw").strip().lower()
+    # round 88: '"xai"' (a compose .env keeps the quotes) raised at import, so the server never started
+    name = switch_word(provider, "openclaw") if isinstance(provider, str) else "openclaw"
     if name not in PROVIDERS:
         raise ValueError(f"Unknown AVRONE_PROVIDER {provider!r}. Choose one of: {', '.join(PROVIDERS)}")
     p_url, p_model, key_env = PROVIDERS[name]
@@ -436,10 +437,33 @@ class Settings:
     data_dir: Path = field(default_factory=_path("AVRONE_DATA_DIR", "./data"))
 
     def __post_init__(self) -> None:
+        clean_text_settings(self)
         self.provider, self.llm_base_url, self.llm_model, self.llm_api_key = resolve_provider(
             self.provider, self.llm_base_url, self.llm_model, self.llm_api_key)
         bound_settings(self)
         # admin tokens stay exact and untrimmed on purpose (test_previous_token_is_exact_and_untrimmed)
+
+
+# round 88: field -> blank value. The word settings were read raw: AVRONE_RUNNER='"docker"', "Docker"
+# or "docker " was not "docker" or "auto", so sovereign.establish booted the LOCAL (unsandboxed)
+# runner; AVRONE_LLM_MODE='"mock"' or "Mock" called a live model; a blank AVRONE_RUNNER= did the
+# same local fallback; a quoted AVRONE_DOCKER_IMAGE failed check_image. Words are cleaned and
+# lower-cased, blank means the default; an unknown runner word stays as written so doctor still
+# reports it.
+WORD_SETTINGS: dict[str, str] = {"llm_mode": "live", "runner": "auto"}
+TEXT_SETTINGS: dict[str, str] = {"docker_image": "python:3.12-slim", "lead_model": "", "llm_model": "",
+                                 "llm_fallbacks": ""}
+
+
+def clean_text_settings(s: Any) -> None:
+    for name, blank in WORD_SETTINGS.items():
+        v = getattr(s, name, None)
+        if isinstance(v, str):
+            setattr(s, name, switch_word(v, blank))
+    for name, blank in TEXT_SETTINGS.items():
+        v = getattr(s, name, None)
+        if isinstance(v, str):
+            setattr(s, name, clean_secret(v) or blank)
 
 
 # round 78/79: field -> (lowest allowed, highest allowed, value used below the lowest).

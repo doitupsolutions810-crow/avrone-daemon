@@ -59,11 +59,36 @@ SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def _repo_root(ctx: "AgentContext") -> Path:
-    env = os.getenv("AVRONE_REPO_DIR")
+    # round 88: "  " was truthy and resolved to <cwd>/"  "; a quoted path kept its quotes
+    from .config import clean_secret
+    env = clean_secret(os.getenv("AVRONE_REPO_DIR"))
     if env:
-        return Path(env).resolve()
+        return Path(env).expanduser().resolve()
     # package lives at <repo>/avrone/evolve.py
     return Path(__file__).resolve().parent.parent
+
+
+DEFAULT_TEST_CMD = 'python -m pytest -q -m "not integration"'
+
+
+def _cmd_text(raw: Any) -> str:
+    """A shell command as given, trimmed; one pair of quotes wrapping the whole value is removed only
+    when no other quote of that kind is inside (so '"pytest -q"' unwraps but '"a" b "c"' stays)."""
+    if not isinstance(raw, str):
+        return ""
+    t = raw.strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"" and t[0] not in t[1:-1]:
+        t = t[1:-1].strip()
+    return t
+
+
+def gate_command(test_cmd: Any = None) -> str:
+    """The evolve gate's test command: the argument, else AVRONE_EVOLVE_TEST_CMD, else the default.
+    Round 88: a whitespace-only value (test_cmd="  " or AVRONE_EVOLVE_TEST_CMD=" ") was truthy, so
+    the gate ran "PYTHONPATH=... <blank> 2>&1" - a bare assignment that exits 0 - and EVERY proposal
+    passed and was committed untested. Blank now means the next source; a non-text argument (a
+    number, a list) is ignored rather than str()-ed into a command."""
+    return _cmd_text(test_cmd) or _cmd_text(os.getenv("AVRONE_EVOLVE_TEST_CMD")) or DEFAULT_TEST_CMD
 
 
 STATE_JSON_MAX_BYTES = 16 * 1024 * 1024
@@ -397,8 +422,7 @@ async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: s
                 "duration_s": round(_now() - t0, 3)}
     # The gate runs the deterministic suite by default: the real-uvicorn integration tests flake
     # under the parallel-clone load of a squad and would reject good unit-level proposals.
-    test_cmd = str(test_cmd or os.getenv("AVRONE_EVOLVE_TEST_CMD")
-                   or 'python -m pytest -q -m "not integration"')
+    test_cmd = gate_command(test_cmd)
     timeout = max(1, int(timeout))
     # Test the clone's code via PYTHONPATH (beats the installed package) without re-pointing the
     # node's own install, so parallel proposals can't hijack each other or the live system.

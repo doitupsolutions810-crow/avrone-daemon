@@ -94,7 +94,10 @@ def parse_upstreams(settings: Any, env: dict[str, str] | None = None) -> list[Up
     env = os.environ if env is None else env
     ups = [Upstream(settings.provider, settings.llm_base_url, settings.llm_model,
                     settings.llm_api_key, getattr(settings, "lead_model", "") or "")]
-    for spec in (env.get("AVRONE_LLM_FALLBACKS", "") or "").split(","):
+    # round 88: through config.env_list, so '"openrouter:x,ollama:y"' (whole value quoted) no longer
+    # drops the first spec and keeps a stray quote on the last model id
+    from .config import env_list
+    for spec in env_list(env.get("AVRONE_LLM_FALLBACKS", "")):
         spec = spec.strip()
         if not spec:
             continue

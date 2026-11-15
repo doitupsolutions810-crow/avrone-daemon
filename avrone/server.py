@@ -399,9 +399,10 @@ async def fusion_status(x_admin_token: str | None = Header(default=None)):
 async def fusion_watch(x_admin_token: str | None = Header(default=None)):
     """One supervision cycle. Dials only when board, events, and health URLs are all set."""
     require_admin(x_admin_token)
-    board = (os.environ.get("FUSION_BOARD_URL") or "").strip()
-    events = (os.environ.get("FUSION_EVENTS_URL") or "").strip()
-    health = (os.environ.get("FUSION_HEALTH_URL") or "").strip()
+    from .config import clean_secret  # round 88: a quoted URL was dialed with its quotes
+    board = clean_secret(os.environ.get("FUSION_BOARD_URL"))
+    events = clean_secret(os.environ.get("FUSION_EVENTS_URL"))
+    health = clean_secret(os.environ.get("FUSION_HEALTH_URL"))
     if not board or not events or not health:
         return {"watched": False, "reason": "unset"}
     from .fusion_peer import shared_watch
@@ -410,7 +411,7 @@ async def fusion_watch(x_admin_token: str | None = Header(default=None)):
     events_token = (os.environ.get("FUSION_EVENTS_TOKEN") or os.environ.get("CK_FUSION_TOKEN") or token).strip()
     # Not FUSION_STATE_PATH: that file belongs to the relay (version 2). Writing
     # it from here would drop the ids the relay has already delivered.
-    state_path = (os.environ.get("AVRONE_FUSION_WATCH_PATH") or "").strip() or None
+    state_path = clean_secret(os.environ.get("AVRONE_FUSION_WATCH_PATH")) or None
     watch = shared_watch(state_path)
     threshold, cooldown = _fusion_breaker()
     return await asyncio.to_thread(

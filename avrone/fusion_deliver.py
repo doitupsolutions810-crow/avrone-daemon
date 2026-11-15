@@ -103,11 +103,20 @@ def _int_env(name: str, default: int) -> int:
     return int(v)
 
 
+def _url_path(raw: Any, default: str) -> str:
+    from .config import clean_secret
+    p = clean_secret(raw)
+    if not p:
+        return default
+    return p if p.startswith("/") else "/" + p
+
+
 def default_state_path(data_dir: Path | None = None) -> Path | None:
     """``AVRONE_FUSION_STATE_PATH`` when set, else ``<data_dir>/fusion/delivery-state.json``."""
-    raw = os.environ.get("AVRONE_FUSION_STATE_PATH", "").strip()
+    from .config import clean_secret
+    raw = clean_secret(os.environ.get("AVRONE_FUSION_STATE_PATH"))  # round 88: quotes kept, "~" literal
     if raw:
-        return Path(raw)
+        return Path(raw).expanduser()
     if data_dir is None:
         return None
     return Path(data_dir) / "fusion" / "delivery-state.json"
@@ -124,11 +133,14 @@ def config_from_env() -> DeliverConfig:
         token = _raw_env("FUSION_TOKEN")
     if token is None:
         token = _raw_env("AVRONE_ADMIN_TOKEN") or ""
-    base = os.environ.get("CK_BASE", "http://127.0.0.1:8090").strip() or "http://127.0.0.1:8090"
+    from .config import clean_secret
+    # round 88: a quoted CK_BASE became the URL '"http://..."' (every delivery failed), and a padded
+    # or quoted CK_EVENTS_PATH was posted to as written; a path without "/" glued onto the host
+    base = clean_secret(os.environ.get("CK_BASE")) or "http://127.0.0.1:8090"
     return DeliverConfig(
-        base=base.rstrip("/"),
-        events_path=os.environ.get("CK_EVENTS_PATH", "/v1/events") or "/v1/events",
-        health_path=os.environ.get("CK_HEALTH_PATH", "/health") or "/health",
+        base=base.rstrip("/") or "http://127.0.0.1:8090",
+        events_path=_url_path(os.environ.get("CK_EVENTS_PATH"), "/v1/events"),
+        health_path=_url_path(os.environ.get("CK_HEALTH_PATH"), "/health"),
         token=token,
         timeout=max(MIN_RETRY_DELAY, _float_env("FUSION_TIMEOUT", 5.0)),
         deadline=max(0.0, _float_env("FUSION_CYCLE_DEADLINE", 10.0)),

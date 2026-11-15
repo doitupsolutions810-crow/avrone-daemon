@@ -691,3 +691,56 @@ def test_deeply_nested_persisted_payload_is_quarantined_without_stopping_claim(t
             await queue.close()
 
     asyncio.run(run())
+
+@pytest.mark.parametrize("raw", [b"\\xff\\xfe", b"\\x80", b"\\xc3\\x28"])
+def test_invalid_utf8_blob_payload_is_quarantined_and_queue_recovers(tmp_path, raw):
+    async def run():
+        queue = JobQueue(tmp_path / "invalid-utf8-payload.db")
+        try:
+            poison = await queue.enqueue("poison", {}, priority=20)
+            healthy = await queue.enqueue("healthy", {"after": "binary-corruption"}, priority=0)
+            # SQLite permits BLOB values in a TEXT-affinity column; simulate damaged storage.
+            queue._db.execute("UPDATE jobs SET payload=? WHERE id=?", (sqlite3.Binary(raw), poison))
+
+            corrupt_view = await queue.get(poison)
+            assert corrupt_view is not None
+            assert corrupt_view["payload"]["corrupt"] is True
+
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == healthy
+            assert claim["payload"] == {"after": "binary-corruption"}
+            dead = await queue.get(poison)
+            assert dead is not None and dead["status"] == "dead"
+            assert "corrupt payload" in dead["error"]
+            assert queue._db.in_transaction is False
+
+            next_id = await queue.enqueue("after-corruption", {"usable": True})
+            next_claim = await queue.claim()
+            assert next_claim is not None and next_claim["id"] == next_id
+        finally:
+            await queue.close()
+
+    import sqlite3
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("raw", ["null", "false", "0", "3.5", '"scalar"', "[]"])
+def test_persisted_non_object_json_payload_is_dead_lettered_and_skipped(tmp_path, raw):
+    async def run():
+        queue = JobQueue(tmp_path / "non-object-payload.db")
+        try:
+            poison = await queue.enqueue("poison", {}, priority=20)
+            healthy = await queue.enqueue("healthy", {"kept": True}, priority=0)
+            queue._db.execute("UPDATE jobs SET payload=? WHERE id=?", (raw, poison))
+
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == healthy
+            assert claim["payload"] == {"kept": True}
+            dead = await queue.get(poison)
+            assert dead is not None and dead["status"] == "dead"
+            assert "corrupt payload: not an object" in dead["error"]
+            assert queue._db.in_transaction is False
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

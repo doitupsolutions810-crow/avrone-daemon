@@ -483,10 +483,30 @@ class TrialStore:
                 (table,),
             ).fetchone()
             actual_sql = None if ddl is None else ddl["sql"]
+            # A trusted legacy table may have been upgraded by
+            # ALTER TABLE ... ADD COLUMN bridge_run_id TEXT. SQLite appends
+            # that column *after* received_at, whereas fresh databases place
+            # it before result/reason. Both layouts are safe when every
+            # column and constraint matches a known canonical definition.
+            # SQLite also rewrites whitespace around punctuation during
+            # ALTER; normalize only harmless whitespace, not SQL tokens.
+            def normalized(statement: str) -> str:
+                return re.sub(
+                    r"\\s*([(),])\\s*", r"\\1",
+                    " ".join(statement.split()).upper(),
+                )
+
+            without_bridge = expected.replace("bridge_run_id TEXT,", "")
+            appended_bridge = without_bridge.replace(
+                "received_at REAL NOT NULL",
+                "received_at REAL NOT NULL, bridge_run_id TEXT",
+            )
+            expected_layouts = {
+                normalized(expected), normalized(appended_bridge),
+            }
             if (
                 not isinstance(actual_sql, str)
-                or " ".join(actual_sql.split()).upper()
-                != " ".join(expected.split()).upper()
+                or normalized(actual_sql) not in expected_layouts
             ):
                 raise TrialStoreError(
                     "trial event sequence schema integrity check failed: " + table

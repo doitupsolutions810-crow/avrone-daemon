@@ -233,3 +233,44 @@ def test_eight_queue_connections_claim_backlog_once(tmp_path):
             await asyncio.gather(*(queue.close() for queue in queues))
 
     asyncio.run(run())
+
+@pytest.mark.parametrize("operation,expected", [
+    ("complete", False),
+    ("fail", "stale"),
+    ("extend", False),
+    ("release", False),
+])
+def test_forged_owner_token_cannot_mutate_live_lease(tmp_path, operation, expected):
+    async def run():
+        path = tmp_path / f"forged-{operation}.db"
+        owner, attacker = JobQueue(path), JobQueue(path)
+        try:
+            jid = await owner.enqueue("lease-fence", {"safe": True})
+            claim = await owner.claim()
+            assert claim is not None
+            token = "0" * 64 if claim["token"] != "0" * 64 else "1" * 64
+
+            if operation == "complete":
+                result = await attacker.complete(jid, {"forged": True}, token)
+            elif operation == "fail":
+                result = await attacker.fail(jid, "forged failure", token)
+            elif operation == "extend":
+                result = await attacker.extend(jid, token, 3600)
+            else:
+                result = await attacker.release(jid, token)
+
+            assert result == expected
+            row = await owner.get(jid)
+            assert row is not None and row["status"] == "running"
+            assert row["attempts"] == 1
+            assert row["result"] is None
+            assert await owner.complete(jid, {"legitimate": True}, claim["token"]) is True
+            final = await owner.get(jid)
+            assert final is not None and final["status"] == "done"
+            assert final["result"] == {"legitimate": True}
+        finally:
+            await asyncio.gather(owner.close(), attacker.close())
+
+    asyncio.run(run())
+
+

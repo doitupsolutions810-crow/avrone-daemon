@@ -1,9 +1,8 @@
 {
-  "schema": "great-scale-evidence/v92",
-  "finding": "The script prunes the oldest run directories when more than KEEP_RUNS exist. The current OUT is protected. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v155",
+  "finding": "The script prunes the oldest run folders when count exceeds KEEP_RUNS, and protects the current OUT. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "defaultKeep": 30,
-  "protectsCurrent": true,
+  "prune": "oldest first; protect current OUT",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,

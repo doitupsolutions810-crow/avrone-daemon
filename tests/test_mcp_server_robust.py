@@ -638,7 +638,7 @@ def test_oversized_jsonrpc_line_is_discarded_and_server_recovers():
         core = Core()
         srv = server(core)
         reader = asyncio.StreamReader(limit=64)
-        reader.feed_data(b"x" * 512 + b"\\n" + json.dumps(PING).encode() + b"\\n")
+        reader.feed_data(b"x" * 512 + b"\n" + json.dumps(PING).encode() + b"\n")
         reader.feed_eof()
         out = Out()
         await asyncio.wait_for(srv.serve(reader, out), 5)
@@ -652,12 +652,19 @@ def test_oversized_jsonrpc_line_is_discarded_and_server_recovers():
 
 @pytest.mark.parametrize("raw", [
     '{"jsonrpc":"2.0","id":1,"method":"ping",}',
-    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\\\\x"}}',
-    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"raw\x01control"}}',
+    r'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\x"}}',
     '{"jsonrpc":"2.0","id":1,"method":"ping"} trailing',
     '{"jsonrpc":"2.0","id":1,"method":"ping"',
 ])
 def test_malformed_json_lexical_edges_return_parse_error_and_recover(raw):
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_raw_control_character_in_json_string_is_parse_error():
+    raw = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"raw' + chr(1) + 'control"}}'
     out, _, _ = serve([raw, PING])
     assert out[0] == {"jsonrpc": "2.0", "id": None,
                       "error": {"code": -32700, "message": "Parse error"}}

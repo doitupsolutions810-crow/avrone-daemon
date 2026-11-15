@@ -46,7 +46,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from . import agentfs, memstore
+from . import agentfs, memstore, textsafe
 from .agentfs_tools import dir_usage, quota_bytes
 
 FORMAT = "avrone-agentpack/1"
@@ -236,6 +236,17 @@ def export_pack(workspace: Path, data_dir: Path, agent_id: str, origin: str, hom
     if d.is_symlink():
         raise PackError("agent dir must not be a symlink")
     files = _walk(d) if d.is_dir() else []
+    for rel, _, _ in files:
+        # round 72: names the receiving node refuses (invalid UTF-8, a backslash, control or bidi
+        # characters, Notes.md beside notes.md) exported fine and failed only after the transfer
+        try:
+            _check_rel(rel)
+        except PackError as e:
+            raise PackError(f"agent home has a file name another node cannot take: {e}") from None
+    try:
+        _check_names([rel for rel, _, _ in files])
+    except PackError as e:
+        raise PackError(f"agent home cannot be packed: {e}") from None
     total = sum(st.st_size for _, _, st in files)
     quota = quota_bytes()
     if total > quota:
@@ -292,8 +303,10 @@ def _check_rel(rel: str) -> str:
     parts = rel.split("/")
     if any(p in ("", ".", "..") for p in parts) or "\\" in rel:
         raise PackError(f"path traversal in pack: {rel!r}")
-    if any(ord(c) < 32 or ord(c) == 127 for c in rel):
-        # newline/escape bytes in a file name break every log line and terminal listing that shows it
+    if textsafe.UNSAFE_ONE.search(rel):
+        # newline/escape bytes in a file name break every log line and terminal listing that shows it;
+        # round 72: C1 controls (U+0085 is a newline to many tools), U+2028/2029 and bidi overrides
+        # ("invoice\u202etxt.exe" displays as "invoiceexe.txt") passed the old C0/DEL-only check
         raise PackError(f"control character in pack path: {rel!r}")
     try:
         raw = rel.encode("utf-8")
@@ -308,6 +321,25 @@ def fold_path(rel: str) -> str:
     """How a case-insensitive, normalization-insensitive filesystem (macOS APFS/HFS+ default,
     exFAT) sees a path: NFC + casefold."""
     return unicodedata.normalize("NFC", rel).casefold()
+
+
+def _check_names(rels: Any) -> None:
+    """Refuse names that collide on a case-insensitive filesystem or put a file under a file."""
+    rels = list(rels)
+    folded: dict[str, str] = {}
+    for rel in rels:
+        f = fold_path(rel)
+        if f in folded:
+            # on a Mac (case-insensitive APFS) "Notes.md" and "notes.md" are ONE file: the second
+            # write silently replaced the first, so the import "succeeded" with a file missing
+            raise PackError(f"path conflict in pack: {folded[f]!r} and {rel!r} are the same file on a "
+                            "case-insensitive filesystem (macOS); rename one on the sending node")
+        folded[f] = rel
+    for rel in rels:  # a file may not also be a directory ("a" and "a/b"), in any case
+        parts = rel.split("/")
+        for i in range(1, len(parts)):
+            if fold_path("/".join(parts[:i])) in folded:
+                raise PackError(f"path conflict in pack: {rel!r} is under a file")
 
 
 def zlib_error() -> type[Exception]:
@@ -355,6 +387,8 @@ def read_pack_file(p: Path) -> bytes:
 
 def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, bytes]]:
     """Parse and fully verify a bundle in memory. Returns (manifest, memory records, {rel: bytes})."""
+    if not isinstance(bundle, (bytes, bytearray, memoryview)):
+        raise PackError(f"bundle must be bytes, not {type(bundle).__name__}")
     quota = quota_bytes()
     if len(bundle) > quota + 1024 * 1024:
         raise PackError(f"bundle is {len(bundle)} bytes; over the quota")
@@ -452,23 +486,19 @@ def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict
         total += len(data)
     if total > quota:
         raise PackError(f"pack holds {total} bytes; over the agent-fs quota of {quota} bytes")
-    folded: dict[str, str] = {}
-    for rel in blobs:
-        f = fold_path(rel)
-        if f in folded:
-            # on a Mac (case-insensitive APFS) "Notes.md" and "notes.md" are ONE file: the second
-            # write silently replaced the first, so the import "succeeded" with a file missing
-            raise PackError(f"path conflict in pack: {folded[f]!r} and {rel!r} are the same file on a "
-                            "case-insensitive filesystem (macOS); rename one on the sending node")
-        folded[f] = rel
-    for rel in blobs:  # a file may not also be a directory ("a" and "a/b"), in any case
-        parts = rel.split("/")
-        for i in range(1, len(parts)):
-            if fold_path("/".join(parts[:i])) in folded:
-                raise PackError(f"path conflict in pack: {rel!r} is under a file")
+    _check_names(blobs)
     if not 0 <= manifest["created"] < 2**40:
         raise PackError("bad created in manifest")
-    if _sha(mem) != (manifest.get("memory") or {}).get("sha256"):
+    mm = manifest.get("memory")
+    if not isinstance(mm, dict):  # round 72: a list/str here was an AttributeError (a 500), not a refusal
+        raise PackError("bad memory in manifest")
+    tb = manifest.get("total_bytes")
+    if tb is not None and (isinstance(tb, bool) or not isinstance(tb, int) or tb < 0):
+        # round 72: import_pack reported whatever the sender wrote here ("bytes": "x") and a pack
+        # without it was a KeyError after the files were already installed. The result now reports
+        # the verified byte count; this field is informational, so only its type is enforced.
+        raise PackError("bad total_bytes in manifest")
+    if _sha(mem) != mm.get("sha256"):
         raise PackError("memory hash mismatch (tampered pack)")
     if not isinstance(memory, list):
         raise PackError("memory must be a list")
@@ -493,7 +523,11 @@ def import_pack(workspace: Path, data_dir: Path, bundle: bytes, local_node: str,
         try:
             _install(root, workspace, data_dir, manifest, blobs, aid, local_node)
         except OSError as e:  # e.g. a name too long for this filesystem: a refusal, not a 500
-            raise PackError(f"could not install agent pack: {type(e).__name__}: {e}"[:300]) from None
+            # round 72: str(e) carried the host's absolute workspace path to the sending peer
+            import errno as _errno
+            code = _errno.errorcode.get(e.errno or 0, "")
+            raise PackError(f"could not install agent pack: {type(e).__name__}"
+                            + (f" ({code})" if code else "")) from None
         stats = {"merged": 0, "skipped": 0, "rejected": 0}
         good = [r for r in memory if isinstance(r, dict)]
         stats["rejected"] += len(memory) - len(good)
@@ -504,7 +538,7 @@ def import_pack(workspace: Path, data_dir: Path, bundle: bytes, local_node: str,
             record(data_dir, aid, home=manifest["home"], origin=manifest["origin"], created=manifest["created"],
                    imported=int(time.time()))
     return {"agent_id": aid, "origin": manifest["origin"], "home": manifest["home"],
-            "created": manifest["created"], "files": len(blobs), "bytes": manifest["total_bytes"],
+            "created": manifest["created"], "files": len(blobs), "bytes": sum(map(len, blobs.values())),
             "memory": stats}
 
 
@@ -516,6 +550,10 @@ def _install(root: Path, workspace: Path, data_dir: Path, manifest: dict[str, An
     target = root / aid
     if target.is_symlink():
         raise PackError("agent dir must not be a symlink")
+    if os.path.lexists(target) and not target.is_dir():
+        # round 72: a regular file or FIFO at agents/<id> was swapped aside and then left behind as a
+        # stray .old-<id>-* entry (rmtree cannot remove a file), silently replacing whatever it was
+        raise PackError(f"agents/{aid} exists and is not a directory; refusing to replace it")
     existing = target.is_dir() and any(target.iterdir())
     have_mem = bool(_memory_records(data_dir, aid))
     if existing or have_mem:

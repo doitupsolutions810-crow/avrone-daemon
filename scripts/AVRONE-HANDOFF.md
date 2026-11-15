@@ -1047,3 +1047,14 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **Non-dict args** (null, list, string) raised AttributeError out of both tools on a direct call. They're treated as `{}`.
 - **registry_audit**: a name listed twice was counted twice and shown twice under "no arg schema". Names are deduplicated now. A non-dict schema (`"str"`, a list) counted as having a schema, though `validate_args` checks nothing for it. It's listed under no arg schema now. `{"source": 3}` or a list used to audit every tool silently as if no filter was given. It's refused with an error.
 - Tests: `tests/test_statehealth_r71_robust.py` (59).
+
+## Hardening round 72: agent pack restore and export (`agentpack.py`)
+
+- **A manifest `memory` that isn't an object crashed import.** `[1]` or `"abc"` raised AttributeError out of read_pack, which became a 500 on fleet migrate and a crash in pack verify. It's refused as `bad memory in manifest` now.
+- **`total_bytes` was trusted.** A pack without it raised KeyError *after* the files were already installed. A string was echoed back as `"bytes": "x"`. The import result now reports the verified byte count. The field is optional, but if present it must be a non-negative int, else `bad total_bytes in manifest`. That check runs before anything is installed.
+- **Unsafe characters passed the path check.** The check covered only C0 and DEL. C1 controls (U+0085 is a newline to many tools), U+2028/2029, and bidi overrides got through: `invoice\u202etxt.exe` displays as `invoiceexe.txt`. `_check_rel` uses `avrone.textsafe.UNSAFE_ONE` now. Ordinary Unicode, emoji and ZWJ names still import.
+- **Export built packs no node can import.** Invalid UTF-8, a backslash, control or bidi characters, case twins (`Notes.md` beside `notes.md`), NFC/NFD twins and file/dir case conflicts all exported fine and failed only on the receiver, after the transfer. Export now runs the same `_check_rel` plus the shared `_check_names`, and refuses up front. `test_export_with_case_twins_fails_import_clearly` now expects the refusal at export.
+- **A regular file or FIFO at `agents/<id>` was swapped aside and leaked.** It was replaced silently, and `rmtree` couldn't remove it, so a stray `.old-<id>-*` entry was left behind. Import refuses it now: `exists and is not a directory`. A dangling symlink is still refused as a symlink.
+- **Install OSErrors carried the host's absolute path to the sending peer.** The message is now the exception type and errno name only, for example `FileExistsError (EEXIST)`.
+- **A non-bytes bundle** (str, None) raised TypeError. It's refused as `bundle must be bytes`. bytearray and memoryview still work.
+- Tests: `tests/test_agentpack_r72_robust.py` (68).

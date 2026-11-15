@@ -258,3 +258,39 @@ def test_owned_legacy_database_remains_migratable_and_is_private_before_wal(
     assert expected_inode == path.stat().st_ino
     assert verified == [0o600]
     assert reopened.pool_snapshot()["runs"] == 0
+
+@pytest.mark.parametrize(
+    "raced_mode", [0o644, 0o666, 0o400, 0o700],
+    ids=["world-readable", "group-world-writable", "read-only", "executable"],
+)
+def test_competing_new_database_with_unsafe_mode_is_refused_before_sqlite_open(
+    tmp_path, monkeypatch, raced_mode,
+):
+    path = private_path(tmp_path)
+    actual_open = os.open
+    actual_connect = sqlite3.connect
+    created = []
+    sqlite_calls = []
+
+    def planted_winner(file, flags, *args, **kwargs):
+        if Path(file) == path and flags & os.O_EXCL and not created:
+            fd = actual_open(file, flags, *args, **kwargs)
+            os.close(fd)
+            path.chmod(raced_mode)
+            created.append(True)
+        return actual_open(file, flags, *args, **kwargs)
+
+    def monitored_connect(*args, **kwargs):
+        sqlite_calls.append(True)
+        return actual_connect(*args, **kwargs)
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(trial_receiver.os, "open", planted_winner)
+        ctx.setattr(trial_receiver.sqlite3, "connect", monitored_connect)
+        with pytest.raises(TrialStoreError, match="competing trial database creation must be private"):
+            TrialStore(path)
+
+    assert created
+    assert sqlite_calls == []
+    assert mode(path) == raced_mode
+    assert path.stat().st_nlink == 1

@@ -615,3 +615,19 @@ def test_duplicate_jsonrpc_member_after_unicode_escape_is_parse_error():
     assert out[0] == {"jsonrpc": "2.0", "id": None,
                       "error": {"code": -32700, "message": "Parse error"}}
     assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("method", [None, True, False, 0, 1, [], {}, {"name": "ping"}])
+def test_non_string_jsonrpc_method_is_invalid_request(method):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": 41, "method": method}, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": 41,
+                      "error": {"code": -32600, "message": "Invalid Request: method must be a string"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("params", ["text", 5, True, [], ["x"], 3.14])
+def test_non_object_non_null_jsonrpc_params_are_invalid_params(params):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": 42, "method": "ping", "params": params}, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": 42,
+                      "error": {"code": -32602, "message": "Invalid params: params must be an object"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}

@@ -1,13 +1,12 @@
 {
-  "schema": "great-scale-evidence/v56",
-  "finding": "The script logs 'WARN: reintro stuck' when the stage HOLDs for STALL_CYCLES cycles. After 2 holds it warned. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "schema": "great-scale-evidence/v152",
+  "finding": "The script warns every STALL_CYCLES holds when stage does not advance, and clears the counter when it does. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
   "cone": 0.3819660112501052,
-  "stallCycles": 2,
-  "warned": true,
+  "stall": "warn on multiple of STALL_CYCLES; clear on advance",
   "orientation": "pass",
   "S": 0.0,
   "psi": 0.3819660112501052,
   "effectiveRuns": 1,
   "docker": false,
-  "mitigation": "None needed. The stall check holds. It detects silent progress loss."
+  "mitigation": "None needed. The stall check holds."
 }

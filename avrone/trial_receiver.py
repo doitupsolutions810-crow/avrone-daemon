@@ -202,7 +202,7 @@ class TrialStore:
                     "(expected 0600)"
                 )
 
-    def _create_private_database_once(self) -> None:
+    def _create_private_database_once(self) -> tuple[int, int] | None:
         """Create a missing database at 0600 before SQLite can open it.
 
         sqlite3.connect(path) defaults to creating an absent database using
@@ -233,7 +233,8 @@ class TrialStore:
             # or overwriting a competing receiver's evidence. Because this
             # filename was absent just before O_EXCL, a newly raced-in 0644
             # file is not a trusted *preexisting* legacy database: refuse it.
-            if self._assert_database_file() is None:
+            raced_identity = self._assert_database_file()
+            if raced_identity is None:
                 raise TrialStoreError("trial database vanished during exclusive creation")
             try:
                 raced_info = self.path.lstat()
@@ -241,11 +242,15 @@ class TrialStore:
                 raise TrialStoreError(
                     "raced database cannot be inspected securely"
                 ) from exc
+            if (raced_info.st_dev, raced_info.st_ino) != raced_identity:
+                raise TrialStoreError(
+                    "competing trial database identity changed during inspection"
+                )
             if stat.S_IMODE(raced_info.st_mode) != 0o600:
                 raise TrialStoreError(
                     "competing trial database creation must be private (0600)"
                 )
-            return
+            return raced_identity
         except OSError as exc:
             raise TrialStoreError(
                 "trial database cannot be created securely"
@@ -266,6 +271,7 @@ class TrialStore:
                 raise TrialStoreError(
                     "trial database identity changed during exclusive creation"
                 )
+            return identity
         finally:
             os.close(fd)
 
@@ -275,8 +281,16 @@ class TrialStore:
         self._assert_sidecar_files()
         # For a new store, atomically create an owned 0600 file before SQLite
         # itself can create a permissive 0644 file under the process umask.
-        self._create_private_database_once()
+        created_identity = self._create_private_database_once()
         before = self._assert_database_file()
+        # Carry the verified first-created (or winning) inode identity all
+        # the way to the sqlite3.connect preflight. Otherwise, a new file
+        # could be swapped after our O_EXCL/descriptor checks but before
+        # "before" is sampled, and would be silently accepted as trusted.
+        if created_identity is not None and before != created_identity:
+            raise TrialStoreError(
+                "trial database identity changed before SQLite open"
+            )
         # A running receiver cannot silently accept a deleted or replaced
         # database and start a fresh evidence history under the same filename.
         if self._database_identity is not None and before != self._database_identity:

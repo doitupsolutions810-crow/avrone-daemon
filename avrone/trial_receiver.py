@@ -71,6 +71,39 @@ BOUNDED_QUARANTINE_COLUMNS = (
 )
 
 
+# The chronology of retained receipts and quarantine events depends on
+# AUTOINCREMENT rather than ordinary INTEGER PRIMARY KEY (whose greatest
+# deleted rowid can be recycled). Verify whole canonical table definitions,
+# not a regex that could match a misleading SQL comment or an inert suffix.
+EXPECTED_EVENT_SEQUENCE_TABLE_SQL = {
+    "trial_receipts": """
+        CREATE TABLE trial_receipts (
+            receipt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            transport TEXT NOT NULL,
+            bridge_run_id TEXT,
+            result TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            received_at REAL NOT NULL
+        )
+    """,
+    "trial_quarantine": """
+        CREATE TABLE trial_quarantine (
+            quarantine_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trial_id TEXT NOT NULL,
+            sender TEXT NOT NULL,
+            transport TEXT NOT NULL,
+            bridge_run_id TEXT,
+            reason TEXT NOT NULL,
+            incoming_sha256 TEXT NOT NULL,
+            incoming_json BLOB NOT NULL,
+            received_at REAL NOT NULL
+        )
+    """,
+}
+
+
 class TrialStoreError(RuntimeError):
     """The receiver cannot safely persist or continue accepting trial evidence."""
 
@@ -434,6 +467,82 @@ class TrialStore:
                     "trial database primary key integrity check failed: " + table
                 )
 
+    @staticmethod
+    def _assert_event_sequence_schema(db: sqlite3.Connection) -> None:
+        """Attest SQLite event-table DDL including AUTOINCREMENT semantics.
+
+        PRAGMA table_info only proves INTEGER PRIMARY KEY, not that an
+        INTEGER rowid cannot be reused after deleting the highest event.
+        sqlite_master.sql persists the table declaration (without
+        IF NOT EXISTS). Comparing every column rejects no-op comment
+        substitutions, reordered constraints, and downgraded ID semantics.
+        """
+        for table, expected in EXPECTED_EVENT_SEQUENCE_TABLE_SQL.items():
+            ddl = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            actual_sql = None if ddl is None else ddl["sql"]
+            # A trusted legacy table may have been upgraded by
+            # ALTER TABLE ... ADD COLUMN bridge_run_id TEXT. SQLite appends
+            # that column *after* received_at, whereas fresh databases place
+            # it before result/reason. Both layouts are safe when every
+            # column and constraint matches a known canonical definition.
+            # SQLite also rewrites whitespace around punctuation during
+            # ALTER; normalize only harmless whitespace, not SQL tokens.
+            def normalized(statement: str) -> str:
+                return re.sub(
+                    r"\s*([(),])\s*", r"\1",
+                    " ".join(statement.split()).upper(),
+                )
+
+            without_bridge = expected.replace("bridge_run_id TEXT,", "")
+            appended_bridge = without_bridge.replace(
+                "received_at REAL NOT NULL",
+                "received_at REAL NOT NULL, bridge_run_id TEXT",
+            )
+            expected_layouts = {
+                normalized(expected), normalized(appended_bridge),
+            }
+            if (
+                not isinstance(actual_sql, str)
+                or normalized(actual_sql) not in expected_layouts
+            ):
+                raise TrialStoreError(
+                    "trial event sequence schema integrity check failed: " + table
+                )
+            # sqlite_sequence can be edited separately from sqlite_master.
+            # Without this check, deleting/replacing its row or rewinding
+            # seq can undermine monotone event provenance despite a valid
+            # AUTOINCREMENT table declaration. An unused table legitimately
+            # has no sqlite_sequence entry; a used table cannot.
+            key = "receipt_id" if table == "trial_receipts" else "quarantine_id"
+            largest = db.execute(
+                f"SELECT MAX({key}) FROM {table}"
+            ).fetchone()[0]
+            sequences = list(db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name=? LIMIT 2",
+                (table,),
+            ))
+            if (
+                len(sequences) > 1
+                or (largest is not None and not sequences)
+                or (
+                    sequences
+                    and (
+                        type(sequences[0]["seq"]) is not int
+                        or sequences[0]["seq"] < 1
+                        or (
+                            largest is not None
+                            and sequences[0]["seq"] < largest
+                        )
+                    )
+                )
+            ):
+                raise TrialStoreError(
+                    "trial event sequence state integrity check failed: " + table
+                )
+
     def _make_database_private_before_wal(self) -> None:
         """Set 0600 on the pinned database inode, never on an unchecked path.
 
@@ -600,6 +709,7 @@ class TrialStore:
                     raise TrialStoreError(f"trial database schema is missing required columns in {table}: {names}")
 
             self._assert_primary_key_schema(db)
+            self._assert_event_sequence_schema(db)
 
             if version < DB_SCHEMA_VERSION:
                 # Do not fetch all canonical trial BLOBs into Python memory
@@ -893,6 +1003,7 @@ class TrialStore:
             # Check while holding SQLite's writer lock, preventing a DDL swap
             # between the index proof and inserting first-seen evidence.
             self._assert_primary_key_schema(db)
+            self._assert_event_sequence_schema(db)
             self._assert_source_identity_unique_index(db)
             self._assert_source_identity_triggers(db)
             quarantined = self._assert_sender_quarantine_state(db, sender)
@@ -1066,6 +1177,7 @@ class TrialStore:
         """Return retained delivery receipts only after validating every row."""
         db = self._connect()
         try:
+            self._assert_event_sequence_schema(db)
             rows = db.execute(
                 "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
                 "result,payload_sha256,received_at "
@@ -1239,6 +1351,7 @@ class TrialStore:
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
+            self._assert_event_sequence_schema(db)
             rows = db.execute(
                 f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine "
                 "ORDER BY quarantine_id LIMIT ?",

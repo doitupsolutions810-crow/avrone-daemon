@@ -600,3 +600,46 @@ def test_payload_nesting_boundary_is_stable_and_rejects_before_insert(tmp_path, 
             await queue.close()
 
     asyncio.run(run())
+
+
+
+def test_malformed_persisted_payload_is_quarantined_and_claim_continues(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "malformed-payload.db")
+        try:
+            poison = await queue.enqueue("poison", {}, priority=10)
+            healthy = await queue.enqueue("healthy", {"value": 42}, priority=0)
+            queue._db.execute("UPDATE jobs SET payload=? WHERE id=?", ("{\"unterminated\":", poison))
+
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == healthy
+            assert claim["payload"] == {"value": 42}
+            poisoned = await queue.get(poison)
+            assert poisoned is not None
+            assert poisoned["status"] == "dead"
+            assert "corrupt payload" in poisoned["error"]
+            assert await queue.stats() == {"dead": 1, "running": 1}
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+def test_get_returns_bounded_marker_for_corrupt_persisted_result_and_payload(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "corrupt-read.db")
+        try:
+            jid = await queue.enqueue("corrupt-read", {"safe": True})
+            queue._db.execute(
+                "UPDATE jobs SET payload=?, result=? WHERE id=?",
+                ("not-json-payload", "not-json-result", jid),
+            )
+            row = await queue.get(jid)
+            assert row is not None
+            assert row["payload"] == {"corrupt": True, "raw": "not-json-payload"}
+            assert row["result"] == {"corrupt": True, "raw": "not-json-result"}
+            assert row["status"] == "queued"
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

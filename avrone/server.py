@@ -145,8 +145,8 @@ def access_policy() -> str:
     admin - the admin token only, even from loopback; all - anyone who can reach the port
     (the pre-v0.27 behaviour; use it only behind a port bound to 127.0.0.1 or an auth proxy).
     Unknown values fall back to loopback, never to all."""
-    import os
-    v = (os.getenv("AVRONE_PUBLIC_ACCESS") or "loopback").strip().lower()
+    from .config import access_policy as _shared  # round 86: quoted "admin" was loopback
+    v = _shared()
     return v if v in ACCESS_POLICIES else "loopback"
 
 
@@ -327,11 +327,8 @@ def boot_id() -> str:
 
 def _fusion_timeout() -> float:
     import math
-    raw = (os.environ.get("FUSION_TIMEOUT") or "").strip()
-    try:
-        value = float(raw) if raw else 5.0
-    except ValueError:
-        value = 5.0
+    v = _env_num("FUSION_TIMEOUT")  # round 86: quotes cleaned, fullwidth refused, finite only
+    value = 5.0 if v is None else v
     if not math.isfinite(value):
         return 5.0
     return min(30.0, max(0.05, value))
@@ -340,8 +337,11 @@ def _fusion_timeout() -> float:
 def _fusion_deadline() -> float | None:
     """Seconds one watch cycle may spend dialing. ``0`` and non-finite values disable it."""
     import math
-    raw = (os.environ.get("FUSION_CYCLE_DEADLINE") or "").strip()
+    from .config import clean_secret  # round 86: quotes cleaned, fullwidth digits refused
+    raw = clean_secret(os.environ.get("FUSION_CYCLE_DEADLINE")).replace("_", "")
     if not raw:
+        return 10.0
+    if not raw.isascii():
         return 10.0
     try:
         value = float(raw)
@@ -355,19 +355,13 @@ def _fusion_deadline() -> float | None:
 def _fusion_breaker() -> tuple[int, float]:
     """``(threshold, cooldown)``. Threshold 0 disables the breaker. Junk falls back."""
     import math
-    raw = (os.environ.get("FUSION_BREAKER_THRESHOLD") or "").strip()
-    try:
-        threshold = int(raw) if raw else 1
-    except ValueError:
-        threshold = 1
+    t = _env_num("FUSION_BREAKER_THRESHOLD")  # round 86: shared reader
+    threshold = 1 if t is None else int(t)
     if threshold < 0:
         threshold = 0
     threshold = min(100, threshold)
-    raw_cd = (os.environ.get("FUSION_BREAKER_COOLDOWN") or "").strip()
-    try:
-        cooldown = float(raw_cd) if raw_cd else 30.0
-    except ValueError:
-        cooldown = 30.0
+    c = _env_num("FUSION_BREAKER_COOLDOWN")
+    cooldown = 30.0 if c is None else c
     if not math.isfinite(cooldown) or cooldown < 0:
         cooldown = 30.0
     return threshold, min(600.0, cooldown)

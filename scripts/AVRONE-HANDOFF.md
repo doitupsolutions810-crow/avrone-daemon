@@ -1175,3 +1175,14 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **`AVRONE_SHELL_PIPE_GRACE=nan`** gave 10 s of grace (`min(10, nan)` returns 10). It's now the default, 0.5 s.
 - **`AVRONE_PRIV_SHELL_TIMEOUT`** with a space or quotes read as the default. **`AVRONE_RUNS_CACHE_S`** now uses the shared reader too.
 - Tests: `tests/test_env_numbers_r85_robust.py` (100).
+
+## Hardening round 86: access and fleet settings read the node's way (`config.py`, `server.py`, `doctor.py`, `fleet.py`, `fusion_deliver.py`, `agentcontainer.py`, `tools_extra.py`)
+
+- **`AVRONE_PUBLIC_ACCESS` failed open.** It was read as `.strip().lower()`, so `'"admin"'` from a compose `.env` was an unknown word and fell back to loopback. A node set to admin-token-only therefore let local callers in without the token. `config.access_policy` now cleans quotes for both `server` and `doctor`; a truly unknown word still means loopback, never all.
+- **Fleet words** go through `fleet._env`, which now uses `clean_secret`. Before, `AVRONE_FLEET_REQUIRE_ALLOW='"1"'` read as off, which dropped the allowlist requirement. `AVRONE_FLEET_ALLOW` and `AVRONE_PUBLIC_URL` with quotes kept the quote characters.
+- **`AVRONE_FLEET_MAX_HOPS` crashed fleet startup.** `"3x"` or `'"3"'` raised `ValueError` inside `FleetManager()`, so bootstrap booted the node with the fleet off. `-5` and `10**9` went through as-is. It's now `max_hops_env()`: 0..32, default 3.
+- **Fleet numbers:** `_env_int` and `PRIVILEGED_MAX_HOPS` use `env_num`. A migrate interval of `inf` meant agents never migrated. The offload timeout and heartbeat use the shared reader.
+- **doctor's fleet toggles** (privileged, offload, dispatch, migrate, container) now clean the value the same way the node does.
+- **Web search sent queries to the wrong engine.** A provider of `"brave "` or `'"brave"'` fell through to duckduckgo, sending the query to an engine the operator never chose. Quoted or padded API keys were sent verbatim. Now cleaned; an unknown provider still means duckduckgo.
+- **Fusion:** `server._fusion_timeout`, `_fusion_deadline` and `_fusion_breaker`, plus `fusion_deliver._float_env` and `_int_env`, now refuse fullwidth digits and clean quotes. The fusion token stays exact by design. The `agentcontainer._num` reader is shared as well.
+- Tests: `tests/test_access_fleet_env_r86_robust.py` (123).

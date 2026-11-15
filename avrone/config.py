@@ -139,6 +139,18 @@ def switch_word(raw: Any, default: str) -> str:
     return clean_secret(raw).lower() or default
 
 
+ACCESS_WORDS = ("loopback", "admin", "all")
+
+
+def access_policy(env: Any = None) -> str:
+    """AVRONE_PUBLIC_ACCESS for server.require_local and doctor. Round 86: both read
+    (raw or "loopback").strip().lower(), so '"admin"' from a compose .env was unknown and fell back
+    to loopback: a node set to admin-token-only let any local caller in without the token.
+    Quotes and padding are cleaned now; a truly unknown word still means loopback, never all."""
+    w = switch_word((os.environ if env is None else env).get("AVRONE_PUBLIC_ACCESS"), "loopback")
+    return w if w in ACCESS_WORDS else "loopback"
+
+
 SELF_CHANGE_WORDS = ("allow", "log", "deny")
 
 

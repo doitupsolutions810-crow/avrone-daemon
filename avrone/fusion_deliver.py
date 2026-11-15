@@ -87,26 +87,20 @@ def _raw_env(name: str) -> str | None:
 
 
 def _float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name, "")
-    if raw.strip() == "":
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    if value != value or value in (float("inf"), float("-inf")):
-        return default
-    return value
+    """Round 86: through config.env_num, so '"5"' is 5 (was the default) and fullwidth digits are
+    refused (float() took them)."""
+    from .config import env_num
+    v = env_num(name)
+    return default if v is None else v
 
 
 def _int_env(name: str, default: int) -> int:
-    raw = os.environ.get(name, "")
-    if raw.strip() == "":
+    """Round 86: "1.0" and '"3"' used to be the default; int() also took fullwidth digits."""
+    from .config import env_num
+    v = env_num(name)
+    if v is None or abs(v) > 1 << 62:
         return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
+    return int(v)
 
 
 def default_state_path(data_dir: Path | None = None) -> Path | None:

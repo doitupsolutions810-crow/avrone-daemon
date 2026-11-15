@@ -205,7 +205,12 @@ def check_node_url(url: Any) -> str:
 
 
 def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    """Round 86: cleaned like a secret (config.clean_secret), so '"1"' from a compose .env is 1.
+    Before, AVRONE_FLEET_REQUIRE_ALLOW='"1"' read as off (any token holder could join) and
+    AVRONE_FLEET_MAX_HOPS='"3"' raised ValueError in FleetManager(), so bootstrap left the fleet off."""
+    from .config import clean_secret
+    raw = os.getenv(name)
+    return clean_secret(raw) if raw is not None else default.strip()
 
 
 TRUTHY = {"1", "true", "yes", "on"}
@@ -232,11 +237,9 @@ def migrate_enabled() -> bool:
 
 
 def migrate_interval() -> float:
-    try:
-        v = float(_env("AVRONE_AGENT_MIGRATE_INTERVAL") or DEFAULT_MIGRATE_INTERVAL_S)
-    except ValueError:
-        v = DEFAULT_MIGRATE_INTERVAL_S
-    return max(MIN_MIGRATE_INTERVAL_S, v if v == v else DEFAULT_MIGRATE_INTERVAL_S)
+    f = _env_num("AVRONE_AGENT_MIGRATE_INTERVAL")  # round 86: "inf" meant never migrate
+    v = DEFAULT_MIGRATE_INTERVAL_S if f is None else f
+    return max(MIN_MIGRATE_INTERVAL_S, v)
 
 
 # ------------------------------------------------------------ health (edgeroute)
@@ -256,10 +259,8 @@ def offload_mode() -> str:
 
 
 def offload_timeout() -> float:
-    try:
-        t = float(_env("AVRONE_FLEET_OFFLOAD_TIMEOUT", "300") or 300)
-    except ValueError:
-        t = 300.0
+    f = _env_num("AVRONE_FLEET_OFFLOAD_TIMEOUT")  # round 86: "nan" became 5 s via max/min
+    t = 300.0 if f is None else f
     return max(5.0, min(t, 900.0))
 
 
@@ -271,11 +272,19 @@ BRIDGE_MAX_POSTS, BRIDGE_MAX_BYTES = 50, 64 * 1024
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        v = int(_env(name, str(default)) or default)
-    except ValueError:
-        v = default
-    return max(lo, min(v, hi))
+    f = _env_num(name)  # round 86: shared reader (fullwidth digits refused, "1e3" = 1000)
+    if f is None:
+        return max(lo, min(default, hi))
+    return int(max(lo, min(f, hi)))
+
+
+MAX_HOPS_DEFAULT, MAX_HOPS_HARD = 3, 32
+
+
+def max_hops_env() -> int:
+    """AVRONE_FLEET_MAX_HOPS (default 3, clamped 0..32). Round 86: was int(...) inside FleetManager(),
+    so "3x" or '"3"' raised and the node booted with the fleet off; "-5" or 10**9 went through as-is."""
+    return _env_int("AVRONE_FLEET_MAX_HOPS", MAX_HOPS_DEFAULT, 0, MAX_HOPS_HARD)
 
 
 def squad_dispatch(override: str | None = None) -> str:
@@ -387,7 +396,8 @@ def node_load(n: Any) -> int:
 def heartbeat_env() -> float:
     """AVRONE_FLEET_HEARTBEAT in seconds, clamped 1..3600. "abc" used to crash FleetManager at boot,
     and 0 made every peer read as offline forever."""
-    v = _finite(_env("AVRONE_FLEET_HEARTBEAT", "15") or 15, 15.0)
+    f = _env_num("AVRONE_FLEET_HEARTBEAT")  # round 86: fullwidth digits refused, quotes cleaned
+    v = 15.0 if f is None else f
     return 15.0 if v <= 0 else max(1.0, min(3600.0, v))
 
 
@@ -673,15 +683,12 @@ class FleetManager:
             log.warning("AVRONE_FLEET_TOKEN is %d chars; use at least %d random chars "
                         "(python -c 'import secrets; print(secrets.token_hex(32))')",
                         len(self.token), WEAK_TOKEN_CHARS)
-        self.max_hops = int(_env("AVRONE_FLEET_MAX_HOPS", "3") or 3)
+        self.max_hops = max_hops_env()
         self.allow = {a.strip() for a in _env("AVRONE_FLEET_ALLOW").split(",") if a.strip()}
         self.require_allow = _env("AVRONE_FLEET_REQUIRE_ALLOW").lower() in TRUTHY
         self.privileged = _env("AVRONE_FLEET_PRIVILEGED").lower() == "allow"  # deny unless exactly "allow"
         self.privileged_nodes = {a.strip() for a in _env("AVRONE_PRIVILEGED_NODES").split(",") if a.strip()}
-        try:
-            ph = int(_env("AVRONE_FLEET_PRIVILEGED_MAX_HOPS", "1") or 1)
-        except ValueError:
-            ph = 1
+        ph = _env_int("AVRONE_FLEET_PRIVILEGED_MAX_HOPS", 1, 1, MAX_HOPS_HARD)
         self.privileged_max_hops = max(1, min(ph, self.max_hops))
         self.parent = _env("AVRONE_FLEET_PARENT").rstrip("/")
         self.public_url = _env("AVRONE_PUBLIC_URL").rstrip("/")

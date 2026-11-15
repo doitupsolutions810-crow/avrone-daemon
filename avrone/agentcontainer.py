@@ -60,10 +60,9 @@ def container_mode() -> str:
 
 
 def _num(name: str, default: float, lo: float, hi: float) -> float:
-    try:
-        v = float((os.environ.get(name) or "").strip() or default)
-    except ValueError:
-        v = default
+    from .config import env_num  # round 86: '"2"' was the default, fullwidth digits counted
+    raw = env_num(name)
+    v = default if raw is None else raw
     if v != v or v <= 0:  # NaN / non-positive
         v = default
     return max(lo, min(hi, v))

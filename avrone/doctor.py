@@ -41,6 +41,10 @@ PLACEHOLDERS = {"change-me", "changeme", "change_me", "secret", "password", "tok
 TOKEN_ENV = ("AVRONE_ADMIN_TOKEN", "AVRONE_FLEET_TOKEN", "AVRONE_LLM_API_KEY", "OPENCLAW_GATEWAY_TOKEN",
              "XAI_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "BRAVE_API_KEY", "TAVILY_API_KEY")
 _TRUE = {"1", "true", "yes", "on", "allow"}
+
+
+def _one_of(word: str, allowed: tuple[str, ...], default: str) -> str:
+    return word if word in allowed else default
 _FALSE = {"0", "false", "no", "off", "deny"}
 _USERINFO_RE = re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]*@")
 DOCKER_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock")
@@ -220,18 +224,14 @@ def run_doctor(settings: Any = None, *, env: Mapping[str, str] | None = None,
         "fleet": "on" if fleet_tok != "unset" else "off",
         "fleet_allowlist": f"{len(fleet_allow)} node(s)" if fleet_allow else "(any node)",
         "host_shell": "on" if (settings.agents_can_shell and effective_local) else "off",
-        "fleet_privileged": ("allow" if (env.get("AVRONE_FLEET_PRIVILEGED") or "").strip().lower() == "allow"
-                             else "deny"),
-        "fleet_offload": ((env.get("AVRONE_FLEET_OFFLOAD") or "off").strip().lower()
-                          if (env.get("AVRONE_FLEET_OFFLOAD") or "off").strip().lower() in ("off", "spill", "spread")
-                          else "off"),
-        "squad_dispatch": ((env.get("AVRONE_SQUAD_DISPATCH") or "local").strip().lower()
-                           if (env.get("AVRONE_SQUAD_DISPATCH") or "local").strip().lower() in ("local", "network", "hybrid")
-                           else "local"),
+        # round 86: the same cleaning fleet._env does, so quoted words report what the node does
+        "fleet_privileged": "allow" if switch_word(env.get("AVRONE_FLEET_PRIVILEGED"), "") == "allow" else "deny",
+        "fleet_offload": _one_of(switch_word(env.get("AVRONE_FLEET_OFFLOAD"), "off"), ("off", "spill", "spread"), "off"),
+        "squad_dispatch": _one_of(switch_word(env.get("AVRONE_SQUAD_DISPATCH"), "local"),
+                                  ("local", "network", "hybrid"), "local"),
         "privileged_nodes": str(len([h for h in (env.get("AVRONE_PRIVILEGED_NODES") or "").split(",") if h.strip()])),
-        "agent_container": ("persistent" if (env.get("AVRONE_AGENT_CONTAINER") or "").strip().lower() == "persistent"
-                            else "off"),
-        "agent_migrate": "on" if (env.get("AVRONE_AGENT_MIGRATE") or "").strip().lower() in _TRUE - {"allow"} else "off",
+        "agent_container": "persistent" if switch_word(env.get("AVRONE_AGENT_CONTAINER"), "") == "persistent" else "off",
+        "agent_migrate": "on" if switch_word(env.get("AVRONE_AGENT_MIGRATE"), "") in _TRUE - {"allow"} else "off",
     }
     checks.append(Check("toggles", INFO, " ".join(f"{k}={v}" for k, v in toggles.items())))
 
@@ -283,8 +283,8 @@ def _insecure_combos(settings: Any, env: Mapping[str, str], toggles: dict[str, s
     if a and f and a == f:
         out.append(Check("security.token_reuse", WARN, "admin and fleet tokens are identical",
                          "a fleet peer could then call admin endpoints; use different secrets"))
-    access = (env.get("AVRONE_PUBLIC_ACCESS") or "loopback").strip().lower()
-    access = access if access in ("loopback", "admin", "all") else "loopback"
+    from .config import access_policy  # round 86: the node's own reading, quotes cleaned
+    access = access_policy(env)
     if exposed and access == "all":
         shell = " and agents can run shell" if settings.agents_can_shell else ""
         out.append(Check("security.exposed_shell" if shell else "security.public_access", WARN,

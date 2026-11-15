@@ -163,9 +163,12 @@ async def t_web_search(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not q:
         return "ERROR: query is required"
     n = _int(args.get("max_results"), 5, 1, 20)
-    provider = str(_setting(ctx, "search_provider", "") or os.getenv("AVRONE_SEARCH_PROVIDER", "auto")).lower()
-    brave = str(_setting(ctx, "brave_api_key", "") or os.getenv("BRAVE_API_KEY", ""))
-    tavily = str(_setting(ctx, "tavily_api_key", "") or os.getenv("TAVILY_API_KEY", ""))
+    # round 86: "brave " or '"brave"' fell through to duckduckgo, sending the query to a provider the
+    # operator never chose; a quoted or padded key was sent verbatim and always failed auth.
+    from .config import clean_secret, switch_word
+    provider = switch_word(_setting(ctx, "search_provider", "") or os.getenv("AVRONE_SEARCH_PROVIDER"), "auto")
+    brave = clean_secret(_setting(ctx, "brave_api_key", "") or os.getenv("BRAVE_API_KEY", ""))
+    tavily = clean_secret(_setting(ctx, "tavily_api_key", "") or os.getenv("TAVILY_API_KEY", ""))
     if provider == "auto":
         provider = "brave" if brave else "tavily" if tavily else "duckduckgo"
     if provider == "brave":

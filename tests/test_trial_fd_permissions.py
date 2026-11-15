@@ -232,3 +232,64 @@ def test_live_initializer_refuses_symlink_swap_during_private_finalization(
     path.unlink()
     displaced.rename(path)
     assert TrialStore(path).pool_snapshot()["runs"] == 1
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["new-db", "owned-legacy-0644"])
+def test_fresh_and_legacy_initialization_never_use_path_chmod(
+    tmp_path, monkeypatch, legacy,
+):
+    parent = tmp_path / "private"
+    parent.mkdir(mode=0o700)
+    path = parent / "trials.sqlite3"
+    if legacy:
+        first = TrialStore(path)
+        assert first.pool_snapshot()["runs"] == 0
+        path.chmod(0o644)
+
+    def forbidden_path_chmod(*args, **kwargs):
+        raise AssertionError("the receiver must not chmod by pathname")
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(trial_receiver.os, "chmod", forbidden_path_chmod)
+        store = TrialStore(path)
+        assert store.pool_snapshot()["runs"] == 0
+
+    assert mode(path) == 0o600
+    assert TrialStore(path).pool_snapshot()["runs"] == 0
+
+
+def test_schema_version_commit_does_not_follow_second_swapped_path(
+    tmp_path, monkeypatch,
+):
+    """The migration commit must not use a second path-based chmod."""
+    store, path, outside = fixture(tmp_path)
+    original_helper = TrialStore._make_database_private_before_wal
+    displaced = path.with_name("original.sqlite3")
+    swapped = []
+
+    def replace_after_verified_fchmod(self):
+        original_helper(self)
+        if self.path == path and not swapped:
+            path.rename(displaced)
+            path.symlink_to(outside)
+            swapped.append(True)
+
+    def forbid_path_chmod(*args, **kwargs):
+        raise AssertionError("a second path chmod would follow the planted symlink")
+
+    with monkeypatch.context() as ctx:
+        ctx.setattr(TrialStore, "_make_database_private_before_wal",
+                    replace_after_verified_fchmod)
+        ctx.setattr(trial_receiver.os, "chmod", forbid_path_chmod)
+        # SQLite may observe the swapped path when updating WAL metadata;
+        # neither outcome may change permissions of the unrelated file.
+        try:
+            TrialStore(path)
+        except (TrialStoreError, OSError):
+            pass
+
+    assert swapped
+    assert mode(outside) == 0o644
+    assert path.is_symlink()
+    path.unlink()
+    displaced.rename(path)
+    assert store.pool_snapshot()["runs"] == 1

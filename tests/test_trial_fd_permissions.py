@@ -280,12 +280,11 @@ def test_schema_version_commit_does_not_follow_second_swapped_path(
         ctx.setattr(TrialStore, "_make_database_private_before_wal",
                     replace_after_verified_fchmod)
         ctx.setattr(trial_receiver.os, "chmod", forbid_path_chmod)
-        # SQLite may observe the swapped path when updating WAL metadata;
-        # neither outcome may change permissions of the unrelated file.
-        try:
+        # The final identity check must refuse a constructor whose pathname
+        # was swapped after the pinned chmod step, even though no outsider
+        # permissions were changed.
+        with pytest.raises(TrialStoreError):
             TrialStore(path)
-        except (TrialStoreError, OSError):
-            pass
 
     assert swapped
     assert mode(outside) == 0o644

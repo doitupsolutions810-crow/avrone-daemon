@@ -1036,3 +1036,14 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **compact_messages** raised AttributeError on a non-dict message and TypeError on an int content. A multipart list was sized by item count. Non-dicts are skipped, and multipart text is counted.
 - **clip_output** with a negative limit sliced `out[:-1]` and kept almost everything; it's clamped at 0. `_call_key` also catches RecursionError.
 - Tests: `tests/test_trinity_core_r70_robust.py` (167).
+
+## Hardening round 71: `tools_statehealth.py` (state_health, registry_audit)
+
+- **A file too big to check read as HEALTHY.** `_check_json` and `_check_jsonl` return None past `MAX_JSONL_BYTES` (8 MiB), and state_health counted that as fine. So a 9 MiB torn fleet.json printed `state_health: HEALTHY`. state_health now lstat-checks the size first. Such files are counted per area as `unchecked` and listed as `? path: too big to check (over 8 MiB)`. The header reads `UNVERIFIED (..., N unchecked)` when nothing is bad but something went unchecked. ATTENTION still wins.
+- **No total read budget.** 7 areas × 2,000 files × 8 MiB could read about 100 GiB in one call. Past `MAX_TOTAL_BYTES` (256 MiB), the remaining files are `unchecked: scan budget spent` and aren't opened.
+- **Symlinked area directories were followed out of data_dir.** With `data_dir/evolve -> /some/host/dir`, its `*.json` files were opened and their names printed. Everything else in the module refuses to follow links. A symlinked area dir (evolve, evolve/loops, checkpoints, agentpacks, bridge) is now one bad entry, `directory is or sits under a symlink (not followed)`. It's reported once, at the link: evolve/loops under a linked evolve isn't listed again. A data_dir that is itself a symlink is still fine. A fleet.json or memory.jsonl symlinked to a directory used to vanish through `is_dir()`. It's now reported as `not a regular file`.
+- **JSONL lines that decode to a non-object** (`1`, `"x"`, `[]`, `null`, `true`) passed as healthy, though every JSONL reader expects records. They're counted as `N non-object line(s)`, next to `N undecodable line(s)`. A RecursionError on a deep line counts as undecodable.
+- **`state_health("")` scanned the process cwd** (`Path("")` is `.`). Blank data_dir now means nothing configured, in the function and in the tool.
+- **Non-dict args** (null, list, string) raised AttributeError out of both tools on a direct call. They're treated as `{}`.
+- **registry_audit**: a name listed twice was counted twice and shown twice under "no arg schema". Names are deduplicated now. A non-dict schema (`"str"`, a list) counted as having a schema, though `validate_args` checks nothing for it. It's listed under no arg schema now. `{"source": 3}` or a list used to audit every tool silently as if no filter was given. It's refused with an error.
+- Tests: `tests/test_statehealth_r71_robust.py` (59).

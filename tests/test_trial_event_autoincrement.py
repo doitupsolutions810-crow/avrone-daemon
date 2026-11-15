@@ -12,7 +12,7 @@ import sqlite3
 import pytest
 
 from avrone.trial_contract import make_trial
-from avrone.trial_receiver import TrialStore, TrialStoreError
+from avrone.trial_receiver import DB_SCHEMA_VERSION, TrialStore, TrialStoreError
 
 
 EVENT_TABLES = (

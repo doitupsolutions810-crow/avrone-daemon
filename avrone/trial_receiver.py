@@ -1177,6 +1177,10 @@ class TrialStore:
         """Return retained delivery receipts only after validating every row."""
         db = self._connect()
         try:
+            # Audit cross-table evidence against one WAL read snapshot; a
+            # concurrent writer may append/prune receipts while rows are
+            # checked against trials, quarantine and sender markers.
+            db.execute("BEGIN")
             self._assert_event_sequence_schema(db)
             rows = db.execute(
                 "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
@@ -1204,6 +1208,7 @@ class TrialStore:
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
         try:
+            db.execute("BEGIN")
             rows = self._verified_trial_rows(db)
             return pool_trials([
                 {"trial_id": row["trial_id"], "source": row["source"],
@@ -1218,6 +1223,7 @@ class TrialStore:
     def non_pass_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
+            db.execute("BEGIN")
             fields = (
                 "trial_id", "source", "system", "node", "run_id", "check_id",
                 "check_version", "check_config_sha256", "attempt_id", "outcome",
@@ -1351,6 +1357,9 @@ class TrialStore:
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
+            # Keep the conflict row, original canonical trial, sender marker,
+            # and other quarantine rows on the same consistent snapshot.
+            db.execute("BEGIN")
             self._assert_event_sequence_schema(db)
             rows = db.execute(
                 f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine "

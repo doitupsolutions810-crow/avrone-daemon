@@ -1218,3 +1218,15 @@ Scope: path settings, governor platform parsers, node id.
 - `governor.cgroup_mem_pct`: `inactive_file` value must be on the same line, ASCII digits.
 - `agentcontainer.local_node_id`: NFKC before sanitizing, so fullwidth names keep their letters.
 - Tests: `tests/test_paths_governor_r89_robust.py`.
+
+## Hardening round 90
+
+Scope: thin-coverage modules tools_researchnote, tools_hostview, agentpack import.
+
+- `tools_researchnote._INVISIBLE_RE` now covers every invisible format character (U+2061..206F, LRM/RLM, bidi embeddings and isolates, variation selectors, CGJ, Mongolian FVS, Hangul fillers, tag characters). A token split by any of them was stored raw as a lesson. `redact_text` also redacts on a fullwidth-folded copy (U+FF01..FF5E) and keeps the writer's original text when folding finds nothing.
+- `tools_hostview._token_strength` compares on NFKC with format characters dropped, and strips quotes/brackets/punctuation when testing for placeholder-only tokens: '"changemechangeme"', fullwidth placeholders and zero-width-split placeholders read "ok" before.
+- `tools_hostview._boot_time`: a bare "btime" line raised IndexError out of proc_status; nan/inf/negative/non-ASCII btime now = None; split on \n only. `_children` only takes ASCII-digit pid dirs ("\u00b2".isdigit() is True and int() raised).
+- `agentpack.content_stamp(now=)`: every file mtime and memory ts is clamped to now. One memory record with ts 1e308 or a file dated 2200 pinned the stamp so every later pack was refused as "not newer" (with a 309-digit number in the message).
+- `agentpack.import_pack`: a memory merge or home-record failure after the files are swapped in no longer raises a raw OSError (path in the message, a 500 on fleet migrate); the result carries `incomplete: {memory|home_record: "<Type> (<ERRNO>)"}` and `agent_pack_import` says INCOMPLETE instead of "your home is unchanged", with an `agentpack.incomplete` audit.
+- `tools_introspect._credential_in` compares against the value with the same invisible chars dropped, so an emoji with a variation selector is not reported as a credential.
+- Tests: `tests/test_hostview_note_pack_r90_robust.py`.

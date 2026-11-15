@@ -196,24 +196,33 @@ def _memory_records(data_dir: Path, agent_id: str) -> list[dict[str, Any]]:
         return []
     space = memstore.MemoryStore(mp).load(agent_id)
     recs = [{"ns": agent_id, "key": str(r["key"]), "value": str(r.get("value", "")),
-             "ts": float(r.get("ts", 0)), "agent": str(r.get("agent", ""))[:100]} for r in space.values()]
+             "ts": memstore._ts(r.get("ts", 0)), "agent": str(r.get("agent", ""))[:100]} for r in space.values()]
     recs.sort(key=lambda r: (r["key"], r["ts"]))
     return recs
 
 
-def content_stamp(workspace: Path, data_dir: Path, agent_id: str) -> int:
-    """Newest content timestamp (int seconds) of an agent's home: file mtimes + memory ts."""
+def content_stamp(workspace: Path, data_dir: Path, agent_id: str, now: float | None = None) -> int:
+    """Newest content timestamp (int seconds) of an agent's home: file mtimes + memory ts.
+
+    Round 89/90: each reading is clamped to ``now``. One memory record with ts 1e308 (memstore keeps
+    any finite float) or one file touched to 2200 (an install clamps pack mtimes only to 2**33)
+    pinned the stamp in the future, so every later pack for this agent was refused as "not newer"
+    for good, and the refusal printed a 309-digit number. Future content now counts as "now":
+    a pack created after this moment still wins, an older one is still refused."""
+    cap = int(time.time() if now is None else now)
     d = agentfs.agents_root(workspace) / agentfs.sanitize_agent_id(agent_id)
     stamp = 0
     if d.is_dir() and not d.is_symlink():
         for cur, _dirs, files in os.walk(d, followlinks=False):
             for f in files:
                 try:
-                    stamp = max(stamp, int(os.lstat(os.path.join(cur, f)).st_mtime))
+                    mt = os.lstat(os.path.join(cur, f)).st_mtime
                 except OSError:
                     continue
+                if mt == mt:
+                    stamp = max(stamp, min(cap, int(max(0.0, min(float(cap), mt)))))
     for r in _memory_records(data_dir, agentfs.sanitize_agent_id(agent_id)):
-        stamp = max(stamp, int(r["ts"]))
+        stamp = max(stamp, int(max(0.0, min(float(cap), r["ts"]))))
     return stamp
 
 
@@ -528,18 +537,39 @@ def import_pack(workspace: Path, data_dir: Path, bundle: bytes, local_node: str,
             code = _errno.errorcode.get(e.errno or 0, "")
             raise PackError(f"could not install agent pack: {type(e).__name__}"
                             + (f" ({code})" if code else "")) from None
-        stats = {"merged": 0, "skipped": 0, "rejected": 0}
+        stats: dict[str, Any] = {"merged": 0, "skipped": 0, "rejected": 0}
         good = [r for r in memory if isinstance(r, dict)]
         stats["rejected"] += len(memory) - len(good)
+        # round 90: the files are already swapped in here. A full disk or a store that refused the
+        # merge raised a raw OSError (its message carrying the host path) out of import_pack: the
+        # fleet answered 500 to the sender, and agent_pack_import said "your home is unchanged"
+        # though it had been replaced. The result now says what did not land.
+        problems: dict[str, str] = {}
         if good:
-            stats = {k: stats[k] + v for k, v in
-                     memstore.MemoryStore(_memory_path(data_dir)).merge(aid, good, source=manifest["origin"]).items()}
+            try:
+                merged = memstore.MemoryStore(_memory_path(data_dir)).merge(aid, good, source=manifest["origin"])
+                stats = {k: stats[k] + v for k, v in merged.items()}
+            except (OSError, ValueError) as e:
+                problems["memory"] = _why(e)
         if manifest["home"] != local_node:
-            record(data_dir, aid, home=manifest["home"], origin=manifest["origin"], created=manifest["created"],
-                   imported=int(time.time()))
-    return {"agent_id": aid, "origin": manifest["origin"], "home": manifest["home"],
-            "created": manifest["created"], "files": len(blobs), "bytes": sum(map(len, blobs.values())),
-            "memory": stats}
+            try:
+                record(data_dir, aid, home=manifest["home"], origin=manifest["origin"],
+                       created=manifest["created"], imported=int(time.time()))
+            except (OSError, ValueError) as e:
+                problems["home_record"] = _why(e)
+    out = {"agent_id": aid, "origin": manifest["origin"], "home": manifest["home"],
+           "created": manifest["created"], "files": len(blobs), "bytes": sum(map(len, blobs.values())),
+           "memory": stats}
+    if problems:
+        out["incomplete"] = problems
+    return out
+
+
+def _why(e: BaseException) -> str:
+    """An error as its type and errno name only: never a host path or a message from the store."""
+    import errno as _errno
+    code = _errno.errorcode.get(getattr(e, "errno", None) or 0, "") if isinstance(e, OSError) else ""
+    return type(e).__name__ + (f" ({code})" if code else "")
 
 
 def _install(root: Path, workspace: Path, data_dir: Path, manifest: dict[str, Any],

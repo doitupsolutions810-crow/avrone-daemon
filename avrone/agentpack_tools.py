@@ -122,8 +122,15 @@ async def t_agent_pack_import(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return f"ERROR: could not read pack {_shown(name, 100)} ({_why(e)}); your home is unchanged"
     _audit(ctx, "agentpack.import", name=name, files=res["files"], bytes=res["bytes"])
     m = res["memory"]
-    return (f"restored agent {aid} from {name}: {res['files']} files, memory merged={m['merged']} "
-            f"skipped={m['skipped']} rejected={m['rejected']}")
+    msg = (f"restored agent {aid} from {name}: {res['files']} files, memory merged={m['merged']} "
+           f"skipped={m['skipped']} rejected={m['rejected']}")
+    inc = res.get("incomplete") or {}
+    if inc:  # round 90: files were installed but the memory merge or home record failed
+        _audit(ctx, "agentpack.incomplete", tool="agent_pack_import", name=_shown(name, 100),
+               reason=", ".join(f"{k}: {v}" for k, v in sorted(inc.items()))[:300])
+        msg += "; INCOMPLETE: files restored but " + ", ".join(
+            f"{k.replace('_', ' ')} not saved ({v})" for k, v in sorted(inc.items()))
+    return msg
 
 
 async def t_agent_migrate(ctx: "AgentContext", args: dict[str, Any]) -> str:

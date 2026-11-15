@@ -40,11 +40,17 @@ def _long_s() -> float:
 
 
 def _boot_time() -> float | None:
+    """btime from /proc/stat. Round 90: a bare "btime" line (no value) raised IndexError out of
+    proc_status, and "btime nan"/"inf" gave every child a NaN start time; ASCII digits only."""
     try:
-        for line in (PROC / "stat").read_text().splitlines():
+        for line in (PROC / "stat").read_text().split("\n"):
             if line.startswith("btime "):
-                return float(line.split()[1])
-    except (OSError, ValueError):
+                parts = line.split()
+                if len(parts) < 2 or not parts[1].isascii() or not parts[1].isdigit():
+                    return None
+                v = float(parts[1])
+                return v if 0.0 <= v < 1e10 else None
+    except (OSError, ValueError, UnicodeDecodeError):
         return None
     return None
 
@@ -96,7 +102,9 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
     """pid -> info for every descendant of root_pid (bounded scan of /proc)."""
     info: dict[int, dict[str, Any]] = {}
     try:
-        pids = [int(p.name) for p in PROC.iterdir() if p.name.isdigit()]
+        # round 90: str.isdigit() is true for "\u00b2" and other non-ASCII digits, and int("\u00b2")
+        # raised ValueError out of proc_status; a pid directory name is ASCII digits only
+        pids = [int(p.name) for p in PROC.iterdir() if p.name.isascii() and p.name.isdigit()]
     except OSError:
         return {}
     try:  # round 54: sysconf can raise (ValueError/OSError) or report 0 -> ZeroDivisionError
@@ -226,7 +234,11 @@ def _token_strength(v: Any) -> str:
             return "unknown"
     if not isinstance(v, str):  # round 54: a non-str token raised AttributeError -> "no HTTP app"
         return "unknown"
-    t = v.strip()
+    import unicodedata
+    # round 90: fullwidth "ｃｈａｎｇｅｍｅ..." and a placeholder wrapped in quotes or zero-width
+    # characters ('"changemechangeme"', "change\u200bme...") read "ok": compare on the NFKC form with
+    # invisible format characters dropped
+    t = "".join(c for c in unicodedata.normalize("NFKC", v) if unicodedata.category(c) != "Cf").strip()
     if not t:
         # round 54: a whitespace-only token was "unset" only if empty; 16 spaces read "ok"
         return "unset" if not v else "weak"
@@ -240,7 +252,7 @@ def _token_strength(v: Any) -> str:
     rest = low
     for p in sorted(_PLACEHOLDERS + ("changeme", "letmein", "qwerty", "pass"), key=len, reverse=True):
         rest = rest.replace(p, "")
-    if not re.sub(r"[0-9\s_.\-:/+=!@#*]", "", rest):
+    if not re.sub(r"[0-9\s_.\-:/+=!@#*'\"`~$%^&()\[\]{}<>,;?|\\]", "", rest):
         return "placeholder"
     if len(t) < 16:  # round 54: measured on the stripped token ("short" + 12 spaces was "ok")
         return "weak"

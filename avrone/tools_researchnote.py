@@ -57,13 +57,30 @@ REDACTED = "***redacted***"
 
 # zero-width / word-joiner / soft hyphen / BOM: invisible, so a token split by one ("sk-\u200b...")
 # slipped past every pattern while reading the same to a human (round 51)
-_INVISIBLE_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff\u00ad\u180e]")
+# round 90: the set missed the rest of the invisible format characters. A GitHub token split by
+# U+2062 (invisible times), U+200E (LRM), U+202C (PDF), U+2066 (LRI), a variation selector (U+FE0F),
+# U+034F (CGJ), a Mongolian FVS (U+180B) or a Hangul filler (U+3164) was stored raw as a lesson.
+_INVISIBLE_RE = re.compile(
+    "[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
+    "\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\U000e0000-\U000e0fff]")
+# fullwidth ASCII (U+FF01..U+FF5E) -> ASCII, length-preserving
+_FULLWIDTH = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
 
 
 def redact_text(text: str) -> str:
     """Mask credential-shaped tokens inside free text; the rest of the text is kept.
     Round 51: invisible joiners are dropped first so they cannot split a token."""
     out = _INVISIBLE_RE.sub("", str(text))
+    # round 90: "ｇｈｐ_aB3d..." (fullwidth prefix) matched no pattern. Redact the folded form; keep the
+    # writer's original characters when folding finds nothing to mask.
+    folded = out.translate(_FULLWIDTH)
+    if folded != out:
+        masked = _redact_core(folded)
+        return masked if masked != folded else _redact_core(out)
+    return _redact_core(out)
+
+
+def _redact_core(out: str) -> str:
     for rx in _TOKEN_RES:
         if rx.groups:
             out = rx.sub(lambda m: m.group(1) + "***@", out)

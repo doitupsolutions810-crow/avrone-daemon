@@ -177,7 +177,10 @@ def _credential_in(v: str) -> bool:
     v = _MASKED_RE.sub(" ", v)
     try:
         from .tools_hostview import _redact_cmd
-        return _redact_cmd(v) != v
+        from .tools_researchnote import _INVISIBLE_RE as _NOTE_INVISIBLE
+        # round 90: redact_text drops every invisible format char (a variation selector included), so
+        # compare with the same chars dropped; "\U0001f3f3\ufe0f..." is not a credential
+        return _redact_cmd(v) != _NOTE_INVISIBLE.sub("", v)
     except Exception:  # noqa: BLE001 - fail closed: an unchecked value is not shown
         return True
 

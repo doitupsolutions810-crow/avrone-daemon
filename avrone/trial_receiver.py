@@ -585,6 +585,18 @@ class TrialStore:
             # DB permissions were pinned and finalized before enabling WAL;
             # never follow the pathname a second time after migration.
             db.commit()
+            # Detect replacement between the pre-WAL descriptor verification
+            # and the end of schema initialization. SQLite itself still uses a
+            # pathname-based open, so this check is defense in depth, not a
+            # substitute for an openat-style SQLite VFS.
+            self._assert_no_symlink_components(
+                self.path.parent, "trial data directory"
+            )
+            self._assert_private_parent()
+            if self._assert_database_file() != self._database_identity:
+                raise TrialStoreError(
+                    "trial database identity changed during initialization"
+                )
         except TrialStoreError:
             db.rollback()
             raise

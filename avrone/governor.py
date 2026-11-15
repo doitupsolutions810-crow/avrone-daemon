@@ -179,7 +179,7 @@ def cgroup_mem_pct(root: str | None = None) -> float | None:
     limit, used = _pos_int(lim), _pos_int(cur)
     if not limit or limit >= _UNLIMITED or used is None:
         return None
-    m = re.search(rf"^{key}\s+(\d+)\s*$", stat, re.M)
+    m = re.search(rf"^{key}[ \t]+([0-9]+)[ \t\r]*$", stat, re.M)  # round 89: one line, ASCII digits
     if m:
         used = max(0, used - int(m.group(1)))
     return max(0.0, min(100.0, 100.0 * used / limit))
@@ -188,15 +188,24 @@ def cgroup_mem_pct(root: str | None = None) -> float | None:
 def parse_vm_stat(text: str, total_bytes: int) -> float | None:
     """macOS `vm_stat` output plus `sysctl hw.memsize` -> percent used. Available = free + inactive +
     speculative + purgeable pages (what the OS can hand out without swapping). The page size comes
-    from the header: 16384 on Apple Silicon, 4096 on Intel."""
-    if not total_bytes or total_bytes <= 0:
+    from the header: 16384 on Apple Silicon, 4096 on Intel.
+
+    Round 89: a header page size of 0 read as 100% used (the governor pinned the node at its floor)
+    and an absurd one as 0% used; only a power of two in [PAGE_MIN, PAGE_MAX] is taken now, else
+    4096. A NaN/bool/non-int total was 100% used; it is no reading. Digits are ASCII, lines split on
+    \\n only, and a count must fill its value."""
+    if isinstance(total_bytes, bool) or not isinstance(total_bytes, int) or total_bytes <= 0:
         return None
-    m = re.search(r"page size of (\d+) bytes", text)
+    if not isinstance(text, str):
+        return None
+    m = re.search(r"page size of ([0-9]{1,12}) bytes", text)
     page = int(m.group(1)) if m else 4096
+    if not (PAGE_MIN <= page <= PAGE_MAX and page & (page - 1) == 0):
+        page = 4096
     pages: dict[str, int] = {}
-    for line in text.splitlines():
+    for line in text.split("\n"):
         k, sep, v = line.partition(":")
-        mm = re.match(r"\s*(\d+)\.?\s*$", v) if sep else None
+        mm = re.match(r"[ \t]*([0-9]+)\.?[ \t\r]*\Z", v) if sep else None
         if mm:
             pages[k.strip().strip('"').lower()] = int(mm.group(1))
     if "pages free" not in pages:
@@ -204,6 +213,9 @@ def parse_vm_stat(text: str, total_bytes: int) -> float | None:
     avail = sum(pages.get(k, 0) for k in ("pages free", "pages inactive", "pages speculative",
                                           "pages purgeable")) * page
     return max(0.0, min(100.0, 100.0 * (1 - avail / total_bytes)))
+
+
+PAGE_MIN, PAGE_MAX = 1024, 1 << 20
 
 
 # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical. macOS keeps lots of RAM busy as
@@ -258,7 +270,7 @@ def parse_pmset_therm(text: str) -> float | None:
     Silicon often prints only 'No thermal warning level has been recorded')."""
     vals = []
     for key in ("CPU_Speed_Limit", "CPU_Scheduler_Limit"):
-        m = re.search(rf"{key}\s*=\s*(\d+)", text or "")
+        m = re.search(rf"{key}[ \t]*=[ \t]*([0-9]+)", text if isinstance(text, str) else "")
         if m:
             vals.append(max(0.0, min(100.0, float(m.group(1)))))
     return min(vals) if vals else None
@@ -414,6 +426,10 @@ def _as_int(v: Any, default: int) -> int:
 
 THERMAL_LIMIT_SOFT, THERMAL_LIMIT_HARD = 100.0, 50.0
 DEFAULT_THERMAL_LIMIT_HOT = 80.0
+# round 89: AVRONE_THERMAL_LIMIT_HOT_PCT=100 made a Mac at full speed (CPU_Speed_Limit = 100) "hot",
+# so is_hot() was always true and thermal migration moved agents off a cool node forever. 99 is the
+# highest mark that still means "throttled at all".
+MAX_THERMAL_LIMIT_HOT = 99.0
 
 
 class Governor:
@@ -434,8 +450,8 @@ class Governor:
             "disk_free_pct": make_disk_reader(str(data_dir)), "temp_c": read_temp_c,
             "thermal_limit_pct": read_thermal_limit,
         }
-        # CPU speed limit at or under this percent counts as hot (AVRONE_THERMAL_LIMIT_HOT_PCT, 1..100)
-        self.thermal_limit_hot = max(1.0, min(100.0, _env_float("AVRONE_THERMAL_LIMIT_HOT_PCT",
+        # CPU speed limit at or under this percent counts as hot (AVRONE_THERMAL_LIMIT_HOT_PCT, 1..99)
+        self.thermal_limit_hot = max(1.0, min(MAX_THERMAL_LIMIT_HOT, _env_float("AVRONE_THERMAL_LIMIT_HOT_PCT",
                                                                 DEFAULT_THERMAL_LIMIT_HOT)))
         self.readers.update(readers or {})
         self.ttl_s = _ttl(ttl_s)

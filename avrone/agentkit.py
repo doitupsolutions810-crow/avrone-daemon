@@ -213,8 +213,10 @@ MAX_SKILLS = 500
 
 def _skills_dir(ctx: "AgentContext") -> Path:
     # round 77: AVRONE_SKILLS_DIR= (blank) was Path("") - the cwd - as the skills dir
-    raw = os.getenv("AVRONE_SKILLS_DIR")
-    if raw is None or not raw.strip():
+    # round 89: quoted/padded values cleaned (config.env_path_text); a quoted blank is the default too
+    from .config import env_path_text
+    raw = env_path_text(os.getenv("AVRONE_SKILLS_DIR"), "")
+    if not raw:
         return Path(__file__).resolve().parent.parent / "skills"
     return Path(raw).expanduser()
 

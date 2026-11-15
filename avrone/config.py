@@ -227,13 +227,23 @@ def bind_port(env: Any = None) -> int:
     return DEFAULT_PORT
 
 
+def env_path_text(raw: Any, default: str) -> str:
+    """A path setting's text: cleaned like a secret (whitespace trimmed, one pair of matching quotes
+    removed), blank means ``default``. Round 89: AVRONE_DATA_DIR='"/srv/avrone"' (a compose .env or
+    a launchd plist keeps the quotes) made a directory literally named '"' under the cwd, a padded
+    "  /srv/x  " became a relative folder named with spaces, and AVRONE_ENV_FILE='""' (quoted blank)
+    resolved to the cwd itself, so no .env loaded. Same reading for skills and plugins dirs."""
+    return clean_secret(raw) or default
+
+
+def env_path(raw: Any, default: str) -> Path:
+    return Path(env_path_text(raw, default)).expanduser()
+
+
 def env_file() -> Path:
     """AVRONE_ENV_FILE, or .env. Round 78: a blank value was Path("") (the cwd itself, never a
-    file), so AVRONE_ENV_FILE= silently loaded no .env at all."""
-    raw = os.getenv("AVRONE_ENV_FILE")
-    if raw is None or not raw.strip():
-        raw = ".env"
-    return Path(_unquote(raw)).expanduser()
+    file), so AVRONE_ENV_FILE= silently loaded no .env at all. Round 89: quoted blank too."""
+    return env_path(os.getenv("AVRONE_ENV_FILE"), ".env")
 
 
 _load_dotenv(env_file())
@@ -377,10 +387,7 @@ def _path(name: str, default: str):
     whatever directory the server was started from (for the workspace: the repo itself). Blank or
     whitespace now means the default, and a leading ~ is expanded instead of making a "~" folder."""
     def make() -> Path:
-        raw = os.getenv(name)
-        if raw is None or not raw.strip():
-            raw = default
-        return Path(raw).expanduser().resolve()
+        return env_path(os.getenv(name), default).resolve()  # round 89: quotes/padding cleaned
     return make
 
 

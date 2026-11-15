@@ -51,10 +51,9 @@ def _fatal(e: BaseException) -> bool:
 def plugins_dir() -> Path:
     # round 77: AVRONE_PLUGINS_DIR= (blank) resolved to the cwd, so every *.py in the directory the
     # server was started from was offered as a plugin; blank now means the default
-    raw = os.getenv("AVRONE_PLUGINS_DIR")
-    if raw is None or not raw.strip():
-        raw = "./plugins"
-    return Path(raw).expanduser().resolve()
+    # round 89: '"/opt/plugins"' was a folder named with a quote under the cwd; cleaned now
+    from .config import env_path
+    return env_path(os.getenv("AVRONE_PLUGINS_DIR"), "./plugins").resolve()
 
 
 def _run_register(name: str, source: str, register: Callable[..., Any],

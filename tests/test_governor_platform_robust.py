@@ -199,7 +199,7 @@ def test_is_hot_threshold_env(monkeypatch):
     assert g.is_hot() and g.state()["thermal_limit_hot_pct"] == 95.0
 
 
-@pytest.mark.parametrize("v,want", [("nan", 80.0), ("0", 1.0), ("500", 100.0), ("x", 80.0)])
+@pytest.mark.parametrize("v,want", [("nan", 80.0), ("0", 1.0), ("500", 99.0), ("x", 80.0)])  # round 89: 99 max (100 = always hot)
 def test_thermal_limit_hot_env_clamped(monkeypatch, v, want):
     monkeypatch.setenv("AVRONE_THERMAL_LIMIT_HOT_PCT", v)
     assert gv.Governor(2, readers={}).thermal_limit_hot == want

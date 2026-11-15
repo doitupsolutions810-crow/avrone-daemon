@@ -1206,3 +1206,15 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **Evolve repo dir:** `AVRONE_REPO_DIR="  "` resolved to `<cwd>/"  "`. It is now cleaned and `~` is expanded; blank means the package repo.
 - **Fusion:** a quoted `CK_BASE` became the URL `"http://..."`, and every delivery failed. A padded `CK_EVENTS_PATH` was posted to as written, and a path with no leading `/` was glued onto the host. The state path and the `/api/fusion/watch` board, events and health URLs and watch path are now cleaned. Fusion tokens stay verbatim by design.
 - Tests: `tests/test_text_settings_r88_robust.py` (109).
+
+## Hardening round 89
+
+Scope: path settings, governor platform parsers, node id.
+
+- `config.env_path_text` / `config.env_path`: one reading for directory and file settings (cleaned like a secret, quoted blank = default, `~` expanded). Used by `config._path` (AVRONE_DATA_DIR, AVRONE_WORKSPACE), `config.env_file` (AVRONE_ENV_FILE), `agentkit._skills_dir` (AVRONE_SKILLS_DIR) and `plugins.plugins_dir` (AVRONE_PLUGINS_DIR). Before: `AVRONE_DATA_DIR='"/srv/avrone"'` made a folder named `"` under the cwd, padded values made relative folders with spaces, and `AVRONE_ENV_FILE='""'` resolved to the cwd so no .env loaded.
+- `governor.MAX_THERMAL_LIMIT_HOT = 99`: `AVRONE_THERMAL_LIMIT_HOT_PCT=100` made a full-speed Mac (CPU_Speed_Limit = 100) permanently hot, so thermal migration kept moving agents off a cool node. `test_governor_platform_robust` now expects 99 for "500".
+- `governor.parse_vm_stat`: page size must be a power of two in [1024, 1 MiB] else 4096 (a 0 header read as 100% used and pinned the node at its floor); non-int/NaN/bool total = no reading; ASCII digits; split on `\n` only; a count must fill its value (`\Z`).
+- `governor.parse_pmset_therm`: ASCII digits on the same line only; non-text input = None.
+- `governor.cgroup_mem_pct`: `inactive_file` value must be on the same line, ASCII digits.
+- `agentcontainer.local_node_id`: NFKC before sanitizing, so fullwidth names keep their letters.
+- Tests: `tests/test_paths_governor_r89_robust.py`.

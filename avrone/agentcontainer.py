@@ -29,6 +29,7 @@ import asyncio
 import os
 import re
 import socket
+import unicodedata
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -95,7 +96,9 @@ def idle_secs() -> float:
 
 
 def local_node_id() -> str:
+    # round 89: NFKC first, so a fullwidth "ＭＡＣ１" is "mac1" rather than collapsing to "node"
     raw = (os.environ.get("AVRONE_NODE_ID") or "").strip() or socket.gethostname()
+    raw = unicodedata.normalize("NFKC", raw)
     return _NAME_BAD.sub("-", raw.lower()).strip("-.")[:40] or "node"
 
 

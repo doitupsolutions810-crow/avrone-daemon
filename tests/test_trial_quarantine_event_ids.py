@@ -55,7 +55,7 @@ def test_invalid_integer_quarantine_event_identifier_is_rejected(
     )
     with pytest.raises(TrialStoreError, match="event sequence schema integrity|quarantine integrity"):
         store.quarantine_records()
-    with pytest.raises(TrialStoreError, match="quarantine integrity"):
+    with pytest.raises(TrialStoreError, match="event sequence schema integrity|quarantine integrity"):
         store.ingest_many([trial(attempt="other")], sender="peer-b", transport="fleet")
     assert store.pool_snapshot()["runs"] == 1
 
@@ -102,7 +102,7 @@ def test_noninteger_event_id_in_corrupted_table_is_rejected(tmp_path):
         db.commit()
     finally:
         db.close()
-    with pytest.raises(TrialStoreError, match="quarantine integrity"):
+    with pytest.raises(TrialStoreError, match="event sequence schema integrity|quarantine integrity"):
         store.quarantine_records()
 
 

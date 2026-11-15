@@ -1173,14 +1173,25 @@ class TrialStore:
                 OverflowError, sqlite3.Error, TrialStoreError) as exc:
             raise TrialStoreError("stored trial receipt integrity check failed") from exc
 
+    @staticmethod
+    def _begin_readonly_audit(db: sqlite3.Connection) -> None:
+        """Pin a WAL read snapshot and forbid writes on this audit handle.
+
+        BEGIN alone is a deferred read transaction which may be upgraded to a
+        writer by a future helper or callback. query_only is per-connection;
+        enforce it before the first read, then use one transaction for all
+        cross-table evidence lookups. A separate ingestion connection remains
+        writable and can commit without corrupting this snapshot.
+        """
+        db.execute("PRAGMA query_only=ON")
+        db.execute("BEGIN")
+
     def receipt_records(self) -> list[dict[str, Any]]:
         """Return retained delivery receipts only after validating every row."""
         db = self._connect()
         try:
-            # Audit cross-table evidence against one WAL read snapshot; a
-            # concurrent writer may append/prune receipts while rows are
-            # checked against trials, quarantine and sender markers.
-            db.execute("BEGIN")
+            # Audit cross-table evidence using a read-only pinned snapshot.
+            self._begin_readonly_audit(db)
             self._assert_event_sequence_schema(db)
             rows = db.execute(
                 "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
@@ -1208,7 +1219,7 @@ class TrialStore:
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
         try:
-            db.execute("BEGIN")
+            self._begin_readonly_audit(db)
             rows = self._verified_trial_rows(db)
             return pool_trials([
                 {"trial_id": row["trial_id"], "source": row["source"],
@@ -1223,7 +1234,7 @@ class TrialStore:
     def non_pass_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
-            db.execute("BEGIN")
+            self._begin_readonly_audit(db)
             fields = (
                 "trial_id", "source", "system", "node", "run_id", "check_id",
                 "check_version", "check_config_sha256", "attempt_id", "outcome",
@@ -1357,9 +1368,8 @@ class TrialStore:
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
-            # Keep the conflict row, original canonical trial, sender marker,
-            # and other quarantine rows on the same consistent snapshot.
-            db.execute("BEGIN")
+            # Pin a read-only snapshot of conflict, trial and sender state.
+            self._begin_readonly_audit(db)
             self._assert_event_sequence_schema(db)
             rows = db.execute(
                 f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine "

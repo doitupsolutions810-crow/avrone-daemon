@@ -1240,3 +1240,13 @@ Scope: logsafe, fsunify, search_files.
 - `fsunify._fold`: drops the code points HFS+ ignores in name comparison (U+200C/D, U+200E/F, U+202A..E, U+206A..F, U+FEFF, plus U+200B and U+2060) and NFC-folds, so "shared/agen\u200cts/<other>" is refused like "shared/Agents".
 - `t_search_files`: the child's last stderr line is escaped before it is returned.
 - Tests: `tests/test_logsafe_fsunify_r91_robust.py`.
+
+## Hardening round 92
+
+Scope: greatscale, diff_files, searchproc.
+
+- `greatscale.evidence_snapshot`: counts go through `operator.index`. `int()` used to truncate 2.5 failures to 2 and 10.9 runs to 10, and it parsed "3".
+- `greatscale.runs_to_detect`: only real, non-bool numbers are accepted (float("0.5") let strings through). A subnormal p (5e-324) made N infinite and `math.ceil` raised a raw OverflowError. It now raises a ValueError.
+- `t_diff_files` summary: only the two file-header lines are skipped. An added "++x" (diff line "+++x") and a removed YAML "---" or SQL "-- c" were left out of the added/removed counts.
+- `searchproc._snippet`: a hit's text used to be the first 300 characters of the line, so a match at column 5000 of a minified file came back without the match. It now shows a window just before the match, prefixed with "...". It reads only the leading whitespace run and a slice of the line, never the whole line.
+- Tests: `tests/test_greatscale_diff_search_r92_robust.py`.

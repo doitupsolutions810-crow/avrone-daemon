@@ -64,6 +64,22 @@ def _lines(text: str):
         yield ln[:-1] if ln.endswith("\r") else ln
 
 
+SNIPPET_CHARS = 300
+_LEAD_WS = re.compile(r"\s*")
+
+
+def _snippet(line: str, at: int) -> str:
+    """The hit's text, at most SNIPPET_CHARS. Round 92: it was always the first 300 characters, so
+    a match at column 5000 of a minified file came back as text that did not contain it. A match
+    past the window now gets a window that starts a little before it, marked with "..."."""
+    lead = _LEAD_WS.match(line).end()  # only the leading run: a 64 MB line is never copied whole
+    pos = max(0, at - lead)
+    if pos + 40 <= SNIPPET_CHARS:
+        return line[lead:lead + 4000].rstrip()[:SNIPPET_CHARS]
+    start = lead + max(0, pos - 60)
+    return ("..." + line[start:start + SNIPPET_CHARS - 3]).rstrip()
+
+
 def _int(req: dict, key: str, default: int, lo: int, hi: int) -> int:
     v = req.get(key, default)
     if type(v) is not int:
@@ -104,8 +120,9 @@ def run(req: dict, out) -> None:
         if b"\0" in data[:4096]:
             continue
         for no, line in enumerate(_lines(data.decode(errors="replace")), 1):
-            if rx.search(line):
-                out.write(json.dumps({"path": str(f), "line": no, "text": line[:4000].strip()[:300]}) + "\n")
+            m = rx.search(line)
+            if m:
+                out.write(json.dumps({"path": str(f), "line": no, "text": _snippet(line, m.start())}) + "\n")
                 out.flush()
                 hits += 1
                 if hits >= cap:

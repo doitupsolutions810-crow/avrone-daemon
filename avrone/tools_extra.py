@@ -1079,8 +1079,11 @@ async def t_diff_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
     # line hid or reversed it: Trojan Source in review); line breaks and tabs stay
     out = "".join(_tsesc(ln, keep="\n\t") if ln.endswith("\n") else _tsesc(ln, keep="\t") + "\n\\ No newline at end of file\n"
                   for ln in lines)
-    added = sum(1 for ln in lines if ln.startswith("+") and not ln.startswith("+++"))
-    removed = sum(1 for ln in lines if ln.startswith("-") and not ln.startswith("---"))
+    # round 92: only the two file-header lines are skipped. An added "++x" (diff line "+++x") or a
+    # removed YAML "---" / SQL "-- c" (diff line "----", "--- c") was left out of the count.
+    body = lines[2:] if len(lines) >= 2 and lines[0].startswith("---") and lines[1].startswith("+++") else lines
+    added = sum(1 for ln in body if ln.startswith("+"))
+    removed = sum(1 for ln in body if ln.startswith("-"))
     summary = f"[{added} added, {removed} removed]"
     if len(out) > DIFF_MAX_OUTPUT_CHARS:
         out = out[:DIFF_MAX_OUTPUT_CHARS] + f"\n...[diff truncated, {len(out)} chars total]\n"

@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import math
+import numbers
+import operator
 from typing import TYPE_CHECKING, Any
 
 from .tools import Tool
@@ -92,6 +94,13 @@ def soft_contract(x: float, k: float = 0.5) -> float:
 # ---------------------------------------------------------------- additive evidence channel
 def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
     """Smallest N with 1 - (1 - p)^N >= 1 - alpha. None when p == 0 (nothing to detect)."""
+    # round 92: only real numbers; float("0.5") used to let a string through
+    if any(isinstance(v, bool) or not isinstance(v, numbers.Real) for v in (p, alpha)):
+        raise ValueError("need 0 <= p <= 1 and 0 < alpha < 1")
+    try:
+        p, alpha = float(p), float(alpha)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("need 0 <= p <= 1 and 0 < alpha < 1") from None
     if not (0 < alpha < 1) or not (0 <= p <= 1):
         raise ValueError("need 0 <= p <= 1 and 0 < alpha < 1")
     if p == 0:
@@ -99,14 +108,23 @@ def runs_to_detect(p: float, alpha: float = 0.05) -> int | None:
     if p == 1:
         return 1
     # round 55: log(1 - p) loses most digits for a rare defect (p = 1e-9: 1 - p rounds); log1p is exact
-    return max(1, math.ceil(math.log(alpha) / math.log1p(-p) - 1e-12))
+    n = math.log(alpha) / math.log1p(-p)
+    # round 92: a subnormal p (5e-324) made n = inf and math.ceil raised a raw OverflowError
+    if not math.isfinite(n):
+        raise ValueError("p is too small: the runs needed exceed any finite count")
+    return max(1, math.ceil(n - 1e-12))
 
 
 def evidence_snapshot(failures: int, runs: int, alpha: float = 0.05) -> dict[str, Any]:
     """Map `failures` out of `runs` independent executions of one check into the Great Scale."""
     if isinstance(failures, bool) or isinstance(runs, bool):
         raise ValueError("failures and runs must be integers")
-    failures, runs = int(failures), int(runs)
+    # round 92: int() truncated 2.5 failures to 2 and 10.9 runs to 10, and parsed "3"; only true
+    # integers (int, numpy integers: anything operator.index accepts) are counts
+    try:
+        failures, runs = operator.index(failures), operator.index(runs)
+    except TypeError:
+        raise ValueError("failures and runs must be integers") from None
     if not (1 <= runs <= MAX_RUNS) or not (0 <= failures <= runs):
         raise ValueError("need 1 <= runs <= 1e9 and 0 <= failures <= runs")
     p = failures / runs

@@ -643,3 +643,51 @@ def test_get_returns_bounded_marker_for_corrupt_persisted_result_and_payload(tmp
             await queue.close()
 
     asyncio.run(run())
+
+def test_corrupt_payload_read_marker_is_bounded_and_claim_skips_oversized_poison(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "bounded-corrupt-payload.db")
+        try:
+            poison = await queue.enqueue("poison", {}, priority=20)
+            healthy = await queue.enqueue("healthy", {"survives": True}, priority=0)
+            raw = "!" * 5000
+            queue._db.execute("UPDATE jobs SET payload=? WHERE id=?", (raw, poison))
+
+            observed = await queue.get(poison)
+            assert observed is not None
+            assert observed["payload"] == {"corrupt": True, "raw": raw[:2000]}
+            assert len(observed["payload"]["raw"]) == 2000
+
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == healthy
+            assert claim["payload"] == {"survives": True}
+            quarantined = await queue.get(poison)
+            assert quarantined is not None and quarantined["status"] == "dead"
+            assert "corrupt payload" in quarantined["error"]
+            assert queue._db.in_transaction is False
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+def test_deeply_nested_persisted_payload_is_quarantined_without_stopping_claim(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "deep-corrupt-payload.db")
+        try:
+            poison = await queue.enqueue("poison", {}, priority=20)
+            healthy = await queue.enqueue("healthy", {"next": "job"}, priority=0)
+            # Simulate an older or externally modified database bypassing enqueue's depth guard.
+            queue._db.execute("UPDATE jobs SET payload=? WHERE id=?", ("[" * 2000 + "0" + "]" * 2000, poison))
+
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == healthy
+            assert claim["payload"] == {"next": "job"}
+            quarantined = await queue.get(poison)
+            assert quarantined is not None and quarantined["status"] == "dead"
+            assert "corrupt payload" in quarantined["error"]
+            assert queue._db.in_transaction is False
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

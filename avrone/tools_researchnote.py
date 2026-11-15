@@ -124,6 +124,8 @@ def _no_surrogates(s: str) -> str:
 
 
 async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    if not isinstance(args, dict):  # round 76: null/list/str args raised AttributeError
+        args = {}
     raw = args.get("text")
     if isinstance(raw, str):
         raw = _no_surrogates(raw)
@@ -161,7 +163,12 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if len(body) > RESEARCH_NOTE_MAX_TEXT:
         body = text  # the topic still travels with the lesson; never cut the note itself
     core = getattr(ctx, "core", None)
-    b = bridgemod.for_core(core, getattr(ctx, "run_id", "run"))
+    if core is None:  # round 76: for_core(None) raised AttributeError out of the tool
+        return "ERROR: no agent core on this context (nothing posted)"
+    try:
+        b = bridgemod.for_core(core, getattr(ctx, "run_id", "run"))
+    except OSError as e:  # the bridge dir could not be created (read-only / full disk)
+        return f"ERROR: could not open the run bridge ({type(e).__name__})"
     name, role = bridgemod._who(ctx)
     try:
         p = b.post(name, kind, body, role=role)
@@ -176,7 +183,8 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     elif not bridgemod.lessons_enabled():
         lines.append("lessons: off (AVRONE_LESSONS) - posted to the bridge only, nothing learned")
     else:
-        data_dir = getattr(getattr(core, "settings", None), "data_dir", None)
+        # round 76: "" meant Path(".") - lessons written to the server's cwd
+        data_dir = bridgemod.usable_data_dir(getattr(getattr(core, "settings", None), "data_dir", None))
         if data_dir is None:
             lines.append("lessons: no data_dir on this node - posted to the bridge only")
         else:

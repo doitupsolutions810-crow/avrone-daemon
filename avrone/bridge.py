@@ -147,6 +147,23 @@ class BridgeError(ValueError):
     """A post refused (bad kind, empty text, unknown refs)."""
 
 
+def usable_data_dir(data_dir: Any) -> "Path | str | None":
+    """data_dir as configured, or None when it is not a usable directory setting.
+
+    Round 76: "" / whitespace became Path(".") (the bridge and the lessons landed in whatever
+    directory the server was started from) and a non-path value (an int, a dict) raised TypeError
+    out of Bridge(); both now mean "no data_dir"."""
+    if isinstance(data_dir, str):
+        return data_dir if data_dir.strip() else None
+    if isinstance(data_dir, os.PathLike):
+        try:
+            v = os.fspath(data_dir)
+        except (TypeError, AttributeError):
+            return None
+        return data_dir if isinstance(v, (str, bytes)) and v.strip() else None
+    return None
+
+
 class Bridge:
     def __init__(self, run_id: str, data_dir: Path | str | None = None, codex: Any = None,
                  node_id: str = "local", limit: int | None = None):
@@ -155,6 +172,7 @@ class Bridge:
         self.node_id = str(node_id or "local")
         self.limit = int(limit) if limit else max_posts()
         self.path: Path | None = None
+        data_dir = usable_data_dir(data_dir)  # round 76: "" wrote the bridge under the process cwd
         if data_dir is not None:
             d = Path(data_dir) / "bridge"
             d.mkdir(parents=True, exist_ok=True)
@@ -497,6 +515,8 @@ def for_core(core: Any, run_id: str) -> Bridge:
 def load_posts(data_dir: Path | str, run_id: str) -> list[dict[str, Any]] | None:
     """Posts persisted for a run, or None when that run has no bridge file."""
     rid = safe_run_id(bridge_run_id(run_id))
+    if usable_data_dir(data_dir) is None:  # round 76: "" read the bridge under the process cwd
+        return None
     p = Path(data_dir) / "bridge" / f"{rid}.jsonl"
     if not p.exists():
         return None
@@ -645,7 +665,7 @@ def distill_lessons(data_dir: Path | str, bridge: "Bridge", task: str = "", k: i
                 break
         if len(picks) >= k:
             break
-    if not picks:
+    if not picks or usable_data_dir(data_dir) is None:  # round 76: "" learned into the process cwd
         return []
     with lessons_lock(data_dir):  # load-check-save is one step, so concurrent runs never both "learn" a key
         store = _store(data_dir)
@@ -664,6 +684,8 @@ def distill_lessons(data_dir: Path | str, bridge: "Bridge", task: str = "", k: i
 
 def relevant_lessons(data_dir: Path | str, task: str, max_chars: int = LESSONS_CHARS) -> list[str]:
     """Lessons sharing keywords with `task`, best overlap first (newest breaks ties), within max_chars."""
+    if usable_data_dir(data_dir) is None:  # round 76: "" primed workers from ./memory.jsonl
+        return []
     try:
         recs = list(_store(data_dir).load(LESSONS_NS).values())
     except OSError:

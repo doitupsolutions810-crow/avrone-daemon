@@ -1083,3 +1083,12 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **A ctx without `core` raised AttributeError.** It now reports `the tool registry is not available`.
 - **Schema reasons were trusted.** `bad[1]` on a string showed one character. A 1-tuple raised IndexError, and `True` raised TypeError. A newline in the reason added a forged line to the report. The reason is now taken safely, flattened with `one_line`, and capped at 300 characters. A non-text reason reads `invalid args`.
 - Tests: `tests/test_flakeprobe_r75_robust.py` (47).
+
+## Hardening round 76: research note and bridge data_dir (`tools_researchnote.py`, `bridge.py`)
+
+- **A blank data_dir wrote into the server's working directory.** `""` and whitespace became `Path(".")`. research_note then wrote `./memory.jsonl` and `./bridge/`. `distill_lessons` learned into the same files, and `relevant_lessons` primed workers from whatever `./memory.jsonl` held. The new `bridge.usable_data_dir` treats blank, whitespace and non-path values (int, dict, bytes, a PathLike that raises or is blank) as no data_dir. With no data_dir, `Bridge` stays in memory, `load_posts` returns None, `distill_lessons` returns [] and `relevant_lessons` returns [].
+- **A non-path data_dir crashed.** An int or dict raised TypeError out of `Bridge()`. It now means no data_dir.
+- **Non-dict args crashed research_note.** They're treated as `{}`, which gives the "text is required" error.
+- **A ctx with no core crashed.** `for_core(None)` raised AttributeError. It now returns `ERROR: no agent core on this context (nothing posted)`.
+- **Bridge open errors were uncaught.** An OSError when creating the bridge dir (data_dir is a file, read-only, full disk) is now reported by errno class only, with no path.
+- Tests: `tests/test_researchnote_r76_robust.py` (42).

@@ -492,7 +492,7 @@ class TrialStore:
             # ALTER; normalize only harmless whitespace, not SQL tokens.
             def normalized(statement: str) -> str:
                 return re.sub(
-                    r"\\s*([(),])\\s*", r"\\1",
+                    r"\s*([(),])\s*", r"\1",
                     " ".join(statement.split()).upper(),
                 )
 

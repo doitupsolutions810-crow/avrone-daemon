@@ -108,7 +108,7 @@ def wire_safe(v: Any) -> Any:
     return fix(jsonable(v))
 
 
-_SURR_RE = re.compile("[\ud800-\udfff]")
+_SURR_RE = re.compile(r"[\ud800-\udfff]")
 
 
 def coerce_args(v: Any) -> list[str]:

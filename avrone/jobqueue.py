@@ -198,7 +198,7 @@ CREATE INDEX IF NOT EXISTS jobs_finished ON jobs(status, updated);
 
 
 def _id_ok(jid: Any, token: Any = None) -> bool:
-    """round 166: a job id / lease token sqlite cannot bind (lone surrogate, non-str) names no job.
+    r"""round 166: a job id / lease token sqlite cannot bind (lone surrogate, non-str) names no job.
     get() raised UnicodeEncodeError for such an id (queue_status job_id="\ud800")."""
     for v in (jid,) if token is None else (jid, token):
         if not isinstance(v, str):

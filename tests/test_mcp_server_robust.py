@@ -128,6 +128,77 @@ def test_scalar_junk_ignored_and_server_lives(junk):
     assert out[-1]["id"] == 99
 
 
+@pytest.mark.parametrize("raw", [
+    '{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{},"params":{"x":1}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":1,"x":2}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"a":1,"\u0061":2}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"é":1,"\u00e9":2}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"𝄞":1,"\ud834\udd1e":2}}',
+    '[{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"},' + json.dumps(PING) + ']',
+])
+def test_duplicate_json_object_member_is_parse_error(raw):
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("nested", ['"n":{value}', '"n":[0,{value}]'])
+def test_non_json_constant_inside_request_is_parse_error(literal, nested):
+    params = nested.format(value=literal)
+    raw = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{' + params + '}}'
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_non_json_number_in_batch_rejects_whole_line_and_keeps_server_alive():
+    raw = ('[{"jsonrpc":"2.0","id":1,"method":"ping","params":{"n":NaN}},'
+           + json.dumps(PING) + ']')
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_non_object_batch_member_gets_invalid_request_response():
+    out, _, _ = serve([[17, PING]])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32600, "message": "Invalid Request"}}
+    assert out[1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("bad", [
+    {"jsonrpc": "2.0", "id": 5},
+    {"jsonrpc": "2.0", "id": 6, "params": {}},
+    {"jsonrpc": "2.0", "params": {}},
+])
+def test_request_shaped_object_without_method_gets_invalid_request(bad):
+    out, _, _ = serve([bad, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32600, "message": "Invalid Request"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("response", [
+    {"jsonrpc": "2.0", "id": 7, "result": {"ok": True}},
+    {"jsonrpc": "2.0", "id": 8, "error": {"code": -32600, "message": "bad"}},
+])
+def test_unsolicited_response_without_method_is_ignored(response):
+    out, _, _ = serve([response, PING])
+    assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]
+
+
+def test_batch_member_without_method_gets_invalid_request_response():
+    out, _, _ = serve([[{"jsonrpc": "2.0", "id": 7}, PING]])
+    assert any(m == {"jsonrpc": "2.0", "id": None,
+                     "error": {"code": -32600, "message": "Invalid Request"}} for m in out)
+    assert any(m == {"jsonrpc": "2.0", "id": 99, "result": {}} for m in out)
+
+
 def test_crlf_lines():
     out, _, _ = serve([json.dumps(PING) + "\r"])
     assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]
@@ -525,3 +596,110 @@ def test_protocol_stdout_fallback(monkeypatch):
     fake = io.TextIOWrapper(buf)
     monkeypatch.setattr(ms.sys, "stdout", fake)
     assert ms.protocol_stdout() is buf
+
+
+@pytest.mark.parametrize("member", [None, True, False, 0, 1, "junk", [], {}])
+def test_all_non_object_batch_members_return_invalid_request(member):
+    out, _, _ = serve([[member, PING]])
+    errors = [m for m in out if m.get("error", {}).get("code") == -32600]
+    successes = [m for m in out if m.get("id") == 99 and m.get("result") == {}]
+    assert len(errors) == 1
+    assert errors[0] == {"jsonrpc": "2.0", "id": None,
+                         "error": {"code": -32600, "message": "Invalid Request"}}
+    assert len(successes) == 1
+
+
+def test_duplicate_jsonrpc_member_after_unicode_escape_is_parse_error():
+    raw = '{"jsonrpc":"2.0","\\u0069d":1,"id":2,"method":"ping"}'
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("method", [None, True, False, 0, 1, [], {}, {"name": "ping"}])
+def test_non_string_jsonrpc_method_is_invalid_request(method):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": 41, "method": method}, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": 41,
+                      "error": {"code": -32600, "message": "Invalid Request: method must be a string"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("params", ["text", 5, True, [], ["x"], 3.14])
+def test_non_object_non_null_jsonrpc_params_are_invalid_params(params):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": 42, "method": "ping", "params": params}, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": 42,
+                      "error": {"code": -32602, "message": "Invalid params: params must be an object"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_oversized_jsonrpc_line_is_discarded_and_server_recovers():
+    async def go():
+        core = Core()
+        srv = server(core)
+        reader = asyncio.StreamReader(limit=64)
+        reader.feed_data(b"x" * 512 + b"\n" + json.dumps(PING).encode() + b"\n")
+        reader.feed_eof()
+        out = Out()
+        await asyncio.wait_for(srv.serve(reader, out), 5)
+        return lines_of(out)
+
+    out = asyncio.run(go())
+    assert out[0]["error"]["code"] == -32600
+    assert "line exceeds the size limit" in out[0]["error"]["message"]
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("raw", [
+    '{"jsonrpc":"2.0","id":1,"method":"ping",}',
+    r'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"\x"}}',
+    '{"jsonrpc":"2.0","id":1,"method":"ping"} trailing',
+    '{"jsonrpc":"2.0","id":1,"method":"ping"',
+])
+def test_malformed_json_lexical_edges_return_parse_error_and_recover(raw):
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+def test_raw_control_character_in_json_string_is_parse_error():
+    raw = '{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"raw' + chr(1) + 'control"}}'
+    out, _, _ = serve([raw, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32700, "message": "Parse error"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+
+@pytest.mark.parametrize("bad_id", [True, False, 1.5, [], {}, {"nested": 1}])
+def test_jsonrpc_rejects_boolean_float_and_container_request_ids(bad_id):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": bad_id, "method": "ping"}, PING])
+    assert out[0] == {"jsonrpc": "2.0", "id": None,
+                      "error": {"code": -32600, "message": "Invalid Request: id must be a string, an integer or null"}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}
+
+
+@pytest.mark.parametrize("valid_id", [None, 0, -1, 2**53 + 1, "", "0", "unicode-雪"])
+def test_jsonrpc_preserves_valid_null_integer_and_string_request_ids(valid_id):
+    out, _, _ = serve([{"jsonrpc": "2.0", "id": valid_id, "method": "ping"}])
+    assert out == [{"jsonrpc": "2.0", "id": valid_id, "result": {}}]
+
+
+def test_notifications_never_emit_responses_even_when_handler_rejects_method():
+    out, _, _ = serve([
+        {"jsonrpc": "2.0", "method": "notifications/unknown", "params": {}},
+        {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "missing"}},
+        PING,
+    ])
+    assert out == [{"jsonrpc": "2.0", "id": 99, "result": {}}]
+
+
+def test_invalid_jsonrpc_version_does_not_prevent_next_request():
+    out, _, _ = serve([
+        {"jsonrpc": "1.0", "id": "bad-version", "method": "ping"},
+        PING,
+    ])
+    assert out[0] == {"jsonrpc": "2.0", "id": "bad-version",
+                      "error": {"code": -32600, "message": 'Invalid Request: jsonrpc must be "2.0"'}}
+    assert out[-1] == {"jsonrpc": "2.0", "id": 99, "result": {}}

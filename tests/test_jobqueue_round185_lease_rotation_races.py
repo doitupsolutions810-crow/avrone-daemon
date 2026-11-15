@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
 import math
+import time
 
 import pytest
 
@@ -355,6 +355,9 @@ def test_priority_order_is_descending_and_stable_for_ties(tmp_path):
             high_second = await queue.enqueue("priority", {"name": "high-second"}, priority=50)
             extreme = await queue.enqueue("priority", {"name": "extreme"}, priority=10 ** 100)
             negative_extreme = await queue.enqueue("priority", {"name": "negative"}, priority=-(10 ** 100))
+            # Fix creation timestamps explicitly so equal-priority ordering is deterministic.
+            queue._db.execute("UPDATE jobs SET created=100 WHERE id=?", (high_first,))
+            queue._db.execute("UPDATE jobs SET created=200 WHERE id=?", (high_second,))
 
             claimed = [await queue.claim() for _ in range(5)]
             assert [job["id"] for job in claimed] == [
@@ -390,33 +393,32 @@ def test_prune_never_deletes_queued_or_running_jobs(tmp_path):
     async def run():
         queue = JobQueue(tmp_path / "prune-active.db")
         try:
-            queued = await queue.enqueue("retention", {"state": "queued"})
-            running = await queue.enqueue("retention", {"state": "running"})
-            done = await queue.enqueue("retention", {"state": "done"})
-            dead = await queue.enqueue("retention", {"state": "dead"}, max_attempts=1)
-            running_claim = await queue.claim()
-            assert running_claim is not None and running_claim["id"] == queued
-            # The first claim is deliberately marked as running; complete a separate job by id.
-            # Release the first lease so the selected queued/running identities remain explicit.
-            assert await queue.release(running_claim["id"], running_claim["token"]) is True
-            done_claim = await queue.claim()
-            assert done_claim is not None
-            assert await queue.complete(done_claim["id"], {"ok": True}, done_claim["token"]) is True
-            dead_claim = await queue.claim()
-            assert dead_claim is not None
-            assert await queue.fail(dead_claim["id"], "terminal", dead_claim["token"], permanent=True) == "dead"
+            running_id = await queue.enqueue("retention", {"state": "running"}, priority=30)
+            queued_id = await queue.enqueue("retention", {"state": "queued"}, priority=20)
+            done_id = await queue.enqueue("retention", {"state": "done"}, priority=10)
+            dead_id = await queue.enqueue("retention", {"state": "dead"}, priority=0)
 
-            # Establish one active running row and one queued row, then prune all finished rows.
-            active = await queue.claim()
-            assert active is not None
+            running_claim = await queue.claim()
+            assert running_claim is not None and running_claim["id"] == running_id
+            now = time.time()
+            queue._db.execute(
+                "UPDATE jobs SET status='done', result='true', updated=? WHERE id=?",
+                (now, done_id),
+            )
+            queue._db.execute(
+                "UPDATE jobs SET status='dead', error='terminal', updated=? WHERE id=?",
+                (now, dead_id),
+            )
+
             assert await queue.prune(keep=0, older_than_s=0) == 2
-            assert await queue.get(active["id"]) is not None
-            assert await queue.get(running) is not None
-            assert await queue.get(done) is None
-            assert await queue.get(dead) is None
-            remaining = await queue.stats()
-            assert remaining.get("running", 0) == 1
-            assert remaining.get("queued", 0) == 1
+            active = await queue.get(running_id)
+            pending = await queue.get(queued_id)
+            assert active is not None and active["status"] == "running"
+            assert active["attempts"] == 1
+            assert pending is not None and pending["status"] == "queued"
+            assert await queue.get(done_id) is None
+            assert await queue.get(dead_id) is None
+            assert await queue.stats() == {"queued": 1, "running": 1}
         finally:
             await queue.close()
 

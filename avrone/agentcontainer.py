@@ -34,7 +34,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from . import agentfs
+from . import agentfs, textsafe
+
+
+def _text(v: Any) -> str:
+    """A docker result field as text. Round 73: bytes went through str(), so b"" became "b''" (not
+    empty) and container_gone never fired for a byte-returning exec_fn."""
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", "replace")
+    return "" if v is None else str(v)
 
 DEFAULT_MEM_MB, MIN_MEM_MB, MAX_MEM_MB = 512, 64, 65536
 DEFAULT_CPUS, MIN_CPUS, MAX_CPUS = 1.0, 0.1, 64.0
@@ -63,6 +71,8 @@ def _num(name: str, default: float, lo: float, hi: float) -> float:
 def _clamp_num(v: Any, default: Any, lo: float, hi: float, cast: Callable[[float], Any]) -> Any:
     """An explicit mem/cpu value: NaN, 0, negative, junk or huge used to reach docker verbatim
     ("--cpus nan", "--memory 0m" = unlimited, OverflowError on inf)."""
+    if isinstance(v, bool):  # round 73: True read as 1.0 (the minimum), not "use the default"
+        return default
     try:
         f = float(v)
     except (TypeError, ValueError, OverflowError):
@@ -169,8 +179,8 @@ def container_gone(res: Any, name: str) -> bool:
     """True when docker refused to run the command because the container is gone or stopped
     (daemon restart, OOM kill, someone ran `docker rm`). The command never started, so a retry
     after recreating the container cannot run it twice."""
-    err = str(getattr(res, "stderr", "") or "")
-    return (getattr(res, "exit_code", 0) in (1, 125, 126) and not str(getattr(res, "stdout", "") or "").strip()
+    err = _text(getattr(res, "stderr", ""))
+    return (getattr(res, "exit_code", 0) in (1, 125, 126) and not _text(getattr(res, "stdout", "")).strip()
             and bool(_DEAD_RE.search(err)))
 
 
@@ -192,7 +202,9 @@ def parse_inspect(stdout: Any) -> tuple[bool, str]:
     reports no mount, which is accepted as before."""
     if isinstance(stdout, (bytes, bytearray)):  # round 60: str(b"true|/x") was "b'true|/x'" = not running,
         stdout = bytes(stdout).decode("utf-8", "replace")  # so a live home got rm -f'd and recreated
-    text = str(stdout or "").strip().splitlines()
+    # split on \n only (round 73): splitlines() also broke a mount path at U+2028/U+0085/\x1c, so a
+    # live home whose dir name held one read as "mounts something else" and was refused as foreign
+    text = str(stdout or "").strip().split("\n")
     first = text[0] if text else ""
     state, _, src = first.partition("|")
     return state.strip().lower() == "true", src.strip()
@@ -285,8 +297,9 @@ class AgentContainerPool:
                 await self._exec(rm_argv(name), 30)  # a stopped leftover with that name; ignore errors
                 res = await self._exec(self.run_argv(d), 300)
                 if getattr(res, "exit_code", 1) != 0:
-                    raise RuntimeError(f"could not start agent container {name}: "
-                                       f"{str(getattr(res, 'stderr', ''))[:300]}")
+                    # round 73: raw stderr (bytes repr, ANSI, newlines) went straight into the message
+                    err = textsafe.escape(" ".join(_text(getattr(res, "stderr", "")).split()))[:300]
+                    raise RuntimeError(f"could not start agent container {name}: {err}")
                 self.created += 1
             self.homes[name] = _Home(name, d, now, created=now, uses=1)
             return name

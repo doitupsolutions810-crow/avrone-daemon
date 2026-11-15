@@ -1058,3 +1058,11 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **Install OSErrors carried the host's absolute path to the sending peer.** The message is now the exception type and errno name only, for example `FileExistsError (EEXIST)`.
 - **A non-bytes bundle** (str, None) raised TypeError. It's refused as `bundle must be bytes`. bytearray and memoryview still work.
 - Tests: `tests/test_agentpack_r72_robust.py` (68).
+
+## Hardening round 73: agent home containers (`agentcontainer.py`)
+
+- **Byte results hid a dead container.** `container_gone` used `str()` on stdout. With an exec_fn that returns bytes, `str(b"")` is `"b''"`, which isn't empty, so a removed or stopped container was never seen as gone and never recreated. stdout and stderr are decoded now (UTF-8, replace).
+- **Mount paths broke at Unicode line separators.** `parse_inspect` used `splitlines()`, which also splits on U+2028/2029, U+0085, \x1c to \x1e, \v and \f. A live home whose path held one read as mounting another directory and was refused as a ForeignContainer. It now splits on `\n` only, per the standing rule.
+- **`mem=True` / `cpu=True` meant the minimum** (1.0 was clamped to 256 MiB / 0.1 CPU). Bools now fall back to the default.
+- **"could not start agent container" carried raw stderr**: a bytes repr, ANSI escapes, and newlines that could forge log lines. It's now decoded, folded to one line, escaped with `textsafe.escape`, and capped at 300 characters.
+- Tests: `tests/test_agentcontainer_r73_robust.py` (45).

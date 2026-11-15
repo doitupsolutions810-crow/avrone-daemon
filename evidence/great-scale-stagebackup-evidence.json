@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v140",
+  "finding": "The script restores a corrupt stage from backup, then repo, then default 0. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "restore": "backup then repo then default 0",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The stage-backup check holds."
+}

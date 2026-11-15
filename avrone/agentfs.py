@@ -53,9 +53,10 @@ def resolve(p: Path | str) -> Path:
 
 
 def _truthy(v: str | None, default: bool) -> bool:
-    if v is None or v == "":
-        return default
-    return v.strip().lower() in {"1", "true", "yes", "on"}
+    """Round 87: config.parse_bool's reading. '"1"' for AVRONE_AGENT_DOCKER_ISOLATE read as off
+    (isolation silently disabled), and a whitespace-only AVRONE_AGENT_FS turned the sandbox off."""
+    from .config import parse_bool
+    return parse_bool(v, default)
 
 
 def agent_fs_enabled() -> bool:

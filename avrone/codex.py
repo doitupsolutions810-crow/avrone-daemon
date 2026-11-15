@@ -35,7 +35,8 @@ class Event:
 
 def _redact_on() -> bool:
     import os
-    return (os.getenv("AVRONE_CODEX_REDACT") or "on").strip().lower() not in ("off", "0", "false", "no")
+    from .config import switch_word  # round 87: '"off"' stays a deliberate off; unknown words keep it on
+    return switch_word(os.getenv("AVRONE_CODEX_REDACT"), "on") not in ("off", "0", "false", "no")
 
 
 def _scrub(v: Any, depth: int = 0) -> Any:

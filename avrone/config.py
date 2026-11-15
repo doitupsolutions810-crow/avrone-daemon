@@ -134,6 +134,19 @@ def env_num(name: str, env: Any = None) -> float | None:
     return f
 
 
+def env_list(raw: Any) -> list[str]:
+    """A comma-separated env list as every reader should see it. Round 87: '"a,b"' (the whole value
+    quoted, as a compose .env keeps it) and "'a', 'b'" (each entry quoted) left quote characters on
+    the entries, so recon/priv-shell allowlists and AVRONE_TOOLS_ONLY silently lost names. Entries
+    are trimmed and unquoted at both ends; blanks are dropped; order kept."""
+    out = []
+    for part in clean_secret(raw).split(","):
+        e = part.strip().strip("'\"").strip()
+        if e:
+            out.append(e)
+    return out
+
+
 def switch_word(raw: Any, default: str) -> str:
     """A policy word as every reader should see it: cleaned like a secret, lower-cased, blank = default."""
     return clean_secret(raw).lower() or default

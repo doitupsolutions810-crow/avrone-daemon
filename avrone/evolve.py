@@ -477,14 +477,9 @@ def hard_caps() -> tuple[int, int]:
 
 
 def _env_num(name: str) -> float | None:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        x = float(raw)
-    except ValueError:
-        return None
-    return x if x == x and x > 0 else None
+    from .config import env_num  # round 87: one reading; '"5"' was junk, "\uff15" counted, "inf" passed
+    x = env_num(name)
+    return x if x is not None and x > 0 else None
 
 
 def loop_limits(max_iters: Any = None, time_budget_s: Any = None) -> tuple[int, float]:

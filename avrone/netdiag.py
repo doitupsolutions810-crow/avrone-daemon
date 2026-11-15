@@ -61,7 +61,8 @@ async def t_dns_lookup(ctx: "AgentContext", args: dict[str, Any]) -> str:
             out.append("system: " + ", ".join(sorted({i[4][0] for i in infos})))
         except socket.gaierror as e:
             out.append(f"system: {e}")
-    doh = os.environ.get("AVRONE_DOH_URL", "https://cloudflare-dns.com/dns-query")
+    from .config import clean_secret  # round 87: a quoted URL was sent verbatim (httpx UnsupportedProtocol)
+    doh = clean_secret(os.environ.get("AVRONE_DOH_URL")) or "https://cloudflare-dns.com/dns-query"
     try:
         async with _client(15) as c:
             r = await c.get(doh, params={"name": host, "type": rtype}, headers={"accept": "application/dns-json"})
@@ -164,7 +165,8 @@ async def t_ip_geo(ctx: "AgentContext", args: dict[str, Any]) -> str:
             ip = infos[0][4][0]
         if ipaddress.ip_address(ip).is_private:
             return f"{h} -> {ip}: private address, no public geolocation"
-    base = os.environ.get("AVRONE_GEOIP_URL", "https://ipwho.is/")
+    from .config import clean_secret
+    base = clean_secret(os.environ.get("AVRONE_GEOIP_URL")) or "https://ipwho.is/"
     async with _client(15) as c:
         r = await c.get(base + ip)
     d = r.json()

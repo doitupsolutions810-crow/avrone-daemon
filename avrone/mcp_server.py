@@ -515,8 +515,21 @@ async def amain() -> None:
     await server.serve(await _stdin_reader(), out)
 
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+
+def log_level() -> str:
+    """AVRONE_LOG_LEVEL as a level name logging accepts. Round 87: the raw value went straight to
+    basicConfig, so '"debug"', "verbose" or "warn ing" raised ValueError and the MCP server never
+    started; "WARN" maps to WARNING, anything unknown falls back to WARNING."""
+    from .config import switch_word
+    w = switch_word(os.getenv("AVRONE_LOG_LEVEL"), "warning").upper()
+    w = {"WARN": "WARNING", "FATAL": "CRITICAL"}.get(w, w)
+    return w if w in LOG_LEVELS else "WARNING"
+
+
 def main() -> None:
-    logging.basicConfig(stream=sys.stderr, level=os.getenv("AVRONE_LOG_LEVEL", "WARNING").upper(),
+    logging.basicConfig(stream=sys.stderr, level=log_level(),
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(amain())

@@ -242,7 +242,7 @@ def resolve_deep_rounds(requested: int | None, settings: Any = None) -> int:
     if raw is None:
         raw = getattr(settings, "deep_rounds", None)
     if raw is None:
-        raw = os.environ.get("AVRONE_DEEP_ROUNDS")
+        raw = _env_tool_value("AVRONE_DEEP_ROUNDS")
     # round 70: int(float("inf")) raised OverflowError; tool_int clamps inf and reads "3.0"
     return tool_int(raw, 1, 1, MAX_DEEP_ROUNDS)
 
@@ -461,11 +461,23 @@ DEFAULT_TOOL_OUTPUT_MAX = 20000
 REPEAT_CALL_LIMIT = 3  # same tool + args + output this many times in a row = the agent is looping
 
 
+def _env_tool_value(name: str) -> Any:
+    """An int-ish env value for tool_int. Round 87: tool_int(os.environ.get(..)) saw the raw text, so
+    '"40000"' from a compose .env and " 40000\n" were junk (the default, silently), and "40_000" too.
+    The text is cleaned like every env number (quotes, whitespace, "_" separators, ASCII only) and
+    tool_int keeps its own meaning for the rest ("inf" is junk, "1e999" clamps to the top)."""
+    from .config import clean_secret
+    t = clean_secret(os.environ.get(name)).replace("_", "")
+    if not t:
+        return None
+    return t if t.isascii() and len(t) <= 64 else "junk"
+
+
 def tool_output_max() -> int:
     """AVRONE_TOOL_OUTPUT_MAX (default 20000 chars), clamped to 1000..500000; junk = default.
     A safety net for tools (MCP, plugins) that don't cap their own output, so one huge result
     can't blow the model's context window and wedge the agent."""
-    return tool_int(os.environ.get("AVRONE_TOOL_OUTPUT_MAX"), DEFAULT_TOOL_OUTPUT_MAX, 1000, 500000)
+    return tool_int(_env_tool_value("AVRONE_TOOL_OUTPUT_MAX"), DEFAULT_TOOL_OUTPUT_MAX, 1000, 500000)
 
 
 def clip_output(out: str, limit: int) -> str:
@@ -541,7 +553,7 @@ def context_chars() -> int:
     """AVRONE_CONTEXT_CHARS (default 120000), clamped to 8000..2000000; junk = default.
     Ollama silently cuts an over-long prompt from the FRONT, which drops the system prompt
     (the tool docs and the JSON action format) and leaves the agent improvising."""
-    return tool_int(os.environ.get("AVRONE_CONTEXT_CHARS"), DEFAULT_CONTEXT_CHARS, 8000, 2000000)
+    return tool_int(_env_tool_value("AVRONE_CONTEXT_CHARS"), DEFAULT_CONTEXT_CHARS, 8000, 2000000)
 
 
 def compact_messages(messages: list[dict[str, Any]], limit: int) -> int:
@@ -602,7 +614,7 @@ ARG_ERROR_BUDGET = 3
 
 def max_calls_per_turn() -> int:
     """AVRONE_MAX_CALLS_PER_TURN (default 4), clamped to 1..8; junk falls back to the default."""
-    return tool_int(os.environ.get("AVRONE_MAX_CALLS_PER_TURN"), DEFAULT_MAX_CALLS_PER_TURN, 1,
+    return tool_int(_env_tool_value("AVRONE_MAX_CALLS_PER_TURN"), DEFAULT_MAX_CALLS_PER_TURN, 1,
                     HARD_MAX_CALLS_PER_TURN)
 
 

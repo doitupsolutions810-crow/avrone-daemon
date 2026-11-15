@@ -765,7 +765,8 @@ def args_doc_from_schema(schema: dict[str, Any] | None, limit: int = 300) -> str
 
 def load_config(path: str | os.PathLike | None = None) -> dict[str, dict[str, Any]]:
     """Read the mcpServers map. Missing file -> {}."""
-    p = Path(path or os.getenv("AVRONE_MCP_CONFIG", "./mcp.json"))
+    from .config import clean_secret  # round 87: a quoted or padded path silently meant "no servers"
+    p = Path(path or clean_secret(os.getenv("AVRONE_MCP_CONFIG")) or "./mcp.json")
     if not p.exists():
         return {}
     if not p.is_file():  # a FIFO here blocked server startup forever in read_text()

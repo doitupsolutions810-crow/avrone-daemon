@@ -281,8 +281,10 @@ def apply_tool_focus(registry, spec: str | None = None) -> list[str]:
     Returns the names that were removed.
     """
     import os
+    from .config import env_list
     spec = os.environ.get("AVRONE_TOOLS_ONLY", "") if spec is None else spec
-    keep = {s.strip() for s in str(spec).split(",") if s.strip()}
+    # round 87: '"shell,fs_read"' kept its quotes, named no tool, and every tool stayed registered
+    keep = set(env_list(str(spec)))
     if not keep:
         return []
     names = list(registry.names())

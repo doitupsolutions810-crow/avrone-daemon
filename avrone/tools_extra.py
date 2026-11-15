@@ -1305,7 +1305,7 @@ def self_inventory(ctx: "AgentContext") -> dict[str, Any]:
     except OSError:
         hostname = "unknown"
     from . import config as _cfg  # round 84: report the effective policy, as the readers see it
-    allowlist = [h.strip() for h in os.getenv("AVRONE_RECON_ALLOWLIST", "").split(",") if h.strip()]
+    allowlist = _cfg.env_list(os.getenv("AVRONE_RECON_ALLOWLIST", ""))  # round 87: unquoted, as recon reads it
     secret_names = set(KNOWN_SECRET_ENV) | {k for k in os.environ if is_secret_name(k)}
     secrets = {k: redact_env(k, os.environ.get(k)) for k in sorted(secret_names)[:SELF_SCAN_MAX_SECRET_NAMES]}
     return {
@@ -1463,8 +1463,8 @@ def granted_capability(ctx: "AgentContext") -> str:
 
 def priv_shell_allowlist() -> set[str]:
     """Allowed argv[0] names. Entries that are not bare names (paths, globs, blanks) are ignored."""
-    raw = os.environ.get("AVRONE_PRIV_SHELL_ALLOW", "")
-    return {a.strip() for a in raw.split(",") if _PRIV_NAME_RE.fullmatch(a.strip())}
+    from .config import env_list  # round 87: '"ls,cat"' dropped ls and cat (quote chars kept)
+    return {a for a in env_list(os.environ.get("AVRONE_PRIV_SHELL_ALLOW", "")) if _PRIV_NAME_RE.fullmatch(a)}
 
 
 def priv_shell_timeout(requested: Any = None) -> int:

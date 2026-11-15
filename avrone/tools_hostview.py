@@ -32,12 +32,9 @@ CMDLINE_READ = 8192
 
 def _long_s() -> float:
     import math
-    raw = (os.getenv("AVRONE_PROC_LONG_S") or "").strip().strip("'\"").strip()
-    try:
-        # round 81: fullwidth digits counted, and a quoted '"60"' fell back to 600 silently
-        v = float(raw) if raw and raw.isascii() else 600.0
-    except ValueError:
-        return 600.0
+    from .config import env_num  # round 87: the node's one numeric reading ("1_0", mismatched quotes)
+    f = env_num("AVRONE_PROC_LONG_S")
+    v = 600.0 if f is None else f
     # round 54: "inf" disabled the runaway flag silently and printed "running >= infs"
     return v if v > 0 and math.isfinite(v) else 600.0
 

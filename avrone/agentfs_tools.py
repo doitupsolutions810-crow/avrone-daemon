@@ -55,11 +55,11 @@ def _lock_for(d: Path) -> threading.Lock:
 
 def _mb_env(name: str, default: int, hard: int) -> int:
     """Positive MB from env, clamped to [1, hard]; junk, empty or <=0 falls back to default."""
-    raw = os.environ.get(name, "")
-    try:
-        v = float(raw) if raw.strip() else float(default)
-    except ValueError:
-        v = float(default)
+    from .config import clean_secret, env_num  # round 87: fullwidth digits and '"64"' read as given/junk
+    f = env_num(name)
+    if f is None and clean_secret(os.environ.get(name)).lower() in ("inf", "+inf", "infinity", "+infinity"):
+        f = float(hard)  # test_cov7: "inf" has always meant "as much as the hard cap allows"
+    v = float(default) if f is None else f
     if v != v or v <= 0:  # NaN (e.g. "nan") is junk too: int(nan) would crash every fs tool
         v = float(default)
     return int(min(v, hard) * MB)

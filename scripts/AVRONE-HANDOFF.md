@@ -1074,3 +1074,12 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **Non-text task and key fields printed as Python reprs**, for example `(… {'t': 1})`. Only text is shown now. A missing or non-text key shows as `?`.
 - **Combining-mark floods.** A lesson of `docker` plus 400 U+0301 spent the whole 300-character digest on one stacked glyph that paints over neighbouring lines. Runs of combining marks (Mn/Me) are capped at 4 in the value, key and task. Real accents, Vietnamese NFD, pointed Hebrew and Devanagari conjuncts are untouched.
 - Tests: `tests/test_lessonrecall_r74_robust.py` (30). They set `AVRONE_LESSONS=on`, because the suite's default is off.
+
+## Hardening round 75: flake probe (`tools_flakeprobe.py`)
+
+- **Non-dict args crashed.** null, a list or a string raised AttributeError. They're treated as `{}`, which gives the "give tool" error.
+- **A non-text `tool` was str()-ed.** `["env_report"]` and `{"a": 1}` reached the allow-list check as their reprs. They're refused as `tool must be text` before any run.
+- **`format` fell back to text silently.** `["json"]`, `"xml"` and `1` all produced the text report. They're refused now, before any run. `json` and `text` are matched case-insensitively and trimmed. null and `""` mean text.
+- **A ctx without `core` raised AttributeError.** It now reports `the tool registry is not available`.
+- **Schema reasons were trusted.** `bad[1]` on a string showed one character. A 1-tuple raised IndexError, and `True` raised TypeError. A newline in the reason added a forged line to the report. The reason is now taken safely, flattened with `one_line`, and capped at 300 characters. A non-text reason reads `invalid args`.
+- Tests: `tests/test_flakeprobe_r75_robust.py` (47).

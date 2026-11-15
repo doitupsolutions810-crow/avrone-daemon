@@ -155,7 +155,13 @@ def _cap(text: str) -> str:
 
 
 async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    name = str(args.get("tool") or "").strip()
+    if not isinstance(args, dict):  # round 75: null/list/str args raised AttributeError
+        args = {}
+    raw_name = args.get("tool")
+    if raw_name is not None and not isinstance(raw_name, str):
+        # round 75: ["env_report"] / {"a": 1} were str()-ed into the allow-list check
+        return "ERROR: tool must be text (one of: " + ", ".join(FLAKE_PROBE_ALLOWED) + ")"
+    name = (raw_name or "").strip()
     if not name:
         return "ERROR: give tool (one of: " + ", ".join(FLAKE_PROBE_ALLOWED) + ")"
     if name == FLAKE_PROBE_NAME:
@@ -176,6 +182,12 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: runs must be an integer 1..50"
     if not 1 <= runs <= FLAKE_PROBE_MAX_RUNS:
         return f"ERROR: runs must be 1..{FLAKE_PROBE_MAX_RUNS}"
+    fmt = args.get("format", "text")
+    fmt = "text" if fmt is None else fmt
+    if not isinstance(fmt, str) or fmt.strip().lower() not in ("text", "json", ""):
+        # round 75: ["json"] or "xml" silently fell back to text
+        return 'ERROR: format must be "text" or "json"'
+    want_json = fmt.strip().lower() == "json"
     targs = args.get("args")
     if targs is None:
         targs = {}
@@ -192,7 +204,7 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if len(encoded) > FLAKE_PROBE_MAX_ARGS_CHARS:
         return f"ERROR: args are longer than {FLAKE_PROBE_MAX_ARGS_CHARS} chars of JSON"
     targs = json.loads(encoded)  # plain data only: no shared objects between runs
-    reg = getattr(ctx.core, "tools", None)
+    reg = getattr(getattr(ctx, "core", None), "tools", None)  # round 75: a ctx with no core raised
     if reg is None or not callable(getattr(reg, "get", None)) or not callable(getattr(reg, "call", None)):
         return "ERROR: the tool registry is not available"
     tool = reg.get(name)
@@ -203,9 +215,14 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if callable(getattr(reg, "check", None)):
         bad = reg.check(name, targs)
         if bad:
-            return f"ERROR: args rejected by {name}'s schema: {bad[1]}"
+            # round 75: bad[1] on a str showed one character, a 1-tuple or True raised; the
+            # reason is also flattened so a newline in it cannot add a forged report line
+            from .tools import one_line
+            why = bad[1] if isinstance(bad, (tuple, list)) and len(bad) > 1 else bad
+            why = one_line(why if isinstance(why, str) else "invalid args")[:300]
+            return f"ERROR: args rejected by {name}'s schema: {why}"
     rep = await flake_probe(ctx, reg, name, runs, targs)
-    if str(args.get("format", "text")).strip().lower() == "json":
+    if want_json:
         return _cap(json.dumps(rep, indent=1, sort_keys=True))
     g = rep["great_scale"]
     verdict = ("deterministic" if rep["differing_runs"] == 0 else

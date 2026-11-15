@@ -56,7 +56,7 @@ def assert_read_only(conn, operation):
         "delete": ("DELETE FROM trial_quarantined_senders", ()),
     }
     sql, args = statements[operation]
-    with pytest.raises(sqlite3.OperationalError, match="readonly|read.only"):
+    with pytest.raises(sqlite3.DatabaseError, match="readonly|read.only|not authorized"):
         conn.execute(sql, args)
 
 

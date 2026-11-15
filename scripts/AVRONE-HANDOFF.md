@@ -1119,3 +1119,19 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **A retry could sleep effectively forever.** `AVRONE_LLM_BACKOFF=1e300` made `asyncio.sleep(base * 2**attempt)` never return. The new `gateway._bounded_delay` keeps the delay in [0, 60] s, and NaN and negative values give 0. Both `gateway._delay` and `llm._retry_delay` use it. In `llm._retry_delay`, a negative or NaN Retry-After header is now ignored.
 - **A breaker could stay open forever.** With a NaN cooldown, `now >= open_until` is never true, and 1e300 or inf had the same effect. `Gateway.__init__` now bounds the threshold and cooldown itself (default 3 and 30 s), so a settings object that isn't a Settings is covered too.
 - Tests: `tests/test_settings_bounds_r79_robust.py` (58).
+
+## Hardening round 80: governor parsing, lesson_forget and bridge_status edges (`governor.py`, `tools_lessonforget.py`)
+
+- **Governor**
+  - **Non-ASCII digits counted as numbers.** `_as_int` and the env readers took fullwidth `\uff12` and Arabic-Indic digits, which `config._num` has refused since round 78. Env values are now trimmed and unquoted, and only ASCII is accepted.
+  - **A thermal ceiling of 0 or below** made every node "hot", so every run was pinned to the floor. A ceiling above 150 °C turned the guard off. Both now fall back to 85 °C.
+  - **`ttl_s=1e300` froze the first reading forever.** The TTL is now bounded to 0–300 s, and a negative value means 0.
+  - **The on/off switch read words wrong.** `bool("false")` and `bool("off")` were True. `AVRONE_GOVERNOR=" off "` was not trimmed, so the governor stayed on. Text now goes through `config.parse_bool`.
+  - **`from_settings` mishandled `data_dir`.** A blank or non-path `data_dir` now means `.`.
+- **lesson_forget**
+  - **Bad args crashed it.** A list, string or None for args raised AttributeError. It now refuses them cleanly.
+  - **An invisible reason passed as "required".** The old check removed only five zero-width characters, so `\u2062`, `\ufe0f`, `\u180e`, U+3164 and Braille blanks got through. The new `_visible` check uses Unicode categories.
+  - **Zalgo text in the reason went through whole.** Combining-mark runs are now capped at 4 by `_calm`.
+  - **A blank `data_dir` wrote lessons to the cwd.** With `data_dir="   "`, a directory literally named three spaces appeared in the repo root. An int or bool `data_dir` raised TypeError. It now uses `bridge.usable_data_dir`.
+- **bridge_status:** a context with no core or run_id now returns a message instead of raising.
+- Tests: `tests/test_governor_lessonforget_r80_robust.py` (90).

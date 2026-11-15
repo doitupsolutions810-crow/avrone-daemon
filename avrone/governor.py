@@ -352,12 +352,46 @@ def _finite(v: Any, default: float) -> float:
     return f if math.isfinite(f) else default
 
 
+def _env_text(name: str) -> str:
+    """An env value trimmed and unquoted; non-ASCII becomes "" (round 80: float() took fullwidth
+    "\uff12" and Arabic-Indic digits, which config._num has refused since round 78)."""
+    v = (os.environ.get(name) or "").strip().strip("'\"").strip()
+    return v if v.isascii() else ""
+
+
 def _env_float(name: str, default: float) -> float:
-    return _finite(os.environ.get(name, "") or default, default)
+    return _finite(_env_text(name) or default, default)
 
 
 def _env_int(name: str, default: int) -> int:
-    return _as_int(os.environ.get(name, "") or default, default)
+    return _as_int(_env_text(name) or default, default)
+
+
+MAX_TTL_S = 300.0
+
+
+def _ttl(v: Any) -> float:
+    """Cache lifetime in [0, MAX_TTL_S]. Round 80: ttl_s=1e300 froze the first reading for good
+    (a hot node never cooled down in the governor's eyes); a negative ttl is 0 (always fresh)."""
+    f = _finite(v, 2.0) if not isinstance(v, bool) else 2.0
+    return max(0.0, min(MAX_TTL_S, f))
+
+
+def _thermal_max(v: Any) -> float:
+    """A thermal ceiling in (0, 150] C. Round 80: 0 or a negative value (a typo, or Fahrenheit
+    sign confusion) made every node "hot" so the governor pinned every run to its floor; a
+    value past 150 C disabled the guard. Out of range = the default."""
+    f = _finite(v, DEFAULT_THERMAL_MAX_C) if not isinstance(v, bool) else DEFAULT_THERMAL_MAX_C
+    return f if 0 < f <= 150 else DEFAULT_THERMAL_MAX_C
+
+
+def _enabled(v: Any) -> bool:
+    """Round 80: bool("false") / bool("off") were True, and the env check did not trim, so
+    AVRONE_GOVERNOR=" off " left the governor on. Text goes through config.parse_bool."""
+    if isinstance(v, str):
+        from .config import parse_bool
+        return parse_bool(v, True)
+    return bool(v)
 
 
 def _as_int(v: Any, default: int) -> int:
@@ -368,6 +402,8 @@ def _as_int(v: Any, default: int) -> int:
     if isinstance(v, int):
         return v
     try:
+        if isinstance(v, str) and not v.strip().isascii():  # round 80: "\uff12" was 2
+            return default
         f = float(str(v).strip()) if not isinstance(v, float) else v
     except (TypeError, ValueError):
         return default
@@ -390,9 +426,9 @@ class Governor:
         self.max_parallel = max(1, min(4096, _as_int(max_parallel or 1, 1)))
         mp = _env_int("AVRONE_MIN_PARALLEL", 1) if min_parallel is None else _as_int(min_parallel, 1)
         self.floor = max(1, min(mp, self.max_parallel))
-        self.thermal_max_c = (_env_float("AVRONE_THERMAL_MAX_C", DEFAULT_THERMAL_MAX_C)
-                              if thermal_max_c is None else _finite(thermal_max_c, DEFAULT_THERMAL_MAX_C))
-        self.enabled = enabled
+        self.thermal_max_c = _thermal_max(_env_float("AVRONE_THERMAL_MAX_C", DEFAULT_THERMAL_MAX_C)
+                                          if thermal_max_c is None else thermal_max_c)
+        self.enabled = _enabled(enabled)
         self.readers: dict[str, Reader] = {
             "load": read_load, "mem_pct": read_mem_pct,
             "disk_free_pct": make_disk_reader(str(data_dir)), "temp_c": read_temp_c,
@@ -402,7 +438,7 @@ class Governor:
         self.thermal_limit_hot = max(1.0, min(100.0, _env_float("AVRONE_THERMAL_LIMIT_HOT_PCT",
                                                                 DEFAULT_THERMAL_LIMIT_HOT)))
         self.readers.update(readers or {})
-        self.ttl_s = _finite(ttl_s, 2.0)
+        self.ttl_s = _ttl(ttl_s)
         self.clock = clock
         self._cache: tuple[float, NodeHealth] | None = None
         self.last_target = self.max_parallel
@@ -414,11 +450,13 @@ class Governor:
         """Build from a Settings-like object; missing attributes fall back to env/defaults."""
         enabled = getattr(settings, "governor", None)
         if enabled is None:
-            enabled = os.environ.get("AVRONE_GOVERNOR", "on").lower() not in {"0", "off", "false", "no"}
+            enabled = os.environ.get("AVRONE_GOVERNOR") or "on"
+        dd = getattr(settings, "data_dir", ".")
+        dd = "." if isinstance(dd, bool) or not isinstance(dd, (str, os.PathLike)) or not str(dd).strip() else dd
         return cls(max_parallel=getattr(settings, "max_parallel", 1) or 1,
                    min_parallel=getattr(settings, "min_parallel", None),
                    thermal_max_c=getattr(settings, "thermal_max_c", None),
-                   enabled=bool(enabled), data_dir=str(getattr(settings, "data_dir", ".") or "."), **kw)
+                   enabled=_enabled(enabled), data_dir=str(dd), **kw)
 
     # -------------------------------------------------------------- sensing
     def read(self, fresh: bool = False) -> NodeHealth:

@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v159",
+  "finding": "The script removes a stale index.lock when no git process is running, and refuses when git is live with a lock. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "stale": "remove and continue",
+  "live": "refuse",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The git-index-lock check holds."
+}

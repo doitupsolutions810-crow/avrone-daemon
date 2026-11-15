@@ -104,8 +104,10 @@ def _clean(a: Any) -> Any:
             return _scrub(_safe_str(a))
         if isinstance(a, str):
             return _scrub(a)
-        if isinstance(a, (bytes, bytearray)):
-            return a  # "%s" renders their repr, which already escapes every control byte
+        if isinstance(a, (bytes, bytearray, memoryview)):
+            # round 91: "%s" renders their repr, which escapes control bytes but kept a token
+            # ("stderr: %s", b"token ghp_...") verbatim; the repr now goes through _scrub too
+            return _Shown(bytes(a))
         return _Shown(a)
     except Exception:  # noqa: BLE001
         return "<unloggable argument>"
@@ -116,6 +118,22 @@ def clean_template(msg: str) -> str:
     if UNSAFE_ONE.search(msg):
         return escape(msg, keep=_TEMPLATE_KEEP)
     return msg
+
+
+def _redact_template(msg: str, rec: logging.LogRecord) -> str:
+    """Round 91: a template that itself carries a secret (log.warning(f"auth {hdr}: %s", err)) was
+    only escaped, never redacted, though a record without args was. Redacting the template alone
+    can eat a "%s" ("password=%s" -> "password=[REDACTED]") and break the args, so a template
+    the redactor changes is formatted now with the cleaned args and the whole line redacted."""
+    if _redact(msg) == msg:
+        return clean_template(msg)
+    try:
+        line = msg % rec.args
+    except Exception:  # noqa: BLE001 - a broken template: keep it masked, drop the args
+        rec.args = ()
+        return clean_template(_redact(msg))
+    rec.args = ()
+    return clean_template(_redact(_cap(line, arg_chars() * 4)))
 
 
 def clean_args(args: Any) -> Any:
@@ -146,7 +164,7 @@ def install() -> None:
                 if rec.args:
                     rec.args = clean_args(rec.args)
                     if isinstance(rec.msg, str):
-                        rec.msg = clean_template(rec.msg)
+                        rec.msg = _redact_template(rec.msg, rec)
                 elif isinstance(rec.msg, str):
                     rec.msg = _redact(rec.msg)  # round 154
                     if UNSAFE_ONE.search(rec.msg.rstrip("\n")):

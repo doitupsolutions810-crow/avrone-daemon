@@ -380,7 +380,9 @@ async def t_search_files(ctx: "AgentContext", args: dict[str, Any]) -> str:
         await proc.wait()
     if proc.returncode not in (0, None) and not timed_out and not hits:
         err = (await proc.stderr.read()).decode(errors="replace").strip().splitlines() if proc.stderr else []
-        return f"ERROR: search failed: {err[-1][:300] if err else proc.returncode}"
+        # round 91: the child's last stderr line (a path or pattern in an exception) was returned
+        # raw, so ESC/U+202E in it reached the model and any terminal showing the tool result
+        return f"ERROR: search failed: {_tsesc(err[-1][:300]) if err else proc.returncode}"
     if timed_out:
         note = (f"...[search stopped after {SEARCH_TIMEOUT_S:g}s: the pattern is too slow on this text "
                 f"(nested quantifiers like (a+)+ take exponential time); simplify it]")

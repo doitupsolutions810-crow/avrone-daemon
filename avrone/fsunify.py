@@ -73,10 +73,21 @@ def agent_root(ctx: "AgentContext") -> Path | None:
     return root
 
 
+# Round 91: HFS+ ignores these code points when it compares names (the list git's
+# is_hfs_dotgit strips, CVE-2014-9390), so "agen\u200cts" IS the agents dir there; U+200B and
+# U+2060 are added because they render the same and refusing too much is the safe side here.
+_HFS_IGNORABLE = dict.fromkeys(
+    [0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF, *range(0x202A, 0x202F), *range(0x206A, 0x2070)])
+
+
 def _fold(name: str) -> str:
     """How a case-insensitive filesystem compares a name: macOS APFS/HFS+ and Windows NTFS treat
-    'Agents', 'AGENTS', 'agents.' and 'agents::$INDEX_ALLOCATION' (NTFS stream syntax) as 'agents'."""
-    return name.split(":", 1)[0].rstrip(" .").casefold()
+    'Agents', 'AGENTS', 'agents.' and 'agents::$INDEX_ALLOCATION' (NTFS stream syntax) as 'agents'.
+    Round 91: HFS+ also ignores zero-width and bidi code points, and both Apple filesystems compare
+    names normalization-insensitively, so those are dropped and the name is NFC-folded first."""
+    import unicodedata
+    n = unicodedata.normalize("NFC", name.translate(_HFS_IGNORABLE))
+    return n.split(":", 1)[0].rstrip(" .").casefold()
 
 
 def _touches_agents(ws: Path, p: Path) -> bool:

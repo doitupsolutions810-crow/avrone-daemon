@@ -1230,3 +1230,13 @@ Scope: thin-coverage modules tools_researchnote, tools_hostview, agentpack impor
 - `agentpack.import_pack`: a memory merge or home-record failure after the files are swapped in no longer raises a raw OSError (path in the message, a 500 on fleet migrate); the result carries `incomplete: {memory|home_record: "<Type> (<ERRNO>)"}` and `agent_pack_import` says INCOMPLETE instead of "your home is unchanged", with an `agentpack.incomplete` audit.
 - `tools_introspect._credential_in` compares against the value with the same invisible chars dropped, so an emoji with a variation selector is not reported as a credential.
 - Tests: `tests/test_hostview_note_pack_r90_robust.py`.
+
+## Hardening round 91
+
+Scope: logsafe, fsunify, search_files.
+
+- `logsafe._redact_template`: a template that carried a secret ("peer used password=hunter2 for %s", "Authorization: Bearer x %d") was escaped but never redacted when args were present, though a record without args was. A template the redactor changes is now formatted with the cleaned args and the whole line redacted (args cleared), because redacting the template alone can eat a "%s". A broken template keeps its redacted form with args dropped.
+- `logsafe._clean`: bytes, bytearray and memoryview args go through `_Shown`, so their repr is redacted too ("stderr: %s", b"token ghp_..." was logged verbatim).
+- `fsunify._fold`: drops the code points HFS+ ignores in name comparison (U+200C/D, U+200E/F, U+202A..E, U+206A..F, U+FEFF, plus U+200B and U+2060) and NFC-folds, so "shared/agen\u200cts/<other>" is refused like "shared/Agents".
+- `t_search_files`: the child's last stderr line is escaped before it is returned.
+- Tests: `tests/test_logsafe_fsunify_r91_robust.py`.

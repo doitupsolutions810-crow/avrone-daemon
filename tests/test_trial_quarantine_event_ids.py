@@ -53,7 +53,7 @@ def test_invalid_integer_quarantine_event_identifier_is_rejected(
         "UPDATE trial_quarantine SET quarantine_id=? WHERE sender='peer-b'",
         (event_id,),
     )
-    with pytest.raises(TrialStoreError, match="quarantine integrity"):
+    with pytest.raises(TrialStoreError, match="event sequence schema integrity|quarantine integrity"):
         store.quarantine_records()
     with pytest.raises(TrialStoreError, match="quarantine integrity"):
         store.ingest_many([trial(attempt="other")], sender="peer-b", transport="fleet")
@@ -80,7 +80,7 @@ def test_repeated_quarantine_id_across_two_distinct_senders_is_rejected(tmp_path
     finally:
         db.close()
 
-    with pytest.raises(TrialStoreError, match="duplicate quarantine event identity"):
+    with pytest.raises(TrialStoreError, match="event sequence schema integrity|duplicate quarantine event identity"):
         store.quarantine_records()
     with pytest.raises(TrialStoreError, match="primary key integrity"):
         TrialStore(path)

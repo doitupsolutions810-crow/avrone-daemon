@@ -1174,17 +1174,49 @@ class TrialStore:
             raise TrialStoreError("stored trial receipt integrity check failed") from exc
 
     @staticmethod
-    def _begin_readonly_audit(db: sqlite3.Connection) -> None:
-        """Pin a WAL read snapshot and forbid writes on this audit handle.
+    def _audit_sql_authorizer(
+        operation: int, name: str | None, argument: str | None,
+        database: str | None, context: str | None,
+    ) -> int:
+        """Restrict audit SQL to reads after the WAL snapshot is pinned.
 
-        BEGIN alone is a deferred read transaction which may be upgraded to a
-        writer by a future helper or callback. query_only is per-connection;
-        enforce it before the first read, then use one transaction for all
-        cross-table evidence lookups. A separate ingestion connection remains
-        writable and can commit without corrupting this snapshot.
+        query_only=ON can itself be disabled from the same SQLite connection.
+        An authorizer installed after BEGIN prevents an accidental helper from
+        disabling that guard, mutating tables, attaching a database, changing
+        schema, or ending/restarting the snapshot through SQL. Permit only
+        SELECT/READ/safe SQL functions and a read of PRAGMA query_only for
+        diagnostics. This is defense in depth, not a sandbox for hostile Python.
+        """
+        if operation == sqlite3.SQLITE_PRAGMA:
+            if name is not None and name.lower() == "query_only" and argument is None:
+                return sqlite3.SQLITE_OK
+            return sqlite3.SQLITE_DENY
+        if operation == sqlite3.SQLITE_FUNCTION:
+            if (argument or "").lower() in {
+                "load_extension", "readfile", "writefile", "eval",
+            }:
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        if operation in {
+            sqlite3.SQLITE_SELECT,
+            sqlite3.SQLITE_READ,
+            sqlite3.SQLITE_RECURSIVE,
+        }:
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+
+    @staticmethod
+    def _begin_readonly_audit(db: sqlite3.Connection) -> None:
+        """Pin a read-only WAL snapshot and install a restrictive SQL authorizer.
+
+        Enforce query_only=ON before BEGIN. Once BEGIN starts, deny SQL that
+        could disable query_only, mutate evidence, or close/restart the read
+        transaction. Closing the connection releases its snapshot regardless
+        of the authorizer and leaves independent writer handles unaffected.
         """
         db.execute("PRAGMA query_only=ON")
         db.execute("BEGIN")
+        db.set_authorizer(TrialStore._audit_sql_authorizer)
 
     def receipt_records(self) -> list[dict[str, Any]]:
         """Return retained delivery receipts only after validating every row."""

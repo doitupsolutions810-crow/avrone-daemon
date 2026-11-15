@@ -1,0 +1,14 @@
+{
+  "schema": "great-scale-evidence/v150",
+  "finding": "The script refuses when pip install fails and AVRONE is not already installed, or when the baseline pytest gate is red. Soft-continues when already installed offline. The checks are present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "pipFailNotInstalled": "refuse",
+  "pipFailAlreadyInstalled": "warn and continue",
+  "baselineRed": "exit 1",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The pip-install and baseline-gate checks hold."
+}

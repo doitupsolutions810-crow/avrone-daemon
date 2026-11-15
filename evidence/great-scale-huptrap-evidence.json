@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v158",
+  "finding": "The script ignores SIGHUP (terminal closed) and continues, while INT/TERM exit cleanly. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "hup": "ignore and continue",
+  "intTerm": "exit 130 / 143",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The HUP-trap check holds."
+}

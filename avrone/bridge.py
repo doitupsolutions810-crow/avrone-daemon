@@ -671,11 +671,15 @@ def distill_lessons(data_dir: Path | str, bridge: "Bridge", task: str = "", k: i
         store = _store(data_dir)
         have = store.load(LESSONS_NS)
         saved: list[str] = []
+        # round 168: the run's task text was stored raw as lesson metadata in memory.jsonl, so a key
+        # in a task persisted to disk (and synced to the fleet parent). Redact first, then cut.
+        from .ctxspawn import redact
+        task_meta = redact(str(task))[:200]
         for t in picks:
             key = lesson_key(t)
             if key in have or key in saved:
                 continue
-            store.save(LESSONS_NS, key, t, run_id=bridge.run_id, task=str(task)[:200])
+            store.save(LESSONS_NS, key, t, run_id=bridge.run_id, task=task_meta)
             saved.append(key)
         if saved:
             store.trim(LESSONS_NS, lessons_max())

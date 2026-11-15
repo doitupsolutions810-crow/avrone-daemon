@@ -524,14 +524,26 @@ class MemoryStore:
                 for key, rec in space.items():
                     if redact(key) != key:
                         out["keys"] += 1
+                    changed = False
                     v = rec.get("value")
                     if isinstance(v, str):
                         nv = redact(v)
                         if nv != v:
-                            rec["ts"] = _next_ts(dict(rec), now)
                             rec["value"] = nv
                             out["values"] += 1
-            if out["values"]:
+                            changed = True
+                    # round 168: string metadata (a lesson's "task") was stored raw and skipped here
+                    for mk, mv in list(rec.items()):
+                        if mk in ("ns", "key", "value", "ts") or not isinstance(mv, str):
+                            continue
+                        nm = redact(mv)
+                        if nm != mv:
+                            rec[mk] = nm
+                            out["meta"] = out.get("meta", 0) + 1
+                            changed = True
+                    if changed:
+                        rec["ts"] = _next_ts(dict(rec), now)
+            if out["values"] or out.get("meta"):
                 self._rewrite(spaces)
         return out
 

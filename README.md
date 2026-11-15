@@ -81,6 +81,12 @@ probes outside networks.
 - **Map** tab in the UI: live graph + headline metrics
 - `avrone-cli telemetry` and `avrone-cli map [--format mermaid|json]`
 
+## v0.161: Round 168: Lesson task metadata redacted
+
+- **Before:** `bridge.distill_lessons` saved each lesson with `task=str(task)[:200]` raw into memory.jsonl, which fleet memory sync ships to the parent. `MemoryStore.scrub` only masked `value`, so `secret_scan fix` left those copies in place.
+- **Now:** the task metadata is redacted first and then cut. `scrub` also masks string metadata fields; `ns`, `key` and `ts` are left alone. A changed record gets a newer LWW ts and is counted as `meta` in the scrub report.
+- **Tests:** `tests/test_round168_lesson_task_meta.py` (2). Both fail on v0.160.
+
 ## v0.160: Round 167: Checkpoint previews redacted
 
 - **Before:** `checkpoint.describe` and `list_managed` returned the task preview and the answer preview raw. These feed `/api/checkpoints` and the checkpoint list, so a key or `--password` in the task text was served back unchanged.

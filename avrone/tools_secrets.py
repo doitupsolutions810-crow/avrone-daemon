@@ -404,6 +404,7 @@ async def t_secret_scan(ctx: "AgentContext", args: dict[str, Any]) -> str:
                 try:
                     mr = await asyncio.to_thread(MemoryStore(root / "memory.jsonl").scrub)
                     lines.append(f"memory: masked {mr['values']} value(s)"
+                                 + (f" and {mr['meta']} metadata field(s)" if mr.get("meta") else "")
                                  + (f"; {mr['keys']} key(s) hold a secret (keys are not rewritten, "
                                     "fix them by hand)" if mr["keys"] else ""))
                 except OSError as e:

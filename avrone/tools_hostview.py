@@ -27,12 +27,15 @@ if TYPE_CHECKING:
 PROC = Path("/proc")
 MAX_PROCS = 50
 CMD_MAX = 160
+CMDLINE_READ = 8192
 
 
 def _long_s() -> float:
     import math
+    raw = (os.getenv("AVRONE_PROC_LONG_S") or "").strip().strip("'\"").strip()
     try:
-        v = float(os.getenv("AVRONE_PROC_LONG_S", "600") or 600)
+        # round 81: fullwidth digits counted, and a quoted '"60"' fell back to 600 silently
+        v = float(raw) if raw and raw.isascii() else 600.0
     except ValueError:
         return 600.0
     # round 54: "inf" disabled the runaway flag silently and printed "running >= infs"
@@ -91,7 +94,10 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
             rparen = stat.rindex(")")
             fields = stat[rparen + 2:].split()
             state, ppid, start_ticks, rss_pages = fields[0], int(fields[1]), int(fields[19]), int(fields[21])
-            raw = (PROC / str(pid) / "cmdline").read_bytes()
+            with open(PROC / str(pid) / "cmdline", "rb") as fh:
+                # round 81: a 2 MB argv was read and regex-scanned whole for every child, though
+                # only CMD_MAX chars are shown; CMDLINE_READ bytes leave room to mask a secret flag
+                raw = fh.read(CMDLINE_READ)
         except (OSError, ValueError, IndexError):
             continue  # raced with exit, or not ours to read
         cmd = raw.replace(b"\x00", b" ").decode(errors="replace").strip() or stat[stat.index("(") + 1:rparen]
@@ -222,7 +228,8 @@ _SEQUENCES = ("qwertyuiopasdfghjklzxcvbnm", "abcdefghijklmnopqrstuvwxyz", "01234
 
 def exposure() -> dict[str, Any]:
     """Who can reach what on this node right now, as a remote (non-loopback) caller with no token."""
-    host = os.getenv("AVRONE_HOST") or "127.0.0.1"
+    from .config import bind_host  # round 81: the same reading server.main binds with
+    host = bind_host()
     from .fusion_loopback import is_access_loopback
     exposed = not is_access_loopback(host)
     a = api_surface()

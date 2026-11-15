@@ -260,7 +260,8 @@ def _insecure_combos(settings: Any, env: Mapping[str, str], toggles: dict[str, s
                      effective_local: bool) -> list[Check]:
     out: list[Check] = []
     recon_any = (env.get("AVRONE_RECON_ALLOWLIST") or "").strip() == "*"
-    host = env.get("AVRONE_HOST") or "127.0.0.1"
+    from .config import bind_host  # round 81: the same reading server.main binds with
+    host = bind_host(env)
     exposed = not _is_loopback_host(host)
     admin, fleet = tokens["AVRONE_ADMIN_TOKEN"], tokens["AVRONE_FLEET_TOKEN"]
 

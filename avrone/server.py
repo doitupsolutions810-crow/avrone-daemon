@@ -982,10 +982,9 @@ async def events(ws: WebSocket):
 
 
 def main() -> None:
-    import os
     import uvicorn
-    uvicorn.run("avrone.server:app", host=os.getenv("AVRONE_HOST", "127.0.0.1"),
-                port=int(os.getenv("AVRONE_PORT", "8710")))
+    from .config import bind_host, bind_port  # round 81: a blank AVRONE_HOST bound every interface
+    uvicorn.run("avrone.server:app", host=bind_host(), port=bind_port())
 
 
 if __name__ == "__main__":

@@ -70,6 +70,45 @@ def _load_dotenv(path: Path) -> None:
             os.environ.setdefault(*kv)
 
 
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8710
+
+
+def _env_value(name: str, env: Any = None) -> str:
+    raw = (os.environ if env is None else env).get(name)
+    return raw.strip().strip("'\"").strip() if isinstance(raw, str) else ""
+
+
+def bind_host(env: Any = None) -> str:
+    """The address the HTTP server binds, as server.main, doctor and exposure_check all read it.
+
+    Round 81: server.main passed AVRONE_HOST="" straight to uvicorn, and asyncio binds an empty
+    host on EVERY interface (0.0.0.0 and ::), while doctor and exposure_check read the same blank
+    value as 127.0.0.1 and reported the node as loopback-only. Blank, quoted-blank, non-ASCII or a
+    value with spaces/control characters now means 127.0.0.1 for all three (fail closed)."""
+    v = _env_value("AVRONE_HOST", env)
+    if not v:
+        return DEFAULT_HOST
+    if not v.isascii() or not v.isprintable() or any(c.isspace() for c in v):
+        import sys
+        print(f"AVRONE: ignoring unusable AVRONE_HOST {v[:40]!r}; binding {DEFAULT_HOST}", file=sys.stderr)
+        return DEFAULT_HOST
+    return v
+
+
+def bind_port(env: Any = None) -> int:
+    """AVRONE_PORT as 1..65535. Round 81: "" raised ValueError out of server.main, "0" bound a
+    random port nobody could find, and int() took fullwidth digits ("\uff18\uff17\uff11\uff10")."""
+    v = _env_value("AVRONE_PORT", env)
+    if not v:
+        return DEFAULT_PORT
+    if v.isascii() and v.isdigit() and 1 <= int(v) <= 65535:
+        return int(v)
+    import sys
+    print(f"AVRONE: ignoring bad AVRONE_PORT {v[:40]!r}; using {DEFAULT_PORT}", file=sys.stderr)
+    return DEFAULT_PORT
+
+
 def env_file() -> Path:
     """AVRONE_ENV_FILE, or .env. Round 78: a blank value was Path("") (the cwd itself, never a
     file), so AVRONE_ENV_FILE= silently loaded no .env at all."""

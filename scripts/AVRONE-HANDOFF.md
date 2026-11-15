@@ -1135,3 +1135,10 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
   - **A blank `data_dir` wrote lessons to the cwd.** With `data_dir="   "`, a directory literally named three spaces appeared in the repo root. An int or bool `data_dir` raised TypeError. It now uses `bridge.usable_data_dir`.
 - **bridge_status:** a context with no core or run_id now returns a message instead of raising.
 - Tests: `tests/test_governor_lessonforget_r80_robust.py` (90).
+
+## Hardening round 81: one reading of AVRONE_HOST/AVRONE_PORT (`config.py`, `server.py`, `doctor.py`, `tools_hostview.py`)
+
+- **A blank host was exposed but reported as loopback.** `server.main` passed `AVRONE_HOST=""` straight to uvicorn. asyncio binds an empty host on every interface (both `0.0.0.0` and `::`). Meanwhile `doctor` and `exposure_check` read the same blank as 127.0.0.1 and called the node loopback-only. Now `config.bind_host(env)` gives all three the same answer. The value is trimmed and unquoted. A blank, non-ASCII, spaced or control-character value means 127.0.0.1, so it fails closed.
+- **Bad ports.** A blank `AVRONE_PORT=` raised ValueError out of `server.main`. `0` bound a random port. `int()` took fullwidth digits. `config.bind_port` now accepts only ASCII 1–65535, and anything else falls back to 8710 with a capped warning.
+- **proc_status:** `AVRONE_PROC_LONG_S` is unquoted and ASCII-only. Each child's cmdline is read up to 8 KB (`CMDLINE_READ`), not 2 MB+, before redaction and the 160-char cut.
+- Tests: `tests/test_bindhost_hostview_r81_robust.py` (56).

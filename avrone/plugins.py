@@ -49,7 +49,12 @@ def _fatal(e: BaseException) -> bool:
 
 
 def plugins_dir() -> Path:
-    return Path(os.getenv("AVRONE_PLUGINS_DIR", "./plugins")).resolve()
+    # round 77: AVRONE_PLUGINS_DIR= (blank) resolved to the cwd, so every *.py in the directory the
+    # server was started from was offered as a plugin; blank now means the default
+    raw = os.getenv("AVRONE_PLUGINS_DIR")
+    if raw is None or not raw.strip():
+        raw = "./plugins"
+    return Path(raw).expanduser().resolve()
 
 
 def _run_register(name: str, source: str, register: Callable[..., Any],

@@ -100,7 +100,8 @@ def normalize_post(data: Any) -> tuple[dict[str, Any] | None, str | None]:
 
 def _data_dir(core: Any) -> Path | None:
     settings = getattr(core, "settings", None)
-    data_dir = getattr(settings, "data_dir", None)
+    from .bridge import usable_data_dir
+    data_dir = usable_data_dir(getattr(settings, "data_dir", None))  # round 77: "" was the cwd
     return None if data_dir is None else Path(data_dir)
 
 

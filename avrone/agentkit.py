@@ -207,7 +207,11 @@ MAX_SKILLS = 500
 
 
 def _skills_dir(ctx: "AgentContext") -> Path:
-    return Path(os.getenv("AVRONE_SKILLS_DIR", str(Path(__file__).resolve().parent.parent / "skills")))
+    # round 77: AVRONE_SKILLS_DIR= (blank) was Path("") - the cwd - as the skills dir
+    raw = os.getenv("AVRONE_SKILLS_DIR")
+    if raw is None or not raw.strip():
+        return Path(__file__).resolve().parent.parent / "skills"
+    return Path(raw).expanduser()
 
 
 def _valid_skill_name(name: str) -> bool:

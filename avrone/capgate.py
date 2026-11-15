@@ -421,7 +421,8 @@ def data_dir_of(ctx: Any) -> Path | None:
     s = getattr(core, "settings", None)
     d = getattr(s, "data_dir", None)
     # only a real path: a mocked or misconfigured settings object must never become a directory name
-    return Path(d) if isinstance(d, (str, Path)) and str(d) else None
+    # round 77: "  " passed str(d) and became a directory named by spaces under the cwd
+    return Path(d) if isinstance(d, (str, Path)) and str(d).strip() else None
 
 
 def attenuate_for_child(parent: dict[str, Any], child_name: str, role: str | None = None) -> dict[str, Any]:

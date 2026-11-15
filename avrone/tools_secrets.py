@@ -82,9 +82,12 @@ def _roots(ctx: "AgentContext", scope: str) -> Path | None:
     core = getattr(ctx, "core", None)
     settings = getattr(core, "settings", None)
     if scope == "workspace":
-        ws = getattr(getattr(core, "runner", None), "workspace", None) or getattr(settings, "workspace", None)
+        from .bridge import usable_data_dir
+        ws = (usable_data_dir(getattr(getattr(core, "runner", None), "workspace", None))
+              or usable_data_dir(getattr(settings, "workspace", None)))  # round 77: " " was a dir under cwd
         return Path(ws) if ws else None
-    dd = getattr(settings, "data_dir", None)
+    from .bridge import usable_data_dir
+    dd = usable_data_dir(getattr(settings, "data_dir", None))  # round 77: "" scanned the cwd
     if dd is None:
         return None
     return Path(dd) / "runs" if scope == "runs" else Path(dd)

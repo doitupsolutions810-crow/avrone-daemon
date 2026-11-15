@@ -20,7 +20,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core
+from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core, usable_data_dir
 
 _ORDER_NAME = "_fanin_order.json"
 # Round 137: this was 1 MiB, but _save_order writes any size. After a restart, an order file over
@@ -101,7 +101,7 @@ def _string_refs(refs: Any) -> list[str]:
 
 def _data_dir(core: Any) -> Path | None:
     settings = getattr(core, "settings", None)
-    data_dir = getattr(settings, "data_dir", None)
+    data_dir = usable_data_dir(getattr(settings, "data_dir", None))  # round 77: "" was the cwd
     return None if data_dir is None else Path(data_dir)
 
 

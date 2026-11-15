@@ -171,7 +171,16 @@ def _bool(name: str, default: bool):
 
 
 def _path(name: str, default: str):
-    return lambda: Path(os.getenv(name, default)).resolve()
+    """A directory setting. Round 77: AVRONE_DATA_DIR= (blank, as an .env line with no value
+    leaves it) was Path("").resolve() - the process cwd - so data and the agent workspace landed in
+    whatever directory the server was started from (for the workspace: the repo itself). Blank or
+    whitespace now means the default, and a leading ~ is expanded instead of making a "~" folder."""
+    def make() -> Path:
+        raw = os.getenv(name)
+        if raw is None or not raw.strip():
+            raw = default
+        return Path(raw).expanduser().resolve()
+    return make
 
 
 @dataclass

@@ -1092,3 +1092,13 @@ This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())`
 - **A ctx with no core crashed.** `for_core(None)` raised AttributeError. It now returns `ERROR: no agent core on this context (nothing posted)`.
 - **Bridge open errors were uncaught.** An OSError when creating the bridge dir (data_dir is a file, read-only, full disk) is now reported by errno class only, with no path.
 - Tests: `tests/test_researchnote_r76_robust.py` (42).
+
+## Hardening round 77: blank directory settings (`config.py`, `plugins.py`, `agentkit.py`, `capgate.py`, `fusion_blackboard.py`, `fusion_peer.py`, `tools_secrets.py`)
+
+Round 76 fixed a blank data_dir in the bridge. This round follows the same bug back to where the settings come from.
+- **`AVRONE_DATA_DIR=` and `AVRONE_WORKSPACE=` resolved to the process cwd.** A blank value (for example an `.env` line with no value) went through `Path("").resolve()`. Data, and the agent workspace, then landed in whatever directory the server started from, which for the workspace is usually the repo. Blank or whitespace now means the default. A leading `~` is expanded instead of creating a literal `~` folder.
+- **`AVRONE_PLUGINS_DIR=` resolved to the cwd.** Every `*.py` file there was offered as a plugin. Blank now means `./plugins`, and `~` is expanded.
+- **`AVRONE_SKILLS_DIR=` used the cwd as the skills dir.** Blank now means the bundled `skills/`.
+- **`capgate.data_dir_of` accepted whitespace.** It now returns None.
+- **Other blank-path readers.** `fusion_blackboard._data_dir`, `fusion_peer._data_dir` and `tools_secrets._roots` (data/runs and workspace) go through `bridge.usable_data_dir`, so blank or non-path values mean none. A blank runner workspace falls back to the settings workspace.
+- Tests: `tests/test_blankdirs_r77_robust.py` (74).

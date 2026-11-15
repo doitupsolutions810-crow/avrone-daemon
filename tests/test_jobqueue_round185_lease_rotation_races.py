@@ -423,3 +423,86 @@ def test_prune_never_deletes_queued_or_running_jobs(tmp_path):
             await queue.close()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("payload_json", ["[]", "null", "42", '"text"'])
+def test_valid_non_object_database_payload_is_quarantined_and_claim_continues(tmp_path, payload_json):
+    async def run():
+        queue = JobQueue(tmp_path / "non-object-payload.db")
+        try:
+            poison = await queue.enqueue("payload", {}, priority=10)
+            good = await queue.enqueue("payload", {"safe": True}, priority=0)
+            queue._db.execute("UPDATE jobs SET payload=? WHERE id=?", (payload_json, poison))
+
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == good
+            assert claim["payload"] == {"safe": True}
+            row = await queue.get(poison)
+            assert row is not None and row["status"] == "dead"
+            assert "corrupt payload: not an object" in row["error"]
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+def test_sqlite_statement_failure_rolls_back_transaction_before_connection_reuse(tmp_path):
+    async def run():
+        import sqlite3
+
+        queue = JobQueue(tmp_path / "rollback-reuse.db")
+        try:
+            queue._db.execute("""
+                CREATE TRIGGER reject_synthetic_job
+                BEFORE INSERT ON jobs
+                WHEN NEW.kind='explode'
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic insert failure');
+                END;
+            """)
+            with pytest.raises(sqlite3.IntegrityError, match="synthetic insert failure"):
+                await queue.enqueue("explode", {})
+            assert queue._db.in_transaction is False
+            assert await queue.stats() == {}
+
+            queue._db.execute("DROP TRIGGER reject_synthetic_job")
+            jid = await queue.enqueue("normal", {"after_rollback": True})
+            claim = await queue.claim()
+            assert claim is not None and claim["id"] == jid
+            assert claim["payload"] == {"after_rollback": True}
+            assert await queue.complete(jid, {"ok": True}, claim["token"]) is True
+        finally:
+            await queue.close()
+
+    asyncio.run(run())
+
+
+def test_retry_backoff_grows_exponentially_and_caps_at_sixty_seconds(tmp_path):
+    async def run():
+        queue = JobQueue(tmp_path / "retry-backoff.db")
+        try:
+            jid = await queue.enqueue("backoff", {}, max_attempts=8)
+            for attempt in range(1, 8):
+                claim = await queue.claim()
+                assert claim is not None and claim["id"] == jid
+                assert claim["attempts"] == attempt
+                before = time.time()
+                assert await queue.fail(jid, f"attempt {attempt}", claim["token"]) == "requeued"
+                lease_until = queue._db.execute(
+                    "SELECT lease_until FROM jobs WHERE id=?", (jid,)
+                ).fetchone()[0]
+                expected = min(2 ** attempt, 60)
+                delay = lease_until - before
+                assert expected - 0.2 <= delay <= expected + 0.5
+                queue._db.execute("UPDATE jobs SET lease_until=0 WHERE id=?", (jid,))
+
+            final_claim = await queue.claim()
+            assert final_claim is not None and final_claim["attempts"] == 8
+            assert await queue.fail(jid, "attempt limit reached", final_claim["token"]) == "dead"
+            final = await queue.get(jid)
+            assert final is not None and final["status"] == "dead"
+            assert final["attempts"] == 8
+        finally:
+            await queue.close()
+
+    asyncio.run(run())

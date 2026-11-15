@@ -52,6 +52,28 @@ def _boot_time() -> float | None:
     return None
 
 
+def _uptime() -> float | None:
+    """Seconds since boot from /proc/uptime. Round 83: ages were time.time() - (btime + ticks), so a
+    wall clock stepped back (NTP correction, a VM resumed from a snapshot, a manual date) showed
+    negative ages and hid every long-running child; uptime is the clock the start ticks count on."""
+    try:
+        first = (PROC / "uptime").read_text()[:64].split()[0]
+        v = float(first)
+    except (OSError, ValueError, IndexError):
+        return None
+    return v if v == v and 0.0 <= v < 1e10 else None
+
+
+def _age(r: dict[str, Any], now: float) -> float | None:
+    a = r.get("age")
+    if isinstance(a, (int, float)) and not isinstance(a, bool) and a == a:
+        return max(0.0, float(a))
+    s = r.get("started")
+    if isinstance(s, (int, float)) and not isinstance(s, bool) and s == s:
+        return max(0.0, now - float(s))
+    return None
+
+
 from .textsafe import escape as _escape  # noqa: E402
 import re  # noqa: E402
 
@@ -87,7 +109,7 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
         tck, page_kb = 100, 4
     tck = tck if isinstance(tck, int) and tck > 0 else 100
     page_kb = page_kb if isinstance(page_kb, int) and page_kb > 0 else 4
-    btime = _boot_time()
+    btime, up = _boot_time(), _uptime()
     for pid in pids:
         try:
             stat = (PROC / str(pid) / "stat").read_text()
@@ -102,7 +124,8 @@ def _children(root_pid: int) -> dict[int, dict[str, Any]]:
             continue  # raced with exit, or not ours to read
         cmd = raw.replace(b"\x00", b" ").decode(errors="replace").strip() or stat[stat.index("(") + 1:rparen]
         started = btime + start_ticks / tck if btime is not None else None
-        info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started,
+        age = max(0.0, up - start_ticks / tck) if up is not None else None
+        info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started, "age": age,
                      "rss_kb": max(0, rss_pages) * page_kb,
                      # round 65: redact the FULL argv before the cut, so a cut never shows half a secret
                      "cmd": _escape(_redact_cmd(cmd)[:CMD_MAX])}  # round 146: argv/comm are the process's own choice
@@ -122,15 +145,17 @@ async def t_proc_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "proc_status: /proc is not available on this host (Linux only)"
     kids = _children(os.getpid())
     now, long_s = time.time(), _long_s()
-    rows = sorted(kids.values(), key=lambda i: i["started"] or 0)
-    long_ = [r for r in rows if r["started"] is not None and now - r["started"] >= long_s]
+    # oldest first, by age (round 83: clock steps no longer reorder or hide children)
+    rows = sorted(kids.values(), key=lambda i: -(_age(i, now) or 0.0))
+    long_ = [r for r in rows if (_age(r, now) or 0.0) >= long_s and _age(r, now) is not None]
     zombies = [r for r in rows if r["state"] == "Z"]
     from .argnum import tool_bool  # round 65: "true" (a string, as many models send it) was ignored
     show = rows if tool_bool(args.get("all"), False) is True else (long_ + [z for z in zombies if z not in long_] or rows)
     lines = [f"proc_status: {len(rows)} child process(es) of pid {os.getpid()}; "
              f"{len(long_)} running >= {long_s:.0f}s, {len(zombies)} zombie(s)"]
     for r in show[:MAX_PROCS]:
-        age = f"{now - r['started']:.0f}s" if r["started"] is not None else "?"
+        a = _age(r, now)
+        age = f"{a:.0f}s" if a is not None else "?"
         lines.append(f"- {r['pid']} [{r['state']}] age {age} rss {r['rss_kb']}KB: {r['cmd']}")
     if len(show) > MAX_PROCS:
         lines.append(f"... {len(show) - MAX_PROCS} more")

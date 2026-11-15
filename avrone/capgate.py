@@ -53,8 +53,31 @@ class CapDenied(PermissionError):
 
 
 def mode() -> str:
-    m = (os.environ.get("AVRONE_CAPGATE") or "off").strip().lower()
-    return m if m in MODES else "off"
+    raw = os.environ.get("AVRONE_CAPGATE") or ""
+    # round 83: AVRONE_CAPGATE="enforce" from a compose .env kept its quotes and read as "off" -
+    # the gate was silently open while the operator believed it enforced
+    from .config import clean_secret
+    m = clean_secret(raw).lower() or "off"
+    if m in MODES:
+        return m
+    _warn_mode(raw)
+    return "off"
+
+
+_WARNED: set[str] = set()
+
+
+def _warn_mode(raw: str) -> None:
+    """An unknown mode stays off (pinned by test_capgate), but it must not be silent: a typo such
+    as "enfroce" meant an operator believed the gate was enforcing."""
+    from .textsafe import escape
+    key = raw[:40]
+    if key in _WARNED or len(_WARNED) > 32:
+        return
+    _WARNED.add(key)
+    import sys
+    print(f"AVRONE: unknown AVRONE_CAPGATE value '{escape(key)}'; capability gate is OFF "
+          f"(use off, audit or enforce)", file=sys.stderr)
 
 
 def _key() -> bytes:
@@ -93,7 +116,11 @@ def _clean_rights(rights: Any) -> list[str]:
 
 
 def policy() -> dict[str, list[str]]:
-    raw = os.environ.get("AVRONE_CAPGATE_POLICY", "")
+    raw = (os.environ.get("AVRONE_CAPGATE_POLICY") or "").strip()
+    # round 83: a quoted object ('{"*":["echo"]}' or "{...}" kept by compose) failed to parse and
+    # granted nothing; the outer quotes are removed only around something that looks like JSON
+    if len(raw) >= 4 and raw[0] == raw[-1] and raw[0] in "'\"" and raw[1:-1].strip()[:1] in "{[":
+        raw = raw[1:-1].strip()
     try:
         obj = _jloads(raw) if raw.strip() else {"*": ["*"]}
     except (json.JSONDecodeError, RecursionError):

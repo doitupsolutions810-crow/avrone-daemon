@@ -1151,3 +1151,11 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **`AVRONE_CAPGATE_TTL`** is now ASCII-only and unquoted. Fullwidth digits used to parse, and a quoted `"600"` silently became 3600.
 - **Not changed, on purpose:** admin tokens stay exact and untrimmed. `test_previous_token_is_exact_and_untrimmed` pins that design.
 - Tests: `tests/test_secret_readers_r82_robust.py` (52).
+
+## Hardening round 83: capgate env and process ages (`capgate.py`, `capgate_head_attest.py`, `tools_hostview.py`)
+
+- **A quoted `AVRONE_CAPGATE` turned the gate off.** `AVRONE_CAPGATE="enforce"` from a compose `.env` keeps its quotes, so it read as `"enforce"` and fell back to OFF. The capability gate was open while the operator believed it was enforcing. The value is now cleaned like the other secrets (`config.clean_secret`). An unknown word still means off, as `test_capgate` pins, but it now prints a one-line, escaped warning per distinct value, capped at 32 values.
+- **A quoted `AVRONE_CAPGATE_POLICY`** (`'{"*":["echo"]}'`) failed to parse and granted nothing. Outer quotes are now removed, but only around JSON-looking text. Bad policies still fail closed, and a blank policy is still the default.
+- **`AVRONE_CAPGATE_ATTEST='"on"'`** read as off; it is cleaned now, with the same word set, so "enable" stays off. **`AVRONE_ATTESTED_HISTORY_LOG`** with quotes made a path containing the quote characters; it is now unquoted and `~` is expanded.
+- **proc_status ages came from the wall clock.** Ages were `time.time() - (btime + ticks)`, so a clock stepped back (an NTP step, a VM snapshot resume) showed negative ages and hid every long-running child. Ages now come from `/proc/uptime` minus start ticks, clamped at 0. When uptime is missing they fall back to the wall clock, clamped. Rows are sorted oldest first by age.
+- Tests: `tests/test_capgate_env_procage_r83_robust.py` (63).

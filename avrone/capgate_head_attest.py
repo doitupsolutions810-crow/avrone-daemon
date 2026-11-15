@@ -50,13 +50,14 @@ NL = chr(10)
 
 
 def enabled() -> bool:
-    v = (os.environ.get("AVRONE_CAPGATE_ATTEST") or "").strip().lower()
-    return v in ("on", "1", "true", "yes")
+    from .config import clean_secret  # round 83: '"on"' from a compose .env read as off
+    return clean_secret(os.environ.get("AVRONE_CAPGATE_ATTEST")).lower() in ("on", "1", "true", "yes")
 
 
 def history_path(data_dir: str | Path) -> Path:
-    env = (os.environ.get("AVRONE_ATTESTED_HISTORY_LOG") or "").strip()
-    return Path(env) if env else Path(data_dir) / "attested" / "history.jsonl"
+    from .config import clean_secret  # round 83: '"/x/h.jsonl"' made a directory named with quotes
+    env = clean_secret(os.environ.get("AVRONE_ATTESTED_HISTORY_LOG"))
+    return Path(env).expanduser() if env else Path(data_dir) / "attested" / "history.jsonl"
 
 
 def _canon(obj: Any) -> bytes:

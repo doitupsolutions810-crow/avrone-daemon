@@ -1112,3 +1112,10 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **`.env` split on more than newlines.** `splitlines()` also broke at U+2028, `\x0c`, `\x1c`–`\x1e`, `\x85` and `\x0b`, so `A=a<U+2028>B=evil` set B. Lines now end at `\n` only, and CRLF is still handled.
 - **A blank `AVRONE_ENV_FILE=` loaded no .env at all.** The new `config.env_file()` treats blank as `.env`, unquotes the value and expands `~`.
 - Tests: `tests/test_config_r78_robust.py` (84).
+
+## Hardening round 79: bounded numeric settings and retry delays (`config.py`, `gateway.py`, `llm.py`)
+
+- **No numeric setting had bounds.** `AVRONE_MAX_STEPS=0` gave every agent zero turns, so each run ended as out_of_turns. `AVRONE_LLM_TIMEOUT=0` or `-1` failed every model call immediately. The new `config.SETTING_BOUNDS` gives each numeric field a floor, a ceiling and the value to use below the floor, and `Settings.__post_init__` applies them through `bound_settings`. Below the floor, timeouts go back to their defaults (llm 180 s, command 120 s, thermal 85 °C), counts go up to 1, and delays go to 0. NaN and non-numbers take the same fallback. Values above the ceiling are capped. Defaults are unchanged.
+- **A retry could sleep effectively forever.** `AVRONE_LLM_BACKOFF=1e300` made `asyncio.sleep(base * 2**attempt)` never return. The new `gateway._bounded_delay` keeps the delay in [0, 60] s, and NaN and negative values give 0. Both `gateway._delay` and `llm._retry_delay` use it. In `llm._retry_delay`, a negative or NaN Retry-After header is now ignored.
+- **A breaker could stay open forever.** With a NaN cooldown, `now >= open_until` is never true, and 1e300 or inf had the same effect. `Gateway.__init__` now bounds the threshold and cooldown itself (default 3 and 30 s), so a settings object that isn't a Settings is covered too.
+- Tests: `tests/test_settings_bounds_r79_robust.py` (58).

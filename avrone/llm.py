@@ -88,13 +88,16 @@ class LLM:
 
 
 def _retry_delay(r: httpx.Response | None, base: float, attempt: int) -> float:
-    delay = base * (2 ** attempt)
+    from .gateway import _bounded_delay
+    delay = _bounded_delay(base, attempt)  # round 79: base 1e300 slept forever
     if r is not None:
         ra = r.headers.get("retry-after", "")
         try:
-            delay = max(delay, min(float(ra), 30.0))
-        except ValueError:
-            pass
+            f = float(ra)
+        except (TypeError, ValueError):
+            f = None
+        if f is not None and f == f and f > 0:  # round 79: "-5"/"nan" were taken as-is
+            delay = max(delay, min(f, 30.0))
     return delay
 
 

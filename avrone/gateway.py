@@ -131,8 +131,11 @@ class Gateway:
     def __init__(self, settings: Any):
         self.s = settings
         self.upstreams = parse_upstreams(settings)
-        self.threshold = int(getattr(settings, "breaker_threshold", 3))
-        self.cooldown = float(getattr(settings, "breaker_cooldown", 30))
+        # round 79: a NaN cooldown kept a breaker open for good (now >= NaN is never true), and
+        # 1e300 or inf did the same; a settings object that is not a Settings is bounded here too
+        from .config import bound_setting
+        self.threshold = bound_setting("breaker_threshold", getattr(settings, "breaker_threshold", 3), 3)
+        self.cooldown = bound_setting("breaker_cooldown", getattr(settings, "breaker_cooldown", 30), 30)
         self.last_route: list[str] = []
 
     def status(self) -> dict[str, Any]:
@@ -672,8 +675,23 @@ def retry_after_seconds(value: Any, now: float | None = None) -> float | None:
     return max(0.0, secs)
 
 
+MAX_RETRY_DELAY_S = 60.0
+
+
+def _bounded_delay(base: Any, attempt: int) -> float:
+    """base * 2**attempt within [0, MAX_RETRY_DELAY_S]. Round 79: AVRONE_LLM_BACKOFF=1e300 (or a
+    long run of attempts) made one retry sleep effectively forever; NaN and negatives are 0."""
+    try:
+        d = float(base) * (2 ** max(0, min(int(attempt), 64)))
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if d != d or d <= 0:
+        return 0.0
+    return min(d, MAX_RETRY_DELAY_S)
+
+
 def _delay(r: httpx.Response | None, base: float, attempt: int) -> float:
-    delay = base * (2 ** attempt)
+    delay = _bounded_delay(base, attempt)
     if r is not None:
         ra = retry_after_seconds(r.headers.get("retry-after"))
         if ra is not None:

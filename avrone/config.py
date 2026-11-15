@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 def _unquote(value: str) -> str:
@@ -280,6 +281,56 @@ class Settings:
     def __post_init__(self) -> None:
         self.provider, self.llm_base_url, self.llm_model, self.llm_api_key = resolve_provider(
             self.provider, self.llm_base_url, self.llm_model, self.llm_api_key)
+        bound_settings(self)
+
+
+# round 78/79: field -> (lowest allowed, highest allowed, value used below the lowest).
+# Before round 79 nothing bounded these: AVRONE_MAX_STEPS=0 gave every agent zero turns,
+# AVRONE_LLM_TIMEOUT=0 or -1 failed every model call at once, AVRONE_LLM_BACKOFF=1e300 made the
+# first retry sleep forever, AVRONE_BREAKER_COOLDOWN=1e300 opened a breaker for good.
+SETTING_BOUNDS: dict[str, tuple[float, float, float]] = {
+    "llm_timeout": (1, 3600, 180),
+    "llm_retries": (1, 20, 1),
+    "llm_backoff": (0, 60, 0),
+    "breaker_threshold": (1, 1000, 1),
+    "breaker_cooldown": (0, 3600, 0),
+    "squad_size": (1, 64, 1),  # trinity still runs at most 8
+    "deep_squad_size": (0, 64, 0),
+    "max_parallel": (1, 4096, 1),
+    "max_steps": (1, 1000, 1),
+    "max_spawn_depth": (0, 16, 0),
+    "agent_timeout": (0, 86400, 0),
+    "min_parallel": (1, 4096, 1),
+    "thermal_max_c": (1, 150, 85),
+    "command_timeout": (1, 86400, 120),
+}
+
+
+def bound_setting(name: str, value: Any, default: Any = None) -> Any:
+    """``value`` inside SETTING_BOUNDS[name]; a non-number, NaN or bool becomes the low fallback
+    (or ``default`` when given), a value below the floor the fallback, above the ceiling the
+    ceiling. Float fields come back as float, the rest as int."""
+    lo, hi, below = SETTING_BOUNDS[name]
+    fallback = below if default is None else default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        out = fallback
+    elif value < lo:
+        out = fallback
+    elif value > hi:
+        out = hi
+    else:
+        out = value
+    return float(out) if name in _FLOAT_FIELDS else int(out)
+
+
+_FLOAT_FIELDS = frozenset({"llm_timeout", "llm_backoff", "breaker_cooldown", "agent_timeout",
+                           "thermal_max_c"})
+
+
+def bound_settings(s: Any) -> None:
+    for name in SETTING_BOUNDS:
+        if hasattr(s, name):
+            setattr(s, name, bound_setting(name, getattr(s, name)))
 
 
 settings = Settings()

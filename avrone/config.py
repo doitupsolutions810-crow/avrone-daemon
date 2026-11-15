@@ -25,6 +25,10 @@ def parse_dotenv_line(line: str) -> tuple[str, str] | None:
     line = line.lstrip("\ufeff").strip()
     if not line or line.startswith("#") or "=" not in line:
         return None
+    if "\x00" in line:
+        # round 78: os.environ refuses a NUL ("embedded null byte"), and the ValueError was raised
+        # at import time by _load_dotenv - one bad .env line kept the whole server from starting
+        return None
     key, _, value = line.partition("=")
     key = key.strip()
     if key.startswith("export "):
@@ -57,13 +61,24 @@ def _load_dotenv(path: Path) -> None:
         text = raw.decode("utf-8", errors="replace")
     except OSError:
         return
-    for line in text.splitlines():
-        kv = parse_dotenv_line(line)
+    # round 78: splitlines() also broke at U+2028, \x0c, \x1c-\x1e, \x85 ..., so a value holding
+    # one was cut and its tail parsed as a line of its own; lines end at \n only (CRLF handled)
+    for line in text.split("\n"):
+        kv = parse_dotenv_line(line.rstrip("\r"))
         if kv:
             os.environ.setdefault(*kv)
 
 
-_load_dotenv(Path(os.getenv("AVRONE_ENV_FILE", ".env")))
+def env_file() -> Path:
+    """AVRONE_ENV_FILE, or .env. Round 78: a blank value was Path("") (the cwd itself, never a
+    file), so AVRONE_ENV_FILE= silently loaded no .env at all."""
+    raw = os.getenv("AVRONE_ENV_FILE")
+    if raw is None or not raw.strip():
+        raw = ".env"
+    return Path(_unquote(raw)).expanduser()
+
+
+_load_dotenv(env_file())
 
 
 # ------------------------------------------------------------ provider presets
@@ -146,10 +161,13 @@ def _num(raw: str | None, default: float, cast: type) -> float:
     if not v:
         return default
     try:
+        if not v.isascii():  # round 78: float() took "\uff12" and Arabic-Indic digits
+            raise ValueError
         f = float(v)
     except ValueError:
         import sys
-        print(f"AVRONE: ignoring bad number {raw!r}; using {default}", file=sys.stderr)
+        shown = repr(raw[:40] + ("..." if len(raw) > 40 else "")) if isinstance(raw, str) else repr(raw)
+        print(f"AVRONE: ignoring bad number {shown}; using {default}", file=sys.stderr)
         return default
     if f != f or f in (float("inf"), float("-inf")):
         return default
@@ -166,8 +184,32 @@ def _float(name: str, default: float):
     return lambda: float(_num(os.getenv(name), default, float))
 
 
-def _bool(name: str, default: bool):
-    return lambda: os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
+TRUE_WORDS = frozenset({"1", "true", "yes", "on", "y", "enable", "enabled"})
+FALSE_WORDS = frozenset({"0", "false", "no", "off", "n", "disable", "disabled", "none"})
+
+
+def parse_bool(raw: str | None, default: bool, blank: bool | None = None) -> bool:
+    """An on/off env value. Round 78: "TRUE " (trailing space), " 1", '"true"' were False, and a
+    blank value (AVRONE_GOVERNOR=) turned a default-on setting off. Values are trimmed, unquoted
+    and case-folded; blank means the default; an unknown word stays False (as before) but is
+    reported, since an on/off switch must never be on by accident. ``blank`` overrides what a
+    blank value means: permission switches (network, shell) pass blank=False, so an empty line
+    keeps them off exactly as before round 78."""
+    if raw is None:
+        return default
+    v = _unquote(raw).strip().lower()
+    if not v:
+        return default if blank is None else blank
+    if v in TRUE_WORDS:
+        return True
+    if v not in FALSE_WORDS:
+        import sys
+        print(f"AVRONE: unknown on/off value {raw[:40]!r}; treating it as off", file=sys.stderr)
+    return False
+
+
+def _bool(name: str, default: bool, blank: bool | None = None):
+    return lambda: parse_bool(os.getenv(name), default, blank)
 
 
 def _path(name: str, default: str):
@@ -223,14 +265,14 @@ class Settings:
     workspace: Path = field(default_factory=_path("AVRONE_WORKSPACE", "./workspace"))
     runner: str = field(default_factory=_env("AVRONE_RUNNER", "auto"))  # auto | docker | local
     docker_image: str = field(default_factory=_env("AVRONE_DOCKER_IMAGE", "python:3.12-slim"))
-    allow_network: bool = field(default_factory=_bool("AVRONE_ALLOW_NETWORK", True))
+    allow_network: bool = field(default_factory=_bool("AVRONE_ALLOW_NETWORK", True, blank=False))
     command_timeout: int = field(default_factory=_int("AVRONE_COMMAND_TIMEOUT", 120))
 
     # --- Access control ---
     admin_token: str = field(default_factory=_env("AVRONE_ADMIN_TOKEN"))
     # Rotation grace for /api/blackboard only. Kept verbatim: os.getenv does not strip.
     admin_token_previous: str = field(default_factory=_env("AVRONE_ADMIN_TOKEN_PREVIOUS"))
-    agents_can_shell: bool = field(default_factory=_bool("AVRONE_AGENTS_CAN_SHELL", True))
+    agents_can_shell: bool = field(default_factory=_bool("AVRONE_AGENTS_CAN_SHELL", True, blank=False))
 
     # --- Eternal CodeX (persistent logs and memory) ---
     data_dir: Path = field(default_factory=_path("AVRONE_DATA_DIR", "./data"))

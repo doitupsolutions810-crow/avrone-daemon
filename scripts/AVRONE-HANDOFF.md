@@ -1102,3 +1102,13 @@ Round 76 fixed a blank data_dir in the bridge. This round follows the same bug b
 - **`capgate.data_dir_of` accepted whitespace.** It now returns None.
 - **Other blank-path readers.** `fusion_blackboard._data_dir`, `fusion_peer._data_dir` and `tools_secrets._roots` (data/runs and workspace) go through `bridge.usable_data_dir`, so blank or non-path values mean none. A blank runner workspace falls back to the settings workspace.
 - Tests: `tests/test_blankdirs_r77_robust.py` (74).
+
+## Hardening round 78: environment parsing (`config.py`)
+
+- **On/off values were read too literally.** `"TRUE "` (trailing space), `" 1"`, `'"true"'` and `'on'` with quotes were all False. A blank `AVRONE_GOVERNOR=` turned the default-on governor off. The new `config.parse_bool` trims, unquotes and lowercases the value, and also accepts y/enable/enabled and n/disable/disabled/none. Blank means the default. An unknown word stays off, as before, and is now reported on stderr (capped at 40 characters).
+- **Permission switches still fail closed.** A blank `AVRONE_ALLOW_NETWORK=` or `AVRONE_AGENTS_CAN_SHELL=` stays off (`blank=False`), exactly as before.
+- **Unicode digits were accepted as numbers.** `float()` took fullwidth `２` and Arabic-Indic digits. Numbers must now be ASCII. The bad-number warning is capped at 40 characters.
+- **A NUL in `.env` blocked startup.** `os.environ` raises ValueError on a NUL byte, and that happened at import time. Lines containing NUL are now skipped.
+- **`.env` split on more than newlines.** `splitlines()` also broke at U+2028, `\x0c`, `\x1c`–`\x1e`, `\x85` and `\x0b`, so `A=a<U+2028>B=evil` set B. Lines now end at `\n` only, and CRLF is still handled.
+- **A blank `AVRONE_ENV_FILE=` loaded no .env at all.** The new `config.env_file()` treats blank as `.env`, unquotes the value and expands `~`.
+- Tests: `tests/test_config_r78_robust.py` (84).

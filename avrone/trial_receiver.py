@@ -607,7 +607,7 @@ class TrialStore:
         )
         def normalized(statement: str) -> str:
             return re.sub(
-                r"\\s*([(),])\\s*", r"\\1",
+                r"\s*([(),])\s*", r"\1",
                 " ".join(statement.split()).upper(),
             )
         if not isinstance(actual, str) or normalized(actual) != normalized(expected):
@@ -657,9 +657,9 @@ class TrialStore:
             raise TrialStoreError(
                 "legacy database unexpectedly contains event sequence high-water rows"
             )
-        for table, key, dependent_table, dependent_column in (
-            ("trial_receipts", "receipt_id", "trials", "trial_id"),
-            ("trial_quarantine", "quarantine_id", "trial_quarantined_senders", "sender"),
+        for table, key, dependent_table in (
+            ("trial_receipts", "receipt_id", "trials"),
+            ("trial_quarantine", "quarantine_id", "trial_quarantined_senders"),
         ):
             largest = db.execute(
                 f"SELECT MAX({key}) FROM {table}"

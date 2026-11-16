@@ -22,7 +22,7 @@ MAX_TRIAL_RECORDS = 100_000
 MAX_RECEIPTS = 100_000
 MAX_QUARANTINE_RECORDS = 1_000
 MAX_QUARANTINED_SENDERS = 1_000
-DB_SCHEMA_VERSION = 2  # v0 is unversioned; v1 adds per-delivery bridge provenance
+DB_SCHEMA_VERSION = 3  # v3 persists event-sequence high-water marks across retention pruning
 WAL_MODE_RETRY_SECONDS = 10.0
 WAL_MODE_RETRY_INITIAL_SECONDS = 0.01
 WAL_MODE_RETRY_MAX_SECONDS = 0.25
@@ -100,6 +100,55 @@ EXPECTED_EVENT_SEQUENCE_TABLE_SQL = {
             incoming_json BLOB NOT NULL,
             received_at REAL NOT NULL
         )
+    """,
+}
+
+EVENT_SEQUENCE_STATE_TABLE_SQL = """
+    CREATE TABLE IF NOT EXISTS trial_event_sequence_state (
+        event_table TEXT PRIMARY KEY
+            CHECK (event_table IN ('trial_receipts', 'trial_quarantine')),
+        high_water INTEGER NOT NULL
+            CHECK (typeof(high_water) = 'integer' AND high_water >= 0)
+    )
+"""
+EVENT_SEQUENCE_TRIGGER_SQL = {
+    "trial_receipts_sequence_high_water": """
+        CREATE TRIGGER IF NOT EXISTS trial_receipts_sequence_high_water
+        AFTER INSERT ON trial_receipts
+        BEGIN
+            SELECT CASE
+                WHEN (
+                    SELECT COUNT(*) FROM trial_event_sequence_state
+                    WHERE event_table='trial_receipts'
+                ) != 1
+                THEN RAISE(ABORT, 'missing receipt sequence high-water state')
+            END;
+            UPDATE trial_event_sequence_state
+            SET high_water = CASE
+                WHEN NEW.receipt_id > high_water THEN NEW.receipt_id
+                ELSE high_water
+            END
+            WHERE event_table='trial_receipts';
+        END
+    """,
+    "trial_quarantine_sequence_high_water": """
+        CREATE TRIGGER IF NOT EXISTS trial_quarantine_sequence_high_water
+        AFTER INSERT ON trial_quarantine
+        BEGIN
+            SELECT CASE
+                WHEN (
+                    SELECT COUNT(*) FROM trial_event_sequence_state
+                    WHERE event_table='trial_quarantine'
+                ) != 1
+                THEN RAISE(ABORT, 'missing quarantine sequence high-water state')
+            END;
+            UPDATE trial_event_sequence_state
+            SET high_water = CASE
+                WHEN NEW.quarantine_id > high_water THEN NEW.quarantine_id
+                ELSE high_water
+            END
+            WHERE event_table='trial_quarantine';
+        END
     """,
 }
 
@@ -454,6 +503,7 @@ class TrialStore:
             ("trial_receipts", "receipt_id", "INTEGER"),
             ("trial_quarantine", "quarantine_id", "INTEGER"),
             ("trial_quarantined_senders", "sender", "TEXT"),
+            ("trial_event_sequence_state", "event_table", "TEXT"),
         ):
             columns = list(db.execute(f"PRAGMA table_info({table})"))
             primary_keys = [row for row in columns if row["pk"]]
@@ -542,6 +592,184 @@ class TrialStore:
                 raise TrialStoreError(
                     "trial event sequence state integrity check failed: " + table
                 )
+
+
+    @staticmethod
+    def _assert_event_sequence_state_schema(db: sqlite3.Connection) -> None:
+        """Attest the persistent high-water table's exact constraints and key."""
+        row = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='trial_event_sequence_state'"
+        ).fetchone()
+        actual = None if row is None else row["sql"]
+        expected = EVENT_SEQUENCE_STATE_TABLE_SQL.replace(
+            "CREATE TABLE IF NOT EXISTS", "CREATE TABLE", 1,
+        )
+        def normalized(statement: str) -> str:
+            return re.sub(
+                r"\s*([(),])\s*", r"\1",
+                " ".join(statement.split()).upper(),
+            )
+        if not isinstance(actual, str) or normalized(actual) != normalized(expected):
+            raise TrialStoreError("trial event sequence state schema integrity check failed")
+
+    @staticmethod
+    def _assert_event_sequence_triggers(db: sqlite3.Connection) -> None:
+        """Reject missing or replaced triggers that maintain sequence high-water state."""
+        for name, expected_sql in EVENT_SEQUENCE_TRIGGER_SQL.items():
+            row = db.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+                (name,),
+            ).fetchone()
+            actual = None if row is None else row["sql"]
+            expected = expected_sql.replace(
+                "CREATE TRIGGER IF NOT EXISTS", "CREATE TRIGGER", 1,
+            )
+            if (
+                not isinstance(actual, str)
+                or " ".join(actual.split()) != " ".join(expected.split())
+            ):
+                raise TrialStoreError(
+                    "trial event sequence trigger integrity check failed: " + name
+                )
+
+    @staticmethod
+    def _initialize_event_sequence_state(db: sqlite3.Connection) -> None:
+        """Seed v3 high-water state from trusted v2 AUTOINCREMENT counters.
+
+        Retained rows may all have been pruned; sqlite_sequence is therefore
+        the migration source of truth when it still exists. If dependent
+        trial/quarantine state proves the table was used but its counter is
+        absent, migration refuses to invent a new chronology.
+        """
+        existing = db.execute(
+            "SELECT COUNT(*) FROM trial_event_sequence_state"
+        ).fetchone()[0]
+        if existing:
+            raise TrialStoreError(
+                "legacy database unexpectedly contains event sequence high-water rows"
+            )
+        for table, key, dependent_table in (
+            ("trial_receipts", "receipt_id", "trials"),
+            ("trial_quarantine", "quarantine_id", "trial_quarantined_senders"),
+        ):
+            largest = db.execute(
+                f"SELECT MAX({key}) FROM {table}"
+            ).fetchone()[0]
+            sequences = list(db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name=? LIMIT 2",
+                (table,),
+            ))
+            if len(sequences) > 1:
+                raise TrialStoreError(
+                    "legacy event sequence state contains duplicate sqlite_sequence rows"
+                )
+            if not sequences:
+                dependent_count = db.execute(
+                    f"SELECT COUNT(*) FROM {dependent_table}"
+                ).fetchone()[0]
+                if largest is not None or dependent_count:
+                    raise TrialStoreError(
+                        "legacy event sequence history is missing for " + table
+                    )
+                high_water = 0
+            else:
+                value = sequences[0]["seq"]
+                if (
+                    type(value) is not int
+                    or value < 1
+                    or (largest is not None and value < largest)
+                ):
+                    raise TrialStoreError(
+                        "legacy event sequence state is invalid for " + table
+                    )
+                high_water = value
+            db.execute(
+                "INSERT INTO trial_event_sequence_state(event_table,high_water) VALUES(?,?)",
+                (table, high_water),
+            )
+
+    @staticmethod
+    def _assert_event_sequence_high_water(db: sqlite3.Connection) -> None:
+        """Compare retained rows, SQLite counters and durable high-water state.
+
+        This detects isolated deletion/rewind of sqlite_sequence even after
+        every event row has left the bounded retention window. It is not an
+        off-host cryptographic anchor against a privileged actor rewriting
+        both local counters coherently.
+        """
+        expected = {
+            "trial_receipts": "receipt_id",
+            "trial_quarantine": "quarantine_id",
+        }
+        rows = list(db.execute(
+            "SELECT event_table,high_water FROM trial_event_sequence_state "
+            "ORDER BY event_table"
+        ))
+        if len(rows) != len(expected) or {
+            row["event_table"] for row in rows
+        } != set(expected):
+            raise TrialStoreError(
+                "trial event sequence high-water state integrity check failed"
+            )
+        for row in rows:
+            table = row["event_table"]
+            key = expected[table]
+            high_water = row["high_water"]
+            if type(high_water) is not int or high_water < 0:
+                raise TrialStoreError(
+                    "trial event sequence high-water value is invalid"
+                )
+            largest = db.execute(
+                f"SELECT MAX({key}) FROM {table}"
+            ).fetchone()[0]
+            if largest is not None and (
+                type(largest) is not int or largest > high_water
+            ):
+                raise TrialStoreError(
+                    "trial event sequence high-water is below a retained event"
+                )
+            sequences = list(db.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name=? LIMIT 2",
+                (table,),
+            ))
+            if len(sequences) > 1:
+                raise TrialStoreError(
+                    "trial event sequence high-water has duplicate SQLite counters"
+                )
+            if sequences:
+                sequence = sequences[0]["seq"]
+                if (
+                    type(sequence) is not int
+                    or sequence < 1
+                    or sequence != high_water
+                ):
+                    raise TrialStoreError(
+                        "trial event sequence high-water disagrees with sqlite_sequence"
+                    )
+            elif high_water != 0 or largest is not None:
+                raise TrialStoreError(
+                    "trial event sequence high-water is missing its SQLite counter"
+                )
+            if table == "trial_receipts" and high_water == 0:
+                if db.execute("SELECT 1 FROM trials LIMIT 1").fetchone():
+                    raise TrialStoreError(
+                        "trial event sequence high-water omits first-seen receipts"
+                    )
+            if table == "trial_quarantine" and high_water == 0:
+                if db.execute(
+                    "SELECT 1 FROM trial_quarantined_senders LIMIT 1"
+                ).fetchone():
+                    raise TrialStoreError(
+                        "trial event sequence high-water omits quarantine events"
+                    )
+
+    def _assert_event_sequence_integrity(self, db: sqlite3.Connection) -> None:
+        """Verify event table DDL, high-water state and its maintaining triggers."""
+        self._assert_event_sequence_schema(db)
+        self._assert_event_sequence_state_schema(db)
+        self._assert_event_sequence_triggers(db)
+        self._assert_event_sequence_high_water(db)
 
     def _make_database_private_before_wal(self) -> None:
         """Set 0600 on the pinned database inode, never on an unchecked path.
@@ -669,6 +897,7 @@ class TrialStore:
                     quarantined_at REAL NOT NULL
                 )
                 """,
+                EVENT_SEQUENCE_STATE_TABLE_SQL,
             )
             for statement in statements:
                 db.execute(statement)
@@ -690,6 +919,7 @@ class TrialStore:
                 "trial_quarantined_senders": {
                     "sender", "first_trial_id", "reason", "quarantined_at",
                 },
+                "trial_event_sequence_state": {"event_table", "high_water"},
             }
             for table, required in required_columns.items():
                 present = {
@@ -769,6 +999,11 @@ class TrialStore:
             db.execute(SOURCE_IDENTITY_INSERT_TRIGGER_SQL)
             db.execute(SOURCE_IDENTITY_UPDATE_TRIGGER_SQL)
             self._assert_source_identity_triggers(db)
+            if version < DB_SCHEMA_VERSION:
+                self._initialize_event_sequence_state(db)
+                for trigger_sql in EVENT_SEQUENCE_TRIGGER_SQL.values():
+                    db.execute(trigger_sql)
+            self._assert_event_sequence_integrity(db)
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trial_receipts_trial_id ON trial_receipts(trial_id)"
             )
@@ -1012,7 +1247,7 @@ class TrialStore:
             # Check while holding SQLite's writer lock, preventing a DDL swap
             # between the index proof and inserting first-seen evidence.
             self._assert_primary_key_schema(db)
-            self._assert_event_sequence_schema(db)
+            self._assert_event_sequence_integrity(db)
             self._assert_source_identity_unique_index(db)
             self._assert_source_identity_triggers(db)
             quarantined = self._assert_sender_quarantine_state(db, sender)
@@ -1120,6 +1355,7 @@ class TrialStore:
                 result=status, payload_sha256=digest, received_at=now,
                 bridge_run_id=bridge_run_id,
             )
+            self._assert_event_sequence_high_water(db)
             db.commit()
             return {"trial_id": trial_id, "outcome": envelope["outcome"], "status": status}
         except sqlite3.Error as exc:
@@ -1262,7 +1498,7 @@ class TrialStore:
         try:
             # Audit cross-table evidence using a read-only pinned snapshot.
             self._begin_readonly_audit(db)
-            self._assert_event_sequence_schema(db)
+            self._assert_event_sequence_integrity(db)
             rows = db.execute(
                 "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,"
                 "result,payload_sha256,received_at "
@@ -1332,6 +1568,7 @@ class TrialStore:
         db = self._connect()
         try:
             self._begin_readonly_audit(db)
+            self._assert_event_sequence_integrity(db)
             rows = self._verified_trial_rows(db)
             return pool_trials([
                 {"trial_id": row["trial_id"], "source": row["source"],
@@ -1347,6 +1584,7 @@ class TrialStore:
         db = self._connect()
         try:
             self._begin_readonly_audit(db)
+            self._assert_event_sequence_integrity(db)
             fields = (
                 "trial_id", "source", "system", "node", "run_id", "check_id",
                 "check_version", "check_config_sha256", "attempt_id", "outcome",
@@ -1486,7 +1724,7 @@ class TrialStore:
         try:
             # Pin a read-only snapshot of conflict, trial and sender state.
             self._begin_readonly_audit(db)
-            self._assert_event_sequence_schema(db)
+            self._assert_event_sequence_integrity(db)
             rows = db.execute(
                 f"SELECT {BOUNDED_QUARANTINE_COLUMNS} FROM trial_quarantine "
                 "ORDER BY quarantine_id LIMIT ?",

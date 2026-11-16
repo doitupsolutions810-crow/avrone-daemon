@@ -89,3 +89,25 @@ under the shared-secret trust domain; it does not prove an individual peer's pub
 independently attest the producer's claimed system/node. Statistical independence remains
 \`not_assessed\`. Filesystem path checks reject static symlink/hardlink cases, but descriptor-based
 protection against path replacement races remains a separate hardening item.
+
+
+## Receiver database schema version 3 — retained event sequence high-water
+
+Version 3 adds one durable high-water row for each AUTOINCREMENT event table
+(`trial_receipts` and `trial_quarantine`). AFTER INSERT triggers update the
+corresponding high-water value in the same SQLite transaction as the event.
+Retention pruning removes old receipt rows but never lowers this value.
+
+On every initialization, ingest, and evidence audit, the receiver verifies the
+state-table definition, trigger definitions, retained maximum IDs, and
+`sqlite_sequence` against the stored high-water values. A missing or rewound
+SQLite counter is therefore detected even when every event row has been pruned.
+A v2 migration seeds the high-water values from the existing AUTOINCREMENT
+counters; if dependent trial or sender-quarantine state proves a table was used
+but its counter is missing, migration fails closed instead of inventing a new
+sequence.
+
+This is a local consistency guard, not an off-host cryptographic anchor. A
+privileged actor able to coherently rewrite the state table, SQLite counters,
+and related evidence can still rewrite local history; signed external
+attestation and independently retained event logs remain separate controls.

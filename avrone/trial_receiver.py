@@ -612,14 +612,6 @@ class TrialStore:
             )
         if not isinstance(actual, str) or normalized(actual) != normalized(expected):
             raise TrialStoreError("trial event sequence state schema integrity check failed")
-        columns = list(db.execute("PRAGMA table_info(trial_event_sequence_state)"))
-        primary_keys = [item for item in columns if item["pk"]]
-        if (
-            len(primary_keys) != 1
-            or primary_keys[0]["name"] != "event_table"
-            or primary_keys[0]["type"].upper() != "TEXT"
-        ):
-            raise TrialStoreError("trial event sequence state primary key integrity check failed")
 
     @staticmethod
     def _assert_event_sequence_triggers(db: sqlite3.Connection) -> None:

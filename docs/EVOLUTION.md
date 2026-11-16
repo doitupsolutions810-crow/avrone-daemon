@@ -33,3 +33,17 @@ On main, recent CI runs are also queued or completed with failure (e.g. run 1710
 Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
 
 **Status: runs still queued.** Reporting status and stopping per instructions. Do not treat as code failure or no-runner provisioning fault (no runner ID zero or blank observed; still queued). Recommend pausing this automation once current queued runs complete if they succeed with real runners. No force-push. Do not delete branches.
+
+## CI Status Check 2026-11-16T17:10Z (head 534abdba)
+
+Most recent CI workflow runs on branch `descent/xcv-trust-gates` are **queued** (e.g. https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/43915286952 run 1728, SHA 534abdba3a76e2f38d87de28f1241f75d9e82ca0). Status: queued. No runner assigned yet.
+
+Previous completed CI on the branch (run 43525026217 / 1064, SHA ed33713f0c66ec9f317663267f1aac71298f203b) completed with **success** and real runners assigned.
+
+Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
+
+On main, recent CI and model-bench runs are also queued (e.g. 43802569696, 43761751223).
+
+Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
+
+**Status: runs still queued.** Reporting status and stopping per instructions. Do not treat as code failure or no-runner provisioning fault (still queued; no runner ID zero or blank observed). Recommend pausing this automation once current queued runs complete if they succeed with real runners. No force-push. Do not delete branches.

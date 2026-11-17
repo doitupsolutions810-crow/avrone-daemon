@@ -189,6 +189,8 @@ def max_message_chars() -> int:
 
 DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 HARD_MAX_BODY_BYTES = 512 * 1024 * 1024
+TRIAL_INGEST_MAX_BODY_BYTES = 256 * 1024
+TRIAL_INGEST_PATHS = frozenset({"/api/fleet/trials", "/api/fleet/bridge/trials"})
 # Fusion blackboard only. The process-wide cap below stays AVRONE_MAX_BODY_BYTES.
 FUSION_BLACKBOARD_MAX_BODY = 4096
 FUSION_BLACKBOARD_PATH = "/api/blackboard"
@@ -207,6 +209,11 @@ def max_body_bytes(path: str = "") -> int:
     base64 bundle at the agent-fs quota. ``/api/blackboard`` is capped at 4096 bytes instead."""
     if path == FUSION_BLACKBOARD_PATH:
         return FUSION_BLACKBOARD_MAX_BODY
+    marker = "/api/fleet/"
+    offset = path.find(marker)
+    canonical_path = path[offset:] if offset >= 0 else path
+    if canonical_path in TRIAL_INGEST_PATHS:
+        return TRIAL_INGEST_MAX_BODY_BYTES
     n = max(_env_cap("AVRONE_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES, HARD_MAX_BODY_BYTES),
             12 * max_message_chars() + 64 * 1024)
     if path == "/api/fleet/agentpack":
@@ -744,6 +751,64 @@ async def fleet_agentpack(request: Request):
         raise HTTPException(403, str(e)) from None
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e)) from None
+
+
+_TRIAL_AUTH_HEADERS = frozenset({
+    b"x-avrone-ts",
+    b"x-avrone-nonce",
+    b"x-avrone-sig",
+})
+
+
+def _reject_duplicate_trial_auth_headers(request: Request) -> None:
+    """Reject duplicate signed gateway headers before auth or nonce state is touched."""
+    counts: dict[bytes, int] = {}
+    for name, _value in request.scope.get("headers", ()):
+        key = bytes(name).lower()
+        if key in _TRIAL_AUTH_HEADERS:
+            counts[key] = counts.get(key, 0) + 1
+    if any(count > 1 for count in counts.values()):
+        raise HTTPException(400, "duplicate fleet authentication headers")
+
+
+async def _ingest_trial_request(request: Request, transport: str):
+    _reject_duplicate_trial_auth_headers(request)
+    payload = await _gateway(request, "trials")
+    from .trial_adapters import BridgeTrialAdapter, FleetTrialAdapter, strict_json_loads
+    from .trial_receiver import TrialStore, TrialStoreError
+
+    try:
+        # Authenticate the exact body first, then strictly parse those same cached bytes.
+        raw = await request.body()
+        strict_payload = strict_json_loads(raw)
+        if strict_payload != payload:
+            raise ValueError("signed payload changed during strict parsing")
+        fleet = _fleet()
+
+        def persist():
+            store = TrialStore(Path(settings.data_dir) / "trials" / "trials.sqlite3")
+            adapter = FleetTrialAdapter(store) if transport == "fleet" else BridgeTrialAdapter(store)
+            return adapter.receive(strict_payload, strict_payload.get("from"), fleet.max_hops)
+
+        return await asyncio.to_thread(persist)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)[:300]) from None
+    except TrialStoreError as exc:
+        raise HTTPException(503, str(exc)) from None
+    except OSError:
+        raise HTTPException(503, "trial storage is unavailable") from None
+
+
+@app.post("/api/fleet/trials")
+async def fleet_trials(request: Request):
+    """Authenticated, bounded fleet trial ingestion."""
+    return await _ingest_trial_request(request, "fleet")
+
+
+@app.post("/api/fleet/bridge/trials")
+async def fleet_bridge_trials(request: Request):
+    """Authenticated bridge-scoped trial relay; existing bridge JSONL posts are unchanged."""
+    return await _ingest_trial_request(request, "bridge")
 
 
 @app.post("/api/fleet/run")

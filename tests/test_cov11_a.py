@@ -88,6 +88,8 @@ def test_inspect_tool_skips_vanished_and_redact_none():
 
 
 def test_route_of_bypass_error(monkeypatch):
+    # Exercise urllib's fallback explicitly; _httpx_route is the preferred live route probe.
+    monkeypatch.setattr(tools_routerstatus, "_httpx_route", lambda _url: None)
     monkeypatch.setattr(tools_routerstatus.urllib.request if hasattr(tools_routerstatus, "urllib") else
                         __import__("urllib.request").request, "getproxies", lambda: {"https": "http://p:1"})
     import urllib.request as ur

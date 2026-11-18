@@ -239,79 +239,6 @@ Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on re
 
 **Status: runs still queued.** Reporting status and stopping per instructions. Do not treat as code failure or no-runner provisioning fault (still queued; no runner ID zero, blank name, or logs 404 observed). Recommend pausing this automation once current queued runs complete if they succeed with real runners. No force-push. Do not delete branches.
 
-## CI Status Check 2026-11-17T23:08Z (head cb31a797)
-
-Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44187895986 (run 1745, SHA cb31a797aadcb94830d99cb9304a42dfc0390863) status **queued**.
-
-Jobs (test (3.12), test (3.11), docker-verify) are queued with labels ubuntu-24.04; no runner assigned yet.
-
-Previous completed CI on the branch (run 44125675712 / 1739, SHA 26fcc890be4c9106b293f057f671c9ab2835072c) completed with **success** and real runners assigned (runner_ids 1000012405, 1000012406, 1000012407).
-
-Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
-
-On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
-
-Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
-
-**Status: runs still queued.** Reporting status and stopping per instructions. Do not treat as code failure or no-runner provisioning fault (still queued; no runner ID zero, blank name, or logs 404 observed). Recommend pausing this automation once current queued runs complete if they succeed with real runners. No force-push. Do not delete branches.
-
-## CI Status Check 2026-11-18T15:12Z (head 4e3dcaa3)
-
-Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44196680383 (run 1749, SHA 4e3dcaa3e5febd9c6b63814c2285663a4140d7a7) completed with conclusion **success**.
-
-Jobs completed with real runners assigned:
-- test (3.12): runner_id 1000012497, runner_name "GitHub Actions 1000012497"
-- test (3.11): runner_id 1000012498, runner_name "GitHub Actions 1000012498"
-- docker-verify: runner_id 1000012499, runner_name "GitHub Actions 1000012499"
-
-No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
-
-Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
-
-On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
-
-Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
-
-**Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
-
-## CI Status Check 2026-11-18T15:17Z (head 4ee1e315)
-
-Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44333232255 (run 1753, SHA 4ee1e3154d3374a5aacb76292607ecbfde16128d) completed with conclusion **success**.
-
-Jobs completed with real runners assigned:
-- docker-verify: runner_id 1000012512, runner_name "GitHub Actions 1000012512"
-- test (3.11): runner_id 1000012513, runner_name "GitHub Actions 1000012513"
-- test (3.12): runner_id 1000012514, runner_name "GitHub Actions 1000012514"
-
-No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
-
-Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
-
-On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
-
-Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
-
-**Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
-
-## CI Status Check 2026-11-18T17:08Z (head 072a090e)
-
-Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44345757234 (run 1754, SHA 072a090e00b1c561613b120ac261aebb2608778e) completed with conclusion **success**.
-
-Jobs completed with real runners assigned:
-- test (3.12): runner_id 1000012515, runner_name "GitHub Actions 1000012515"
-- docker-verify: runner_id 1000012516, runner_name "GitHub Actions 1000012516"
-- test (3.11): runner_id 1000012517, runner_name "GitHub Actions 1000012517"
-
-No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
-
-Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
-
-On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
-
-Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
-
-**Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
-
 ## CI Status Check 2026-11-18T18:10Z (head 0586b3bf)
 
 Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44355478275 (run 1756, SHA 0586b3bf69f9055a54b7b06a2ec08742047aeb9a) completed with conclusion **success**.
@@ -322,6 +249,25 @@ Jobs completed with real runners assigned:
 - docker-verify: runner_id 1000012522, runner_name "GitHub Actions 1000012522"
 
 Previous CI run 1755 (https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44355429884, SHA 2393dde7693af5ddc65caf4079d727d555da218f) also completed with **success** and real runners (runner_ids 1000012518, 1000012519, 1000012520).
+
+No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
+
+Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
+
+On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
+
+Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
+
+**Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
+
+## CI Status Check 2026-11-18T19:07Z (head 91e235ed)
+
+Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44367288357 (run 1757, SHA 91e235ed4c697c143ac8e2884dbb1882cb45ce97) completed with conclusion **success**.
+
+Jobs completed with real runners assigned:
+- test (3.11): runner_id 1000012524, runner_name "GitHub Actions 1000012524"
+- test (3.12): runner_id 1000012526, runner_name "GitHub Actions 1000012526"
+- docker-verify: runner_id 1000012525, runner_name "GitHub Actions 1000012525"
 
 No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
 

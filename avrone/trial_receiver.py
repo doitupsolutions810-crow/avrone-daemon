@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .evidence_pool import canonical_source_key, pool_trials
-from .trial_contract import canonical_trial_bytes, validate_trial_envelope
+from .trial_contract import MAX_ENVELOPE_BYTES, canonical_trial_bytes, validate_trial_envelope
 
 SENDER_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]{0,62}\Z")
 MAX_BATCH = 10
@@ -506,18 +507,142 @@ class TrialStore:
         finally:
             db.close()
 
+
+    @staticmethod
+    def _valid_bridge_run_id(value: Any) -> bool:
+        if not isinstance(value, str) or not value.strip() or len(value) > 128:
+            return False
+        if any(unicodedata.category(ch) == "Cc" for ch in value):
+            return False
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return True
+
+    @staticmethod
+    def _decode_stored_envelope(raw: Any, label: str) -> tuple[dict[str, Any], bytes]:
+        """Decode one stored envelope and require its exact canonical byte representation."""
+        if not isinstance(raw, (bytes, bytearray, memoryview)):
+            raise TrialStoreError(f"{label} storage integrity check failed")
+        payload = bytes(raw)
+        if not payload or len(payload) > MAX_ENVELOPE_BYTES:
+            raise TrialStoreError(f"{label} storage integrity check failed")
+        try:
+            envelope = json.loads(payload.decode("utf-8"))
+            if not validate_trial_envelope(envelope):
+                raise ValueError("invalid stored envelope")
+            canonical = canonical_trial_bytes(envelope)
+        except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+            raise TrialStoreError(f"{label} storage integrity check failed") from None
+        if canonical != payload:
+            # Also rejects duplicate keys, non-canonical key order, alternate escaping,
+            # and any other byte-level rewrite that parses to the same Python object.
+            raise TrialStoreError(f"{label} canonical encoding integrity check failed")
+        return envelope, payload
+
+    @staticmethod
+    def _verify_received_at(value: Any, label: str) -> None:
+        if type(value) not in (int, float):
+            raise TrialStoreError(f"{label} provenance integrity check failed")
+        try:
+            if not math.isfinite(float(value)) or value < 0:
+                raise TrialStoreError(f"{label} provenance integrity check failed")
+        except (OverflowError, TypeError, ValueError):
+            raise TrialStoreError(f"{label} provenance integrity check failed") from None
+
+    @classmethod
+    def _verify_trial_row(cls, row: sqlite3.Row) -> None:
+        envelope, raw = cls._decode_stored_envelope(row["canonical_json"], "trial")
+        if hashlib.sha256(raw).hexdigest() != row["payload_sha256"]:
+            raise TrialStoreError("trial payload digest integrity check failed")
+        columns = (
+            "trial_id", "outcome", "system", "node", "source", "run_id",
+            "check_id", "check_version", "check_config_sha256", "attempt_id",
+        )
+        if any(row[column] != envelope[column] for column in columns):
+            raise TrialStoreError("trial row projection integrity check failed")
+        try:
+            expected_source_key = _source_identity_key(envelope)
+        except (KeyError, TypeError, ValueError, UnicodeError, RecursionError):
+            raise TrialStoreError("trial source identity integrity check failed") from None
+        if row["source_identity_key"] != expected_source_key:
+            raise TrialStoreError("trial source identity integrity check failed")
+        sender = row["first_sender"]
+        transport = row["first_transport"]
+        bridge_run_id = row["bridge_run_id"]
+        if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
+            raise TrialStoreError("trial sender provenance integrity check failed")
+        if transport not in {"fleet", "bridge"}:
+            raise TrialStoreError("trial transport provenance integrity check failed")
+        if transport == "bridge":
+            if not cls._valid_bridge_run_id(bridge_run_id):
+                raise TrialStoreError("trial bridge provenance integrity check failed")
+        elif bridge_run_id is not None:
+            raise TrialStoreError("trial bridge provenance integrity check failed")
+        cls._verify_received_at(row["received_at"], "trial")
+
+    @classmethod
+    def _iter_verified_trial_rows(cls, db: sqlite3.Connection):
+        """Stream and verify every bounded trial row before exposing any evidence projection."""
+        cursor = db.execute(
+            "SELECT trial_id,source_identity_key,canonical_json,payload_sha256,outcome,"
+            "system,node,source,run_id,check_id,check_version,check_config_sha256,attempt_id,"
+            "first_sender,first_transport,bridge_run_id,received_at "
+            "FROM trials ORDER BY trial_id"
+        )
+        seen = 0
+        while True:
+            batch = cursor.fetchmany(128)
+            if not batch:
+                break
+            seen += len(batch)
+            if seen > MAX_TRIAL_RECORDS:
+                raise TrialStoreError("trial storage integrity check exceeds the record bound")
+            for row in batch:
+                cls._verify_trial_row(row)
+                yield row
+
+    @classmethod
+    def _verify_quarantine_row(cls, row: sqlite3.Row) -> None:
+        envelope, raw = cls._decode_stored_envelope(row["incoming_json"], "quarantine")
+        if hashlib.sha256(raw).hexdigest() != row["incoming_sha256"]:
+            raise TrialStoreError("quarantine payload digest integrity check failed")
+        if row["trial_id"] != envelope["trial_id"]:
+            raise TrialStoreError("quarantine trial identity integrity check failed")
+        sender = row["sender"]
+        transport = row["transport"]
+        bridge_run_id = row["bridge_run_id"]
+        if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
+            raise TrialStoreError("quarantine sender provenance integrity check failed")
+        if transport not in {"fleet", "bridge"}:
+            raise TrialStoreError("quarantine transport provenance integrity check failed")
+        if transport == "bridge":
+            if not cls._valid_bridge_run_id(bridge_run_id):
+                raise TrialStoreError("quarantine bridge provenance integrity check failed")
+        elif bridge_run_id is not None:
+            raise TrialStoreError("quarantine bridge provenance integrity check failed")
+        if row["reason"] not in {
+            "canonical source/check/attempt identity arrived with a different trial_id",
+            "same trial_id arrived with a different canonical envelope",
+        }:
+            raise TrialStoreError("quarantine reason integrity check failed")
+        cls._verify_received_at(row["received_at"], "quarantine")
+
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
         try:
-            rows = db.execute(
-                "SELECT trial_id,source,outcome FROM trials "
-                "WHERE outcome IN ('pass','fail') ORDER BY trial_id"
-            ).fetchall()
-            return pool_trials([
-                {"trial_id": row["trial_id"], "source": row["source"],
-                 "failed": row["outcome"] == "fail"}
-                for row in rows
-            ])
+            # Verify non-pass rows too: corrupted status/provenance must not be hidden
+            # merely because the row would otherwise be excluded from the pass/fail pool.
+            records = []
+            for row in self._iter_verified_trial_rows(db):
+                if row["outcome"] in {"pass", "fail"}:
+                    records.append({
+                        "trial_id": row["trial_id"],
+                        "source": row["source"],
+                        "failed": row["outcome"] == "fail",
+                    })
+            return pool_trials(records)
         except sqlite3.Error as exc:
             raise TrialStoreError("trial pool read failed") from exc
         finally:
@@ -526,13 +651,16 @@ class TrialStore:
     def non_pass_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
-            rows = db.execute(
-                "SELECT trial_id,source,system,node,run_id,check_id,check_version,"
-                "check_config_sha256,attempt_id,outcome,first_sender,first_transport,"
-                "bridge_run_id,received_at FROM trials "
-                "WHERE outcome NOT IN ('pass','fail') ORDER BY received_at,trial_id"
-            ).fetchall()
-            return [dict(row) for row in rows]
+            fields = (
+                "trial_id", "source", "system", "node", "run_id", "check_id",
+                "check_version", "check_config_sha256", "attempt_id", "outcome",
+                "first_sender", "first_transport", "bridge_run_id", "received_at",
+            )
+            records = []
+            for row in self._iter_verified_trial_rows(db):
+                if row["outcome"] not in {"pass", "fail"}:
+                    records.append({field: row[field] for field in fields})
+            return sorted(records, key=lambda item: (item["received_at"], item["trial_id"]))
         except sqlite3.Error as exc:
             raise TrialStoreError("non-pass trial read failed") from exc
         finally:
@@ -541,11 +669,25 @@ class TrialStore:
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
-            rows = db.execute(
-                "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,received_at "
-                "FROM trial_quarantine ORDER BY quarantine_id"
-            ).fetchall()
-            return [dict(row) for row in rows]
+            cursor = db.execute(
+                "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
+                "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"
+            )
+            records = []
+            for row in cursor:
+                if len(records) >= MAX_QUARANTINE_RECORDS:
+                    raise TrialStoreError("trial quarantine integrity check exceeds the record bound")
+                self._verify_quarantine_row(row)
+                records.append({
+                    "trial_id": row["trial_id"],
+                    "sender": row["sender"],
+                    "transport": row["transport"],
+                    "bridge_run_id": row["bridge_run_id"],
+                    "reason": row["reason"],
+                    "incoming_sha256": row["incoming_sha256"],
+                    "received_at": row["received_at"],
+                })
+            return records
         except sqlite3.Error as exc:
             raise TrialStoreError("trial quarantine read failed") from exc
         finally:

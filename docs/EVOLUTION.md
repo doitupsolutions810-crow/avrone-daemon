@@ -239,23 +239,7 @@ Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on re
 
 **Status: runs still queued.** Reporting status and stopping per instructions. Do not treat as code failure or no-runner provisioning fault (still queued; no runner ID zero, blank name, or logs 404 observed). Recommend pausing this automation once current queued runs complete if they succeed with real runners. No force-push. Do not delete branches.
 
-## CI Status Check 2026-11-17T22:08Z (head 2e599033)
-
-Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44176579815 (run 1744, SHA 2e599033f739f97841ab1ab71c3c5eef28169f25) status **queued**.
-
-Jobs (docker-verify, test (3.11), test (3.12)) are queued with labels ubuntu-24.04; no runner assigned yet.
-
-Previous completed CI on the branch (run 44125675712 / 1739, SHA 26fcc890be4c9106b293f057f671c9ab2835072c) completed with **success** and real runners assigned (runner_ids 1000012405, 1000012406, 1000012407).
-
-Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
-
-On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
-
-Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
-
-**Status: runs still queued.** Reporting status and stopping per instructions. Do not treat as code failure or no-runner provisioning fault (still queued; no runner ID zero, blank name, or logs 404 observed). Recommend pausing this automation once current queued runs complete if they succeed with real runners. No force-push. Do not delete branches.
-
-## CI Status Check 2026-11-17T22:15Z (head cb31a797)
+## CI Status Check 2026-11-17T23:08Z (head cb31a797)
 
 Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44187895986 (run 1745, SHA cb31a797aadcb94830d99cb9304a42dfc0390863) status **queued**.
 
@@ -317,6 +301,27 @@ Jobs completed with real runners assigned:
 - test (3.12): runner_id 1000012515, runner_name "GitHub Actions 1000012515"
 - docker-verify: runner_id 1000012516, runner_name "GitHub Actions 1000012516"
 - test (3.11): runner_id 1000012517, runner_name "GitHub Actions 1000012517"
+
+No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
+
+Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
+
+On main, recent runs: model-bench success (43802569696), earlier CI failures/cancelled (e.g. 43761751223 failure).
+
+Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
+
+**Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
+
+## CI Status Check 2026-11-18T18:10Z (head 0586b3bf)
+
+Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44355478275 (run 1756, SHA 0586b3bf69f9055a54b7b06a2ec08742047aeb9a) completed with conclusion **success**.
+
+Jobs completed with real runners assigned:
+- test (3.11): runner_id 1000012521, runner_name "GitHub Actions 1000012521"
+- test (3.12): runner_id 1000012523, runner_name "GitHub Actions 1000012523"
+- docker-verify: runner_id 1000012522, runner_name "GitHub Actions 1000012522"
+
+Previous CI run 1755 (https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/44355429884, SHA 2393dde7693af5ddc65caf4079d727d555da218f) also completed with **success** and real runners (runner_ids 1000012518, 1000012519, 1000012520).
 
 No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
 

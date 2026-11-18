@@ -543,3 +543,109 @@ def test_enable_wal_does_not_retry_non_lock_operational_errors(monkeypatch):
 
     assert connection.calls == 1
     assert delays == []
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [
+        ("outcome", "fail"),
+        ("source", "forged:source"),
+        ("check_version", "forged-version"),
+        ("payload_sha256", "0" * 64),
+        ("source_identity_key", "f" * 64),
+        ("first_sender", "forged sender"),
+    ],
+)
+def test_pool_snapshot_refuses_trial_projection_and_provenance_tampering(
+    tmp_path, column, value,
+):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    envelope = sample()
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+    db = store._connect()
+    try:
+        db.execute(
+            f"UPDATE trials SET {column}=? WHERE trial_id=?",
+            (value, envelope["trial_id"]),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.pool_snapshot()
+
+
+def test_pool_snapshot_refuses_noncanonical_or_corrupted_stored_envelope(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    envelope = sample()
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+    db = store._connect()
+    try:
+        db.execute(
+            "UPDATE trials SET canonical_json=? WHERE trial_id=?",
+            (b'{"schema":"avrone.trial/v2"}', envelope["trial_id"]),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.pool_snapshot()
+
+
+def test_non_pass_projection_audits_the_canonical_stored_envelope(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    envelope = sample("skipped")
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+    db = store._connect()
+    try:
+        db.execute(
+            "UPDATE trials SET outcome='pass' WHERE trial_id=?",
+            (envelope["trial_id"],),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.non_pass_records()
+
+
+@pytest.mark.parametrize("tamper", ["incoming_json", "incoming_sha256", "sender", "reason"])
+def test_quarantine_audit_refuses_payload_or_provenance_tampering(tmp_path, tamper):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    passed = sample("pass")
+    conflict = sample("fail")
+    store.ingest_many([passed], sender="peer-a", transport="fleet")
+    store.ingest_many(
+        [conflict], sender="peer-b", transport="bridge", bridge_run_id="bridge-1"
+    )
+    db = store._connect()
+    try:
+        if tamper == "incoming_json":
+            db.execute(
+                "UPDATE trial_quarantine SET incoming_json=? WHERE trial_id=?",
+                (b"{}", conflict["trial_id"]),
+            )
+        elif tamper == "incoming_sha256":
+            db.execute(
+                "UPDATE trial_quarantine SET incoming_sha256=? WHERE trial_id=?",
+                ("0" * 64, conflict["trial_id"]),
+            )
+        elif tamper == "sender":
+            db.execute(
+                "UPDATE trial_quarantine SET sender=? WHERE trial_id=?",
+                ("forged sender", conflict["trial_id"]),
+            )
+        else:
+            db.execute(
+                "UPDATE trial_quarantine SET reason=? WHERE trial_id=?",
+                ("accepted", conflict["trial_id"]),
+            )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.quarantine_records()

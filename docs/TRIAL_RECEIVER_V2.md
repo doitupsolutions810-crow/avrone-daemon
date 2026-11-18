@@ -89,3 +89,19 @@ under the shared-secret trust domain; it does not prove an individual peer's pub
 independently attest the producer's claimed system/node. Statistical independence remains
 \`not_assessed\`. Filesystem path checks reject static symlink/hardlink cases, but descriptor-based
 protection against path replacement races remains a separate hardening item.
+
+
+## Read-side evidence integrity
+
+Before returning the pass/fail evidence pool or non-pass records, the receiver now streams
+all retained trial rows in bounded batches and verifies the canonical envelope bytes,
+payload SHA-256, identity projection, source identity key, first-sender/transport
+provenance, and receive timestamp. Non-pass rows are verified as well, so a corrupted
+status cannot hide outside the pass/fail pool. Quarantine reads similarly verify the
+stored incoming envelope, digest, sender, transport, bridge-run provenance, reason,
+and timestamp before exposing a conflict record.
+
+These checks detect partial, accidental, or single-field local rewrites. They are not
+a cryptographic defense against a privileged actor who can coherently rewrite the
+canonical envelope, its digest, every projected column, and related SQLite state.
+Off-host signed anchoring remains a separate control.

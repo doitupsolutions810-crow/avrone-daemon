@@ -754,7 +754,7 @@ class TrialStore:
             ):
                 raise TrialStoreError("trial quarantined-sender state integrity check failed")
         if first_by_sender:
-            raise TrialStoreError("trial quarantine is missing sender enforcement state")
+            raise TrialStoreError("trial quarantine sender enforcement state integrity check failed")
         return records
 
     def quarantine_records(self) -> list[dict[str, Any]]:

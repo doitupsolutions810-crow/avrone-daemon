@@ -402,6 +402,46 @@ class TrialStore:
             "results": results,
         }
 
+    @classmethod
+    def _verify_sender_quarantine_state(
+        cls, db: sqlite3.Connection, sender: str,
+    ) -> bool:
+        """Fail closed if a sender quarantine row disagrees with its first conflict record."""
+        if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
+            raise TrialStoreError("trial quarantine sender identity integrity check failed")
+        state = db.execute(
+            "SELECT sender,first_trial_id,reason,quarantined_at "
+            "FROM trial_quarantined_senders WHERE sender=?",
+            (sender,),
+        ).fetchone()
+        rows = db.execute(
+            "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,"
+            "incoming_sha256,incoming_json,received_at FROM trial_quarantine "
+            "WHERE sender=? ORDER BY quarantine_id",
+            (sender,),
+        ).fetchmany(MAX_QUARANTINE_RECORDS + 1)
+        if len(rows) > MAX_QUARANTINE_RECORDS:
+            raise TrialStoreError("trial sender quarantine integrity check exceeds the record bound")
+        for row in rows:
+            cls._verify_quarantine_row(row)
+        first = rows[0] if rows else None
+        if state is None:
+            if first is not None:
+                raise TrialStoreError("trial sender quarantine state integrity check failed")
+            return False
+        if first is None:
+            raise TrialStoreError("trial sender quarantine state integrity check failed")
+        cls._verify_received_at(state["quarantined_at"], "sender quarantine")
+        if (
+            state["sender"] != sender
+            or state["first_trial_id"] != first["trial_id"]
+            or state["reason"] != first["reason"]
+            or state["quarantined_at"] != first["received_at"]
+        ):
+            raise TrialStoreError("trial sender quarantine state integrity check failed")
+        return True
+
+
     def _ingest_one(
         self, envelope: dict[str, Any], raw: bytes, *, sender: str, transport: str,
         bridge_run_id: str | None,
@@ -414,9 +454,7 @@ class TrialStore:
         db = self._connect()
         try:
             db.execute("BEGIN IMMEDIATE")
-            quarantined = db.execute(
-                "SELECT 1 FROM trial_quarantined_senders WHERE sender=?", (sender,)
-            ).fetchone()
+            quarantined = self._verify_sender_quarantine_state(db, sender)
             if quarantined:
                 status = "sender_quarantined"
             else:
@@ -666,28 +704,66 @@ class TrialStore:
         finally:
             db.close()
 
+    @classmethod
+    def _verified_quarantine_records(
+        cls, db: sqlite3.Connection,
+    ) -> list[dict[str, Any]]:
+        """Verify quarantine payloads and their cross-table sender enforcement state."""
+        cursor = db.execute(
+            "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
+            "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"
+        )
+        records = []
+        first_by_sender: dict[str, tuple[str, str, float]] = {}
+        for row in cursor:
+            if len(records) >= MAX_QUARANTINE_RECORDS:
+                raise TrialStoreError("trial quarantine integrity check exceeds the record bound")
+            cls._verify_quarantine_row(row)
+            first_by_sender.setdefault(
+                row["sender"],
+                (row["trial_id"], row["reason"], row["received_at"]),
+            )
+            records.append({
+                "trial_id": row["trial_id"],
+                "sender": row["sender"],
+                "transport": row["transport"],
+                "bridge_run_id": row["bridge_run_id"],
+                "reason": row["reason"],
+                "incoming_sha256": row["incoming_sha256"],
+                "received_at": row["received_at"],
+            })
+
+        sender_rows = db.execute(
+            "SELECT sender,first_trial_id,reason,quarantined_at "
+            "FROM trial_quarantined_senders ORDER BY sender"
+        ).fetchmany(MAX_QUARANTINED_SENDERS + 1)
+        if len(sender_rows) > MAX_QUARANTINED_SENDERS:
+            raise TrialStoreError("trial quarantined-sender integrity check exceeds the record bound")
+        for state in sender_rows:
+            sender = state["sender"]
+            if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
+                raise TrialStoreError("trial quarantined-sender identity integrity check failed")
+            first = first_by_sender.pop(sender, None)
+            if first is None:
+                raise TrialStoreError("trial quarantined-sender state integrity check failed")
+            cls._verify_received_at(state["quarantined_at"], "sender quarantine")
+            if (
+                state["first_trial_id"] != first[0]
+                or state["reason"] != first[1]
+                or state["quarantined_at"] != first[2]
+            ):
+                raise TrialStoreError("trial quarantined-sender state integrity check failed")
+        if first_by_sender:
+            raise TrialStoreError("trial quarantine sender enforcement state integrity check failed")
+        return records
+
     def quarantine_records(self) -> list[dict[str, Any]]:
         db = self._connect()
         try:
-            cursor = db.execute(
-                "SELECT trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
-                "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"
-            )
-            records = []
-            for row in cursor:
-                if len(records) >= MAX_QUARANTINE_RECORDS:
-                    raise TrialStoreError("trial quarantine integrity check exceeds the record bound")
-                self._verify_quarantine_row(row)
-                records.append({
-                    "trial_id": row["trial_id"],
-                    "sender": row["sender"],
-                    "transport": row["transport"],
-                    "bridge_run_id": row["bridge_run_id"],
-                    "reason": row["reason"],
-                    "incoming_sha256": row["incoming_sha256"],
-                    "received_at": row["received_at"],
-                })
-            return records
+            # Use one read snapshot so quarantine rows and sender enforcement state
+            # cannot be observed from different commits.
+            db.execute("BEGIN")
+            return self._verified_quarantine_records(db)
         except sqlite3.Error as exc:
             raise TrialStoreError("trial quarantine read failed") from exc
         finally:

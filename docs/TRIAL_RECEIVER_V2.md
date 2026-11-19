@@ -99,7 +99,12 @@ payload SHA-256, identity projection, source identity key, first-sender/transpor
 provenance, and receive timestamp. Non-pass rows are verified as well, so a corrupted
 status cannot hide outside the pass/fail pool. Quarantine reads similarly verify the
 stored incoming envelope, digest, sender, transport, bridge-run provenance, reason,
-and timestamp before exposing a conflict record.
+and timestamp before exposing a conflict record. They also cross-check every conflict
+sender against the first-trial/reason/timestamp anchor in the sender-enforcement table.
+Ingestion verifies the authenticated sender's quarantine row and first conflict record
+inside the same write transaction before deciding whether that sender remains blocked.
+Quarantine audits use one SQLite read transaction so both tables are checked from one
+consistent snapshot.
 
 These checks detect partial, accidental, or single-field local rewrites. They are not
 a cryptographic defense against a privileged actor who can coherently rewrite the

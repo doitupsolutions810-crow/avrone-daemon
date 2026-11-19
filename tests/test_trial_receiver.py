@@ -649,3 +649,111 @@ def test_quarantine_audit_refuses_payload_or_provenance_tampering(tmp_path, tamp
 
     with pytest.raises(TrialStoreError, match="integrity"):
         store.quarantine_records()
+
+
+def _seed_quarantined_sender(store):
+    assert store.ingest_many(
+        [sample("pass")], sender="peer-a", transport="fleet"
+    )["accepted"] == 1
+    result = store.ingest_many(
+        [sample("fail")], sender="peer-b", transport="bridge", bridge_run_id="bridge-1"
+    )
+    assert result["results"][0]["status"] == "conflict_quarantined"
+
+
+def test_ingest_fails_closed_when_sender_quarantine_state_is_missing(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    _seed_quarantined_sender(store)
+    db = store._connect()
+    try:
+        db.execute("DELETE FROM trial_quarantined_senders WHERE sender='peer-b'")
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.ingest_many([sample("pass", "attempt-2")], sender="peer-b", transport="fleet")
+
+
+def test_ingest_fails_closed_when_first_quarantine_record_is_missing(tmp_path):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    _seed_quarantined_sender(store)
+    db = store._connect()
+    try:
+        db.execute("DELETE FROM trial_quarantine WHERE sender='peer-b'")
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.ingest_many([sample("pass", "attempt-2")], sender="peer-b", transport="fleet")
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [
+        ("first_trial_id", "0" * 64),
+        ("reason", "accepted"),
+        ("quarantined_at", 0.0),
+    ],
+)
+def test_ingest_fails_closed_when_sender_quarantine_anchor_is_modified(
+    tmp_path, column, value,
+):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    _seed_quarantined_sender(store)
+    db = store._connect()
+    try:
+        db.execute(
+            f"UPDATE trial_quarantined_senders SET {column}=? WHERE sender='peer-b'",
+            (value,),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.ingest_many([sample("pass", "attempt-2")], sender="peer-b", transport="fleet")
+
+
+@pytest.mark.parametrize("tamper", ["missing_sender_state", "orphan_sender_state"])
+def test_quarantine_audit_cross_checks_sender_enforcement_state(tmp_path, tamper):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    _seed_quarantined_sender(store)
+    db = store._connect()
+    try:
+        if tamper == "missing_sender_state":
+            db.execute("DELETE FROM trial_quarantined_senders WHERE sender='peer-b'")
+        else:
+            db.execute("DELETE FROM trial_quarantine WHERE sender='peer-b'")
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.quarantine_records()
+
+
+@pytest.mark.parametrize(
+    "column,value",
+    [
+        ("first_trial_id", "0" * 64),
+        ("reason", "accepted"),
+        ("quarantined_at", 0.0),
+    ],
+)
+def test_quarantine_audit_rejects_sender_anchor_tampering(tmp_path, column, value):
+    store = TrialStore(tmp_path / "trials.sqlite3")
+    _seed_quarantined_sender(store)
+    db = store._connect()
+    try:
+        db.execute(
+            f"UPDATE trial_quarantined_senders SET {column}=? WHERE sender='peer-b'",
+            (value,),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="integrity"):
+        store.quarantine_records()

@@ -482,10 +482,11 @@ class TrialStore:
             for table in ("trials", "trial_receipts", "trial_quarantine", "trial_quarantined_senders"):
                 for action in ("INSERT", "UPDATE"):
                     suffix = action.lower()
+                    trigger_event = "INSERT" if action == "INSERT" else "UPDATE OF provenance_sha256"
                     db.execute(
                         f"""
                         CREATE TRIGGER IF NOT EXISTS {table}_provenance_sha256_required_{suffix}
-                        BEFORE {action} OF provenance_sha256 ON {table}
+                        BEFORE {trigger_event} ON {table}
                         WHEN NEW.provenance_sha256 IS NULL
                             OR typeof(NEW.provenance_sha256) != 'text'
                             OR length(NEW.provenance_sha256) != 64

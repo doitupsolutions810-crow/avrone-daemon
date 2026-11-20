@@ -99,7 +99,9 @@ validates the existing provenance field shapes, installs insert and provenance-d
 lowercase 64-character hexadecimal digest, and advances PRAGMA user_version only after all
 backfills and triggers succeed. The migration runs under BEGIN IMMEDIATE; any malformed
 legacy provenance or write failure rolls back the column additions, digest backfills, and
-version change. Existing trial IDs, envelope bytes, outcomes, source/check-version fields,
+version change. This migration snapshots the currently stored v2 metadata; it cannot retroactively
+authenticate changes made before v3 because v2 had no receiver-metadata digest. Existing trial IDs,
+envelope bytes, outcomes, source/check-version fields,
 receipt order, and retention limits are unchanged.
 
 These digests are unkeyed tamper-evident checks against partial or accidental metadata

@@ -362,14 +362,14 @@ def test_migrated_schema_rejects_missing_or_malformed_source_identity_keys(tmp_p
                 INSERT INTO trials(
                     trial_id,source_identity_key,canonical_json,payload_sha256,outcome,system,node,source,
                     run_id,check_id,check_version,check_config_sha256,attempt_id,
-                    first_sender,first_transport,bridge_run_id,received_at
+                    first_sender,first_transport,bridge_run_id,received_at,provenance_sha256
                 )
                 SELECT ?,NULL,canonical_json,payload_sha256,outcome,system,node,source,
                     run_id,check_id,check_version,check_config_sha256,attempt_id,
-                    first_sender,first_transport,bridge_run_id,received_at
+                    first_sender,first_transport,bridge_run_id,received_at,?
                 FROM trials WHERE trial_id=?
                 """,
-                ("f" * 64, envelope["trial_id"]),
+                ("f" * 64, "a" * 64, envelope["trial_id"]),
             )
         db.rollback()
 

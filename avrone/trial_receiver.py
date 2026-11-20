@@ -485,7 +485,7 @@ class TrialStore:
                     db.execute(
                         f"""
                         CREATE TRIGGER IF NOT EXISTS {table}_provenance_sha256_required_{suffix}
-                        BEFORE {action} ON {table}
+                        BEFORE {action} OF provenance_sha256 ON {table}
                         WHEN NEW.provenance_sha256 IS NULL
                             OR typeof(NEW.provenance_sha256) != 'text'
                             OR length(NEW.provenance_sha256) != 64

@@ -95,7 +95,7 @@ receipt_records() audit reads at most 100,000 retained delivery receipts and ver
 record before returning it.
 
 The v2-to-v3 migration adds nullable columns transactionally, backfills in batches of 128,
-validates the existing provenance field shapes, installs insert/update triggers requiring a
+validates the existing provenance field shapes, installs insert and provenance-digest-update triggers requiring a
 lowercase 64-character hexadecimal digest, and advances PRAGMA user_version only after all
 backfills and triggers succeed. The migration runs under BEGIN IMMEDIATE; any malformed
 legacy provenance or write failure rolls back the column additions, digest backfills, and

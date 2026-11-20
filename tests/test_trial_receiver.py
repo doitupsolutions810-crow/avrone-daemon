@@ -220,7 +220,7 @@ def test_legacy_schema_migrates_and_preserves_bridge_run_per_delivery(tmp_path):
     finally:
         db.close()
 
-    assert version == 2
+    assert version == 3
     assert [(r["transport"], r["bridge_run_id"], r["result"]) for r in receipts] == [
         ("fleet", None, "accepted"),
         ("bridge", "bridge-run-1", "duplicate"),
@@ -306,7 +306,7 @@ def test_legacy_migration_backfills_source_identity_key(tmp_path):
     finally:
         db.close()
 
-    assert version == 2
+    assert version == 3
     assert row is not None and len(row["source_identity_key"]) == 64
 
 
@@ -403,7 +403,7 @@ def test_concurrent_fresh_store_initialization_is_serialized(tmp_path):
     with ThreadPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(initialize, range(workers)))
 
-    assert results == [(2, "ok")] * workers
+    assert results == [(3, "ok")] * workers
     store = TrialStore(path)
     assert store.ingest_many([sample()], sender="peer-a", transport="fleet")["accepted"] == 1
     assert store.pool_snapshot()["runs"] == 1
@@ -437,7 +437,7 @@ def test_concurrent_legacy_schema_migration_is_serialized_and_replay_safe(tmp_pa
     with ThreadPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(migrate, range(workers)))
 
-    assert all(version == 2 and integrity == "ok" and len(key) == 64
+    assert all(version == 3 and integrity == "ok" and len(key) == 64
                for version, integrity, key in results)
     reopened = TrialStore(path)
     duplicate = reopened.ingest_many(

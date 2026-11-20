@@ -180,10 +180,14 @@ class TrialStore:
             "SELECT trial_id,source_identity_key,payload_sha256,first_sender,first_transport,"
             "bridge_run_id,received_at FROM trials ORDER BY trial_id"
         )
+        seen = 0
         while True:
             batch = cursor.fetchmany(128)
             if not batch:
                 break
+            seen += len(batch)
+            if seen > MAX_TRIAL_RECORDS:
+                raise TrialStoreError("existing trial provenance exceeds the record bound")
             for row in batch:
                 if (not isinstance(row["first_sender"], str)
                         or not SENDER_RE.fullmatch(row["first_sender"])
@@ -207,12 +211,17 @@ class TrialStore:
             "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,result,payload_sha256,received_at "
             "FROM trial_receipts ORDER BY receipt_id"
         )
+        seen = 0
         while True:
             batch = cursor.fetchmany(128)
             if not batch:
                 break
+            seen += len(batch)
+            if seen > MAX_RECEIPTS:
+                raise TrialStoreError("existing receipt provenance exceeds the record bound")
             for row in batch:
-                if (not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
+                if (not isinstance(row["trial_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["trial_id"])
+                        or not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
                         or row["transport"] not in {"fleet", "bridge"}
                         or row["result"] not in _PROVENANCE_RESULTS):
                     raise TrialStoreError("existing receipt provenance cannot be validated for migration")
@@ -234,12 +243,17 @@ class TrialStore:
             "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,received_at "
             "FROM trial_quarantine ORDER BY quarantine_id"
         )
+        seen = 0
         while True:
             batch = cursor.fetchmany(128)
             if not batch:
                 break
+            seen += len(batch)
+            if seen > MAX_QUARANTINE_RECORDS:
+                raise TrialStoreError("existing quarantine provenance exceeds the record bound")
             for row in batch:
-                if (not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
+                if (not isinstance(row["trial_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["trial_id"])
+                        or not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
                         or row["transport"] not in {"fleet", "bridge"}
                         or row["reason"] not in _PROVENANCE_REASONS):
                     raise TrialStoreError("existing quarantine provenance cannot be validated for migration")
@@ -260,10 +274,14 @@ class TrialStore:
         cursor = db.execute(
             "SELECT sender,first_trial_id,reason,quarantined_at FROM trial_quarantined_senders ORDER BY sender"
         )
+        seen = 0
         while True:
             batch = cursor.fetchmany(128)
             if not batch:
                 break
+            seen += len(batch)
+            if seen > MAX_QUARANTINED_SENDERS:
+                raise TrialStoreError("existing sender quarantine provenance exceeds the record bound")
             for row in batch:
                 if (not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
                         or not isinstance(row["first_trial_id"], str)
@@ -875,6 +893,8 @@ class TrialStore:
 
     @classmethod
     def _verify_receipt_row(cls, row: sqlite3.Row) -> None:
+        if not isinstance(row["trial_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["trial_id"]):
+            raise TrialStoreError("trial receipt identity integrity check failed")
         if not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"]):
             raise TrialStoreError("trial receipt sender provenance integrity check failed")
         if row["transport"] not in {"fleet", "bridge"} or row["result"] not in _PROVENANCE_RESULTS:

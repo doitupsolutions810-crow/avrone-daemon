@@ -1,5 +1,7 @@
 name: CI
 on: [push, pull_request]
+permissions:
+  contents: write
 jobs:
   test:
     runs-on: ubuntu-24.04    # pinned: ubuntu-latest migrated to Ubuntu 26 on 2026-10-19 (actions/runner-images#14748)
@@ -31,6 +33,22 @@ jobs:
           }
       - name: Generate current master prompt for verification
         run: python tools/make_master_prompt.py
+      - name: Commit canonical master prompt to PR branch
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          cp MASTER_PROMPT.md /tmp/MASTER_PROMPT.generated.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$BRANCH"
+          git checkout --detach "origin/$BRANCH"
+          cp /tmp/MASTER_PROMPT.generated.md MASTER_PROMPT.md
+          git add MASTER_PROMPT.md
+          if ! git diff --cached --quiet; then
+            git commit -m "Regenerate MASTER_PROMPT.md from current source"
+            git push origin "HEAD:$BRANCH"
+          fi
       - name: Upload generated master prompt for verification
         uses: actions/upload-artifact@v4
         with:

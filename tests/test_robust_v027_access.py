@@ -72,6 +72,24 @@ def test_all_and_unknown_policy(mk):
         assert set(_codes(c).values()) == {403}
 
 
+def test_non_ascii_token_is_refused(mk, monkeypatch):
+    # hmac.compare_digest on str raises TypeError for non-ASCII and used to 500.
+    from fastapi import HTTPException
+    from avrone import server
+    monkeypatch.setenv("AVRONE_PUBLIC_ACCESS", "admin")
+    assert server.caller_allowed("127.0.0.1", "édge") is False
+    assert server.caller_allowed("203.0.113.9", "édge") is False
+    assert server.caller_allowed("203.0.113.9", ADMIN) is True
+    with pytest.raises(HTTPException) as ei:
+        server.require_admin("édge")
+    assert ei.value.status_code == 401
+    with mk("admin", host="127.0.0.1") as c:
+        with pytest.raises(WebSocketDisconnect) as e:
+            with c.websocket_connect("/ws/events?token=%C3%A9dge") as ws:
+                ws.receive_json()
+        assert e.value.code == 1008
+
+
 def test_admin_unset_means_no_token_bypass(mk, monkeypatch):
     from avrone import server
     monkeypatch.setattr(server.settings, "admin_token", "")

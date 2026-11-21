@@ -221,7 +221,26 @@ class Gateway:
             for attempt in range(per_up_tries):
                 try:
                     msgs = with_plain_text_nudge(messages) if nudge else messages
-                    out = await self._request(up, msgs, use_model, temperature, session)
+                    started = time.perf_counter()
+                    try:
+                        out = await self._request(up, msgs, use_model, temperature, session)
+                    except Exception:
+                        # Mark this provider attempt as failed, but never let telemetry mask its error.
+                        try:
+                            from .ai_observability import capture_generation
+                            capture_generation(session=session, provider=up.provider, model=use_model,
+                                               latency_s=time.perf_counter() - started,
+                                               messages=msgs, error=True)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        raise
+                    try:
+                        from .ai_observability import capture_generation
+                        capture_generation(session=session, provider=up.provider, model=use_model,
+                                           latency_s=time.perf_counter() - started,
+                                           messages=msgs, output=out)
+                    except Exception:  # noqa: BLE001 - observability must not affect model routing
+                        pass
                     up.record(True, self.threshold, self.cooldown)
                     route.append(f"{up.provider}:ok")
                     self.last_route = route

@@ -453,7 +453,12 @@ class TrialStore:
             # os.open(mode=0600) is still filtered by the caller's umask.
             # Under umask 0777 the descriptor is valid but the new inode has
             # mode 000; normalize the already-pinned, owned inode explicitly.
-            os.fchmod(fd, 0o600)
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError as exc:
+                raise TrialStoreError(
+                    "new trial database cannot be secured as private 0600"
+                ) from exc
             secured = os.fstat(fd)
             if (
                 (secured.st_dev, secured.st_ino) != identity

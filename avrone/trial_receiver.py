@@ -207,12 +207,16 @@ class TrialStore:
             raise TrialStoreError("trial database permissions changed after initialization (expected 0600)")
         return info.st_dev, info.st_ino
 
-    def _assert_sidecar_files(self) -> None:
-        """Do not let SQLite open planted symlink, device or multiply-linked sidecars.
+    def _assert_sidecar_files(self, *, require_private: bool | None = None) -> None:
+        """Do not let SQLite open planted or permission-weakened sidecars.
 
-        SQLite may use -wal, -shm and -journal next to the database filename.
-        Legitimate absent or single-link regular sidecars are accepted.
+        During trusted legacy initialization, existing regular owned sidecars
+        may still be normalized to 0600 before SQLite opens them. Every
+        post-normalization check, and every check after initialization, requires
+        exact private permissions.
         """
+        if require_private is None:
+            require_private = self._initialized
         for suffix in ("-wal", "-shm", "-journal"):
             sidecar = Path(str(self.path) + suffix)
             try:
@@ -226,14 +230,86 @@ class TrialStore:
                     "trial database sidecar must be a regular single-link file"
                 )
             self._assert_file_owner(info, "trial database sidecar")
-            # SQLite inherits WAL/SHM mode from the private 0600 database.
-            # A running receiver must not silently continue if permissions
-            # drift after trusted migration, even in a 0700 directory.
-            if self._initialized and stat.S_IMODE(info.st_mode) != 0o600:
+            if require_private and stat.S_IMODE(info.st_mode) != 0o600:
                 raise TrialStoreError(
                     "trial database sidecar permissions changed after initialization "
                     "(expected 0600)"
                 )
+
+    def _make_verified_file_private(
+        self, path: Path, expected_identity: tuple[int, int], label: str,
+    ) -> None:
+        """Descriptor-pin one owned regular file before changing it to 0600."""
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None or not hasattr(os, "fchmod"):
+            raise TrialStoreError(
+                "secure descriptor-based storage permissions are unavailable"
+            )
+        fd = None
+        try:
+            self._assert_no_symlink_components(path.parent, label)
+            flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
+            fd = os.open(path, flags)
+            info = os.fstat(fd)
+            identity = (info.st_dev, info.st_ino)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise TrialStoreError(
+                    label + " must be a regular single-link file"
+                )
+            self._assert_file_owner(info, label)
+            if identity != expected_identity:
+                raise TrialStoreError(label + " identity changed before permission finalization")
+            current = path.lstat()
+            if (current.st_dev, current.st_ino) != identity:
+                raise TrialStoreError(label + " path changed before permission finalization")
+            os.fchmod(fd, 0o600)
+            after = path.lstat()
+            if (after.st_dev, after.st_ino) != identity:
+                raise TrialStoreError(label + " path changed during permission finalization")
+            if stat.S_IMODE(after.st_mode) != 0o600:
+                raise TrialStoreError(label + " permissions could not be finalized to 0600")
+        except OSError as exc:
+            raise TrialStoreError(
+                label + " cannot be secured before SQLite open"
+            ) from exc
+        finally:
+            if fd is not None:
+                os.close(fd)
+
+    def _make_storage_private_before_sqlite(
+        self, database_identity: tuple[int, int],
+    ) -> None:
+        """Normalize trusted legacy DB and existing sidecars before SQLite opens.
+
+        A WAL-mode database can create/open -wal and -shm during sqlite3.connect
+        or the first PRAGMA. Chmodding the database only after connect is too
+        late: concurrent initializers may already have created 0644 sidecars
+        from a trusted legacy 0644 database. Pin and fchmod the main inode and
+        every existing sidecar first. Any sidecar created after the main DB is
+        private inherits the 0600 mode.
+        """
+        self._make_verified_file_private(
+            self.path, database_identity, "trial database"
+        )
+        for suffix in ("-wal", "-shm", "-journal"):
+            sidecar = Path(str(self.path) + suffix)
+            try:
+                info = sidecar.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise TrialStoreError(
+                    "trial database sidecar cannot be inspected"
+                ) from exc
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise TrialStoreError(
+                    "trial database sidecar must be a regular single-link file"
+                )
+            self._assert_file_owner(info, "trial database sidecar")
+            self._make_verified_file_private(
+                sidecar, (info.st_dev, info.st_ino), "trial database sidecar"
+            )
+        self._assert_sidecar_files(require_private=True)
 
     def _create_private_database_once(self) -> tuple[int, int] | None:
         """Create a missing database at 0600 before SQLite can open it.
@@ -328,6 +404,13 @@ class TrialStore:
         # database and start a fresh evidence history under the same filename.
         if self._database_identity is not None and before != self._database_identity:
             raise TrialStoreError("trial database identity changed since initialization")
+        if before is None:
+            raise TrialStoreError("trial database disappeared before SQLite open")
+        if not self._initialized:
+            # This must precede sqlite3.connect: an already-WAL database can
+            # materialize its sidecars during connection/PRAGMA setup.
+            self._make_storage_private_before_sqlite(before)
+        self._assert_sidecar_files(require_private=True)
         db: sqlite3.Connection | None = None
         try:
             db = sqlite3.connect(str(self.path), timeout=5.0, isolation_level=None)
@@ -335,7 +418,7 @@ class TrialStore:
             # pathname between the first lstat and its own file open.
             self._assert_no_symlink_components(self.path.parent, "trial data directory")
             self._assert_private_parent()
-            self._assert_sidecar_files()
+            self._assert_sidecar_files(require_private=True)
             after = self._assert_database_file()
             if after is None or (before is not None and after != before) or (
                 self._database_identity is not None and after != self._database_identity

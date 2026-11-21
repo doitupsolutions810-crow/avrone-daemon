@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import sys
 import json
 from pathlib import Path
 
@@ -16,7 +17,14 @@ def _load_bridge():
     reports = load_plugins(registry, None, directory=ROOT / "plugins", include_entry_points=False)
     report = next(r for r in reports if r["name"] == "platform_bridge")
     assert report["error"] is None
-    module = importlib.import_module("avrone_plugin_platform_bridge")
+    plugin_path = (ROOT / "plugins" / "platform_bridge.py").resolve()
+    module = next(
+        (candidate for candidate in reversed(list(sys.modules.values()))
+         if getattr(candidate, "__file__", None)
+         and Path(candidate.__file__).resolve() == plugin_path),
+        None,
+    )
+    assert module is not None, "the loaded platform bridge module must be discoverable for test doubles"
     return registry, module
 
 

@@ -31,6 +31,7 @@ async def test_gateway_emits_generation_for_real_provider_success(monkeypatch):
     events = []
 
     async def request(upstream, messages, model, temperature, session):
+        gateway_module._AI_USAGE.set({"input_tokens": 17, "output_tokens": 9})
         return "model answer"
 
     monkeypatch.setattr(ai_observability, "capture_generation", lambda **kw: events.append(kw))
@@ -44,6 +45,8 @@ async def test_gateway_emits_generation_for_real_provider_success(monkeypatch):
     assert events[0]["provider"] == "ollama"
     assert events[0]["model"] == "qwen2.5:3b"
     assert events[0]["session"] == "avrone:r-1:Builder"
+    assert events[0]["input_tokens"] == 17
+    assert events[0]["output_tokens"] == 9
     assert events[0]["error"] is False
 
 

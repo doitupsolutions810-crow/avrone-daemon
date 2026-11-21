@@ -53,6 +53,8 @@ jobs:
             echo "- pytest exit: $(cat /tmp/exit 2>/dev/null || echo n/a)"
             echo
             echo '```text'
+            grep -E '^FAILED|^ERROR' /tmp/pytest.log 2>/dev/null || true
+            echo "...(tail)"
             tail -n 60 /tmp/pytest.log 2>/dev/null || true
             echo '```'
           } > docs/ci-latest-report.md

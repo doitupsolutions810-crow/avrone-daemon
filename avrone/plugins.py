@@ -104,20 +104,34 @@ def _module_name(name: str) -> str:
 
 def _load_file(path: Path) -> Any:
     target = path / "__init__.py" if path.is_dir() else path
-    mod_name = _module_name(_plugin_name(path))
+    import re as _re
+    base = "avrone_plugin_" + (_re.sub(r"\W", "_", _plugin_name(path), flags=_re.ASCII) or "_")
+    # Round "w1-collapse": every load used to mint a fresh unique module name, so the second and
+    # later load_plugins() calls in one process ran tool functions from module N while tests and
+    # callers patched/imported module 1 (monkeypatched seams went dead: real requests fired and
+    # test_plugin edges saw fresh instance churn). The same file now re-uses its slot and is
+    # re-executed in place, keeping object identity; only a DIFFERENT file with the same
+    # normalized name still gets a fresh unique slot (round 55 is preserved).
+    mod_name = base
+    i = 2
+    while mod_name in sys.modules and getattr(sys.modules[mod_name], "__file__", None) != str(target):
+        mod_name = f"{base}_{i}"
+        i += 1
     spec = importlib.util.spec_from_file_location(
         mod_name, target, submodule_search_locations=[str(path)] if path.is_dir() else None)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {target}")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[mod_name] = module
+    if mod_name in sys.modules:  # same file loaded before: keep identity, re-execute top level
+        module = sys.modules[mod_name]
+    else:
+        sys.modules[mod_name] = module
     try:
         spec.loader.exec_module(module)
     except BaseException:
         sys.modules.pop(mod_name, None)
         raise
     return module
-
 
 def load_plugins(registry: ToolRegistry, settings: Any = None,
                  directory: str | os.PathLike | None = None,

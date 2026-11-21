@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import Decimal
 import numbers
 import operator
 from typing import TYPE_CHECKING, Any
@@ -53,7 +54,13 @@ def heat(h: float) -> float:
     if math.isnan(x):  # round 55: min/max turned NaN into 1.0, i.e. "on the cone floor"; JS gives NaN
         return math.nan
     x = max(0.0, min(1.0, x))
-    return x * (1 - x)
+    # Work from the shortest round-trippable decimal representation so values
+    # such as 0.005 and 0.995 share the same complement exactly. This preserves
+    # the orientation-blind Bernoulli variance without float-subtraction drift.
+    probability = Decimal(str(x))
+    complement = Decimal(1) - probability
+    lower = min(probability, complement)
+    return float(lower * (Decimal(1) - lower))
 
 
 def residual_count(s: float) -> float:

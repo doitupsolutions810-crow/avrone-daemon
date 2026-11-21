@@ -389,6 +389,30 @@ def is_mirror(event: dict[str, Any]) -> bool:
     return False
 
 
+def ledger_evidence(accounts: dict[str, int]) -> dict[str, Any]:
+    """Map resolved ledger outcomes onto the Great Scale evidence channel.
+
+    A trial is one admitted key that has left ``pending``. ``failures`` is F,
+    ``runs`` is D + F. Pending keys are not successes and not failures, so they
+    are not in the Bernoulli count. ``heat``, ``cone_angle``, and ``beta_t``
+    on a payload are unrelated fields and are not this ``p``.
+    """
+    from .greatscale import evidence_snapshot
+    delivered = int(accounts.get("D", 0))
+    failed = int(accounts.get("F", 0))
+    pending = int(accounts.get("P", 0))
+    admitted = int(accounts.get("A", delivered + failed + pending))
+    resolved = delivered + failed
+    out: dict[str, Any] = {
+        "A": admitted, "D": delivered, "P": pending, "F": failed, "resolved": resolved,
+    }
+    if resolved == 0:
+        out["note"] = "no resolved keys"
+        return out
+    out.update(evidence_snapshot(failed, resolved))
+    return out
+
+
 def event_from_post(post: dict[str, Any]) -> dict[str, Any]:
     """One Avrone blackboard post as a CycleKernal event. Source is ``avrone``."""
     payload = {
@@ -814,8 +838,13 @@ class Ledger:
 
 
 def _header_unsafe(value: str) -> bool:
-    """CR, LF, or NUL in a header value is not a token. It is not a dead peer."""
-    return any(ch in value for ch in "\r\n\x00")
+    """A C0 control or DEL in a header value is not a token and not a dead peer.
+
+    CR and LF would split the header. The rest of C0, and DEL, are not a token
+    the peer can read. Space and every non-ASCII character stay, so a rotation
+    token with spaces is unchanged.
+    """
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
 
 
 def _classify(result: HttpResult) -> str:

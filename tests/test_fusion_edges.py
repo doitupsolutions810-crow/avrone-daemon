@@ -1073,6 +1073,48 @@ def test_ports_do_not_share_a_breaker_and_a_zone_id_is_still_loopback(tmp_path):
     assert posts == [1]
 
 
+def test_tab_in_token_is_not_a_header_and_nesting_32_is_the_last_legal_depth(tmp_path):
+    clock = ManualClock()
+    tape = Tape(clock, ["200"])
+    ledger = Ledger(tmp_path / "tab.json", clock)
+    ledger.offer(_event(eid="tab"))
+    report = ledger.pump(tape, _cfg(token="ab\tcd"), max_cycles=1)
+    assert tape.posts == 0
+    assert report["P"] == 1 and report["F"] == 0
+    assert ledger.breaker_for("http://127.0.0.1:8090").fails == 0
+    # A space is still a legal token character.
+    tape.modes = ["200"]
+    report = ledger.pump(tape, _cfg(token="ab cd"), max_cycles=1)
+    assert tape.posts == 1 and report["D"] == 1
+    assert tape.headers[-1]["X-Admin-Token"] == "ab cd"
+
+
+def test_resolved_ledger_maps_onto_greatscale_without_using_payload_fields(tmp_path):
+    from avrone.fusion_deliver import ledger_evidence
+    from avrone.greatscale import CONE, evidence_snapshot
+    ledger = Ledger(tmp_path / "ev.json", ManualClock())
+    assert ledger_evidence(ledger.accounts())["note"] == "no resolved keys"
+    ledger.offer(_event(eid="ok", heat=0.2, cone_angle=1.25, beta_t="payload-field"))
+    # Still pending: not a Bernoulli trial yet.
+    pending = ledger_evidence(ledger.accounts())
+    assert pending["P"] == 1 and pending.get("note") == "no resolved keys"
+    clock = ManualClock()
+    ledger.clock = clock
+    tape = Tape(clock, ["400", "200"])
+    ledger.offer(_event(eid="bad"))
+    ledger.pump(tape, _cfg(), max_cycles=2)
+    snap = ledger_evidence(ledger.accounts())
+    # One permanent 400 and one 200. Pending is gone. p = 1/2.
+    assert snap["failures"] == 1 and snap["runs"] == 2 and snap["p"] == 0.5
+    assert snap["S"] == 0.25
+    assert snap["orientation"] == "mixed"
+    assert abs(snap["psi"] - (CONE + 0.25)) < 1e-12
+    assert snap == {**snap, **{k: evidence_snapshot(1, 2)[k] for k in ("S", "psi", "orientation")}}
+    # The payload fields are still the stored numbers, not this p.
+    stored = ledger.entries[("avrone", "ok")]["event"]["payload"]
+    assert stored["heat"] == 0.2 and stored["cone_angle"] == 1.25
+
+
 def test_blank_base_falls_back_and_max_cycles_zero_still_tries_once(monkeypatch, tmp_path):
     monkeypatch.setenv("CK_BASE", "   ")
     monkeypatch.delenv("CK_FUSION_TOKEN", raising=False)

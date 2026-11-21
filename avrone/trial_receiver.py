@@ -326,8 +326,21 @@ class TrialStore:
             if (current.st_dev, current.st_ino) != identity:
                 raise TrialStoreError(label + " path changed before permission finalization")
             os.fchmod(fd, 0o600)
-            after = path.lstat()
+            try:
+                after = path.lstat()
+            except FileNotFoundError:
+                if allow_missing:
+                    # A concurrent SQLite last-closer unlinked this sidecar
+                    # after we pinned and secured its inode. The subsequent
+                    # path-level assertion validates any replacement.
+                    return
+                raise
             if (after.st_dev, after.st_ino) != identity:
+                if allow_missing:
+                    # Another initializer replaced the sidecar. Do not bless
+                    # the replacement here; _assert_sidecar_files immediately
+                    # reopens and validates the current pathname.
+                    return
                 raise TrialStoreError(label + " path changed during permission finalization")
             if stat.S_IMODE(after.st_mode) != 0o600:
                 raise TrialStoreError(label + " permissions could not be finalized to 0600")

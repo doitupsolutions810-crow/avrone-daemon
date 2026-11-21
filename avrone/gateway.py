@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextvars import ContextVar
 
 from .safeio import json_loads as _jloads  # round 111: RecursionError -> JSONDecodeError
 import os
@@ -36,6 +37,31 @@ HTTP_TRANSPORT: httpx.AsyncBaseTransport | None = None
 
 class LLMError(RuntimeError):
     pass
+
+
+# Per-async-task response usage; avoids shared mutable state across concurrent agents.
+_AI_USAGE: ContextVar[dict[str, int] | None] = ContextVar("avrone_ai_usage", default=None)
+
+
+def _provider_usage(response: httpx.Response) -> dict[str, int] | None:
+    try:
+        payload = response.json()
+        usage = payload.get("usage") if isinstance(payload, dict) else None
+        if not isinstance(usage, dict):
+            return None
+        result: dict[str, int] = {}
+        for target, keys in (
+            ("input_tokens", ("prompt_tokens", "input_tokens", "prompt_eval_count")),
+            ("output_tokens", ("completion_tokens", "output_tokens", "eval_count")),
+        ):
+            for key in keys:
+                value = usage.get(key)
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    result[target] = value
+                    break
+        return result or None
+    except Exception:  # provider response may be SSE or a non-JSON success body
+        return None
 
 
 def is_loopback_url(url: str) -> bool:
@@ -146,6 +172,7 @@ class Gateway:
 
     async def _request(self, up: Upstream, messages: list[dict[str, str]], model: str | None,
                        temperature: float, session: str | None) -> str:
+        _AI_USAGE.set(None)
         headers = {"Content-Type": "application/json"}
         if up.api_key:
             headers["Authorization"] = f"Bearer {up.api_key}"
@@ -168,6 +195,7 @@ class Gateway:
         if r.status_code >= 400:
             # Permanent for this upstream (bad request, auth): don't retry it, but fail over.
             raise _Permanent(f"{up.provider} {r.status_code}: {r.text[:300]}")
+        _AI_USAGE.set(_provider_usage(r))
         try:
             choice, msg = extract_choice(r.text)
             content = msg.get("content") or ""
@@ -228,17 +256,22 @@ class Gateway:
                         # Mark this provider attempt as failed, but never let telemetry mask its error.
                         try:
                             from .ai_observability import capture_generation
+                            usage = _AI_USAGE.get() or {}
                             capture_generation(session=session, provider=up.provider, model=use_model,
                                                latency_s=time.perf_counter() - started,
-                                               messages=msgs, error=True)
+                                               messages=msgs, input_tokens=usage.get("input_tokens"),
+                                               output_tokens=usage.get("output_tokens"), error=True)
                         except Exception:  # noqa: BLE001
                             pass
                         raise
                     try:
                         from .ai_observability import capture_generation
+                        usage = _AI_USAGE.get() or {}
                         capture_generation(session=session, provider=up.provider, model=use_model,
                                            latency_s=time.perf_counter() - started,
-                                           messages=msgs, output=out)
+                                           messages=msgs, output=out,
+                                           input_tokens=usage.get("input_tokens"),
+                                           output_tokens=usage.get("output_tokens"))
                     except Exception:  # noqa: BLE001 - observability must not affect model routing
                         pass
                     up.record(True, self.threshold, self.cooldown)

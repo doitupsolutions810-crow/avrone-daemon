@@ -163,6 +163,8 @@ async def build_core(settings: Settings, *, extras: bool = True) -> tuple[Trinit
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     runner = await establish(settings)  # environment FIRST
     cleanups: list[Cleanup] = [runner.stop]
+    from .ai_observability import shutdown as shutdown_ai_observability
+    cleanups.append(shutdown_ai_observability)
     codex = Codex(settings.data_dir)
     registry = builtin_registry()
     core = TrinityCore(settings, LLM(settings), runner, codex, tools=registry)

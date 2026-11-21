@@ -9,7 +9,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "${{ matrix.python }}" }
-      - name: Install avrone (dev)
+      - name: Install avrone (dev + optional integrations)
         run: |
           set -o pipefail
           # Defensive checkout hygiene: some file-delivery layers prepend a
@@ -22,7 +22,7 @@ jobs:
             while IFS= read -r f; do sed -i '1{/^successfully downloaded text file/d}' "$f"; done < /tmp/wrapped-files.txt
           fi
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]" 2>&1 | tee /tmp/pip.log || {
+          python -m pip install -e ".[dev,observability,redis-memory]" 2>&1 | tee /tmp/pip.log || {
             tail -n 8 /tmp/pip.log | while IFS= read -r l; do
               l="${l//%/%25}"
               echo "::error::${l:0:220}"

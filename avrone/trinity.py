@@ -784,6 +784,14 @@ class TrinityCore:
         async with self._sem:
             return await self.llm.chat(messages, **kw)
 
+    async def _record_iris_turn(self, run_id: str, task: str, answer: str) -> None:
+        """Best-effort owner-scoped Redis Iris session write; local state remains authoritative."""
+        try:
+            from .iris_memory import record_turn
+            await asyncio.to_thread(record_turn, run_id, task, answer)
+        except Exception:  # noqa: BLE001 - optional memory service must never fail a run
+            pass
+
     # ------------------------------------------------------------ one agent
     async def run_agent(self, run_id: str, role: str, task: str, focus: str | None = None,
                         parent: str | None = None, depth: int = 0, system: str | None = None,
@@ -983,6 +991,7 @@ class TrinityCore:
                         step: int, budget: dict[str, int]) -> tuple[str, str]:
         """Run one pre-checked call, logged as tool.call/tool.result. Never raises."""
         tool, args = call["tool"], call["args"]
+        started = time.perf_counter()
         self.codex.emit(run_id, "tool.call", name, tool=tool, args=clip_strings(args, codex_arg_chars()), step=step)
         if call["error"] is not None:
             out = call["error"]
@@ -998,6 +1007,13 @@ class TrinityCore:
         except AttributeError:  # pragma: no cover - foreign ctx objects
             pass
         self.codex.emit(run_id, "tool.result", name, tool=tool, output=out[:4000])
+        try:
+            from .ai_observability import capture_tool_span
+            capture_tool_span(run_id=run_id, agent=name, tool=tool, args=args, output=out,
+                              latency_s=time.perf_counter() - started,
+                              error=(call["error"] is not None or out.lstrip().startswith("ERROR")))
+        except Exception:  # noqa: BLE001 - observability must never change tool semantics
+            pass
         return tool, out
 
     def _worker_limit(self, run_id: str, n: int) -> int:
@@ -1279,6 +1295,7 @@ class TrinityCore:
             out["lessons_learned"] = learned
         if ck is not None and not answer.startswith("Lead failed ("):
             await asyncio.to_thread(ck.put, "result", out)  # a failed merge is retried on resume
+        await self._record_iris_turn(run_id, task, answer)
         return out
 
     # ------------------------------------------------------------ deep analysis
@@ -1431,6 +1448,7 @@ class TrinityCore:
             out["lessons_learned"] = learned
         if ck is not None and lead_ok:
             await asyncio.to_thread(ck.put, "result", out)
+        await self._record_iris_turn(run_id, task, report)
         return out
 
     async def _deep_wave(self, run_id: str, rnd: int, brief: str,
@@ -1567,4 +1585,5 @@ class TrinityCore:
         self.codex.emit(run_id, "run.start", "Trinity", prompt=task, mode="chat")
         answer = await self.run_agent(run_id, "Assistant", task)
         self.codex.emit(run_id, "run.done", "Trinity", answer=answer)
+        await self._record_iris_turn(run_id, task, answer)
         return {"run_id": run_id, "answer": answer, "agents": []}

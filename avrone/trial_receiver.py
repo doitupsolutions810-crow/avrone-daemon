@@ -22,10 +22,42 @@ MAX_TRIAL_RECORDS = 100_000
 MAX_RECEIPTS = 100_000
 MAX_QUARANTINE_RECORDS = 1_000
 MAX_QUARANTINED_SENDERS = 1_000
-DB_SCHEMA_VERSION = 2  # v0 is unversioned; v1 adds per-delivery bridge provenance
+DB_SCHEMA_VERSION = 3  # v3 binds persisted first-receipt, delivery, and quarantine provenance
 WAL_MODE_RETRY_SECONDS = 10.0
 WAL_MODE_RETRY_INITIAL_SECONDS = 0.01
 WAL_MODE_RETRY_MAX_SECONDS = 0.25
+
+
+_PROVENANCE_RESULTS = frozenset({
+    "accepted", "duplicate", "non_pass_stored", "conflict_quarantined", "sender_quarantined",
+})
+_PROVENANCE_REASONS = frozenset({
+    "canonical source/check/attempt identity arrived with a different trial_id",
+    "same trial_id arrived with a different canonical envelope",
+})
+
+
+def _provenance_time(value: Any) -> str:
+    """Encode a finite SQLite timestamp as its exact binary64 value."""
+    if type(value) not in (int, float):
+        raise ValueError("provenance timestamp must be numeric")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError("provenance timestamp must be finite and non-negative")
+    return number.hex()
+
+
+def _provenance_sha256(kind: str, fields: dict[str, Any]) -> str:
+    """Domain-separated digest for mutable receiver metadata (not a keyed signature)."""
+    normalized = dict(fields)
+    for key in ("received_at", "quarantined_at"):
+        if key in normalized:
+            normalized[key] = _provenance_time(normalized[key])
+    raw = json.dumps(
+        {"domain": "avrone.trial-provenance/v1", "kind": kind, "fields": normalized},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 class TrialStoreError(RuntimeError):
@@ -140,6 +172,129 @@ class TrialStore:
         if str(mode).lower() != "wal":
             raise TrialStoreError("SQLite WAL mode is unavailable")
 
+
+    @classmethod
+    def _backfill_provenance(cls, db: sqlite3.Connection) -> None:
+        """Backfill v3 metadata digests in bounded batches inside the schema transaction."""
+        cursor = db.execute(
+            "SELECT trial_id,source_identity_key,payload_sha256,first_sender,first_transport,"
+            "bridge_run_id,received_at FROM trials ORDER BY trial_id"
+        )
+        seen = 0
+        while True:
+            batch = cursor.fetchmany(128)
+            if not batch:
+                break
+            seen += len(batch)
+            if seen > MAX_TRIAL_RECORDS:
+                raise TrialStoreError("existing trial provenance exceeds the record bound")
+            for row in batch:
+                if (not isinstance(row["first_sender"], str)
+                        or not SENDER_RE.fullmatch(row["first_sender"])
+                        or row["first_transport"] not in {"fleet", "bridge"}):
+                    raise TrialStoreError("existing trial provenance cannot be validated for migration")
+                if row["first_transport"] == "bridge":
+                    if not cls._valid_bridge_run_id(row["bridge_run_id"]):
+                        raise TrialStoreError("existing trial bridge provenance cannot be validated for migration")
+                elif row["bridge_run_id"] is not None:
+                    raise TrialStoreError("existing trial fleet provenance cannot be validated for migration")
+                cls._verify_received_at(row["received_at"], "trial migration")
+                digest = _provenance_sha256("trial-first-receipt", {
+                    "trial_id": row["trial_id"], "source_identity_key": row["source_identity_key"],
+                    "payload_sha256": row["payload_sha256"], "first_sender": row["first_sender"],
+                    "first_transport": row["first_transport"], "bridge_run_id": row["bridge_run_id"],
+                    "received_at": row["received_at"],
+                })
+                db.execute("UPDATE trials SET provenance_sha256=? WHERE trial_id=?", (digest, row["trial_id"]))
+
+        cursor = db.execute(
+            "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,result,payload_sha256,received_at "
+            "FROM trial_receipts ORDER BY receipt_id"
+        )
+        seen = 0
+        while True:
+            batch = cursor.fetchmany(128)
+            if not batch:
+                break
+            seen += len(batch)
+            if seen > MAX_RECEIPTS:
+                raise TrialStoreError("existing receipt provenance exceeds the record bound")
+            for row in batch:
+                if (not isinstance(row["trial_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["trial_id"])
+                        or not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
+                        or row["transport"] not in {"fleet", "bridge"}
+                        or row["result"] not in _PROVENANCE_RESULTS):
+                    raise TrialStoreError("existing receipt provenance cannot be validated for migration")
+                if row["transport"] == "bridge":
+                    if not cls._valid_bridge_run_id(row["bridge_run_id"]):
+                        raise TrialStoreError("existing receipt bridge provenance cannot be validated for migration")
+                elif row["bridge_run_id"] is not None:
+                    raise TrialStoreError("existing receipt fleet provenance cannot be validated for migration")
+                cls._verify_received_at(row["received_at"], "receipt migration")
+                digest = _provenance_sha256("delivery-receipt", {
+                    "trial_id": row["trial_id"], "sender": row["sender"],
+                    "transport": row["transport"], "bridge_run_id": row["bridge_run_id"],
+                    "result": row["result"], "payload_sha256": row["payload_sha256"],
+                    "received_at": row["received_at"],
+                })
+                db.execute("UPDATE trial_receipts SET provenance_sha256=? WHERE receipt_id=?", (digest, row["receipt_id"]))
+
+        cursor = db.execute(
+            "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,received_at "
+            "FROM trial_quarantine ORDER BY quarantine_id"
+        )
+        seen = 0
+        while True:
+            batch = cursor.fetchmany(128)
+            if not batch:
+                break
+            seen += len(batch)
+            if seen > MAX_QUARANTINE_RECORDS:
+                raise TrialStoreError("existing quarantine provenance exceeds the record bound")
+            for row in batch:
+                if (not isinstance(row["trial_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["trial_id"])
+                        or not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
+                        or row["transport"] not in {"fleet", "bridge"}
+                        or row["reason"] not in _PROVENANCE_REASONS):
+                    raise TrialStoreError("existing quarantine provenance cannot be validated for migration")
+                if row["transport"] == "bridge":
+                    if not cls._valid_bridge_run_id(row["bridge_run_id"]):
+                        raise TrialStoreError("existing quarantine bridge provenance cannot be validated for migration")
+                elif row["bridge_run_id"] is not None:
+                    raise TrialStoreError("existing quarantine fleet provenance cannot be validated for migration")
+                cls._verify_received_at(row["received_at"], "quarantine migration")
+                digest = _provenance_sha256("conflict-quarantine", {
+                    "trial_id": row["trial_id"], "sender": row["sender"],
+                    "transport": row["transport"], "bridge_run_id": row["bridge_run_id"],
+                    "reason": row["reason"], "incoming_sha256": row["incoming_sha256"],
+                    "received_at": row["received_at"],
+                })
+                db.execute("UPDATE trial_quarantine SET provenance_sha256=? WHERE quarantine_id=?", (digest, row["quarantine_id"]))
+
+        cursor = db.execute(
+            "SELECT sender,first_trial_id,reason,quarantined_at FROM trial_quarantined_senders ORDER BY sender"
+        )
+        seen = 0
+        while True:
+            batch = cursor.fetchmany(128)
+            if not batch:
+                break
+            seen += len(batch)
+            if seen > MAX_QUARANTINED_SENDERS:
+                raise TrialStoreError("existing sender quarantine provenance exceeds the record bound")
+            for row in batch:
+                if (not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"])
+                        or not isinstance(row["first_trial_id"], str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", row["first_trial_id"])
+                        or row["reason"] not in _PROVENANCE_REASONS):
+                    raise TrialStoreError("existing sender quarantine provenance cannot be validated for migration")
+                cls._verify_received_at(row["quarantined_at"], "sender quarantine migration")
+                digest = _provenance_sha256("sender-quarantine-anchor", {
+                    "sender": row["sender"], "first_trial_id": row["first_trial_id"],
+                    "reason": row["reason"], "quarantined_at": row["quarantined_at"],
+                })
+                db.execute("UPDATE trial_quarantined_senders SET provenance_sha256=? WHERE sender=?", (digest, row["sender"]))
+
     def _initialize(self) -> None:
         db = self._connect()
         try:
@@ -174,7 +329,8 @@ class TrialStore:
                     first_sender TEXT NOT NULL,
                     first_transport TEXT NOT NULL,
                     bridge_run_id TEXT,
-                    received_at REAL NOT NULL
+                    received_at REAL NOT NULL,
+                    provenance_sha256 TEXT NOT NULL
                 )
                 """,
                 """
@@ -186,7 +342,8 @@ class TrialStore:
                     bridge_run_id TEXT,
                     result TEXT NOT NULL,
                     payload_sha256 TEXT NOT NULL,
-                    received_at REAL NOT NULL
+                    received_at REAL NOT NULL,
+                    provenance_sha256 TEXT NOT NULL
                 )
                 """,
                 """
@@ -199,7 +356,8 @@ class TrialStore:
                     reason TEXT NOT NULL,
                     incoming_sha256 TEXT NOT NULL,
                     incoming_json BLOB NOT NULL,
-                    received_at REAL NOT NULL
+                    received_at REAL NOT NULL,
+                    provenance_sha256 TEXT NOT NULL
                 )
                 """,
                 """
@@ -207,7 +365,8 @@ class TrialStore:
                     sender TEXT PRIMARY KEY,
                     first_trial_id TEXT NOT NULL,
                     reason TEXT NOT NULL,
-                    quarantined_at REAL NOT NULL
+                    quarantined_at REAL NOT NULL,
+                    provenance_sha256 TEXT NOT NULL
                 )
                 """,
             )
@@ -219,17 +378,18 @@ class TrialStore:
                     "trial_id", "source_identity_key", "canonical_json", "payload_sha256", "outcome", "system", "node",
                     "source", "run_id", "check_id", "check_version", "check_config_sha256",
                     "attempt_id", "first_sender", "first_transport", "bridge_run_id", "received_at",
+                    "provenance_sha256",
                 },
                 "trial_receipts": {
                     "receipt_id", "trial_id", "sender", "transport", "bridge_run_id", "result",
-                    "payload_sha256", "received_at",
+                    "payload_sha256", "received_at", "provenance_sha256",
                 },
                 "trial_quarantine": {
                     "quarantine_id", "trial_id", "sender", "transport", "bridge_run_id", "reason",
-                    "incoming_sha256", "incoming_json", "received_at",
+                    "incoming_sha256", "incoming_json", "received_at", "provenance_sha256",
                 },
                 "trial_quarantined_senders": {
-                    "sender", "first_trial_id", "reason", "quarantined_at",
+                    "sender", "first_trial_id", "reason", "quarantined_at", "provenance_sha256",
                 },
             }
             for table, required in required_columns.items():
@@ -244,12 +404,23 @@ class TrialStore:
                 if table == "trials" and "source_identity_key" not in present:
                     db.execute("ALTER TABLE trials ADD COLUMN source_identity_key TEXT")
                     present.add("source_identity_key")
+                if "provenance_sha256" not in present:
+                    # A database already claiming this schema version must have the
+                    # complete v3 provenance layout. Do not silently add a nullable
+                    # column and skip backfill when another v3 feature layout is present.
+                    if version >= DB_SCHEMA_VERSION:
+                        raise TrialStoreError(
+                            f"trial database schema version {version} is missing "
+                            f"provenance metadata in {table}"
+                        )
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN provenance_sha256 TEXT")
+                    present.add("provenance_sha256")
                 missing = required - present
                 if missing:
                     names = ", ".join(sorted(missing))
                     raise TrialStoreError(f"trial database schema is missing required columns in {table}: {names}")
 
-            if version < DB_SCHEMA_VERSION:
+            if version < 2:
                 rows = db.execute(
                     "SELECT trial_id,canonical_json,source_identity_key FROM trials ORDER BY trial_id"
                 ).fetchall()
@@ -277,6 +448,9 @@ class TrialStore:
                     raise TrialStoreError(
                         "existing trial records contain canonical source/attempt aliases; manual review required"
                     )
+
+            if version < 3:
+                self._backfill_provenance(db)
 
             missing_identity_key = db.execute(
                 "SELECT 1 FROM trials WHERE source_identity_key IS NULL LIMIT 1"
@@ -313,6 +487,23 @@ class TrialStore:
                 END
                 """
             )
+            for table in ("trials", "trial_receipts", "trial_quarantine", "trial_quarantined_senders"):
+                for action in ("INSERT", "UPDATE"):
+                    suffix = action.lower()
+                    trigger_event = "INSERT" if action == "INSERT" else "UPDATE OF provenance_sha256"
+                    db.execute(
+                        f"""
+                        CREATE TRIGGER IF NOT EXISTS {table}_provenance_sha256_required_{suffix}
+                        BEFORE {trigger_event} ON {table}
+                        WHEN NEW.provenance_sha256 IS NULL
+                            OR typeof(NEW.provenance_sha256) != 'text'
+                            OR length(NEW.provenance_sha256) != 64
+                            OR NEW.provenance_sha256 GLOB '*[^0-9a-f]*'
+                        BEGIN
+                            SELECT RAISE(ABORT, 'invalid provenance_sha256');
+                        END
+                        """
+                    )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS trial_receipts_trial_id ON trial_receipts(trial_id)"
             )
@@ -337,10 +528,15 @@ class TrialStore:
         result: str, payload_sha256: str, received_at: float,
         bridge_run_id: str | None = None,
     ) -> None:
+        provenance = _provenance_sha256("delivery-receipt", {
+            "trial_id": trial_id, "sender": sender, "transport": transport,
+            "bridge_run_id": bridge_run_id, "result": result,
+            "payload_sha256": payload_sha256, "received_at": received_at,
+        })
         db.execute(
-            "INSERT INTO trial_receipts(trial_id,sender,transport,bridge_run_id,result,payload_sha256,received_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (trial_id, sender, transport, bridge_run_id, result, payload_sha256, received_at),
+            "INSERT INTO trial_receipts(trial_id,sender,transport,bridge_run_id,result,payload_sha256,received_at,provenance_sha256) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (trial_id, sender, transport, bridge_run_id, result, payload_sha256, received_at, provenance),
         )
         db.execute(
             "DELETE FROM trial_receipts WHERE receipt_id IN "
@@ -410,13 +606,13 @@ class TrialStore:
         if not isinstance(sender, str) or not SENDER_RE.fullmatch(sender):
             raise TrialStoreError("trial quarantine sender identity integrity check failed")
         state = db.execute(
-            "SELECT sender,first_trial_id,reason,quarantined_at "
+            "SELECT sender,first_trial_id,reason,quarantined_at,provenance_sha256 "
             "FROM trial_quarantined_senders WHERE sender=?",
             (sender,),
         ).fetchone()
         rows = db.execute(
             "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,"
-            "incoming_sha256,incoming_json,received_at FROM trial_quarantine "
+            "incoming_sha256,incoming_json,received_at,provenance_sha256 FROM trial_quarantine "
             "WHERE sender=? ORDER BY quarantine_id",
             (sender,),
         ).fetchmany(MAX_QUARANTINE_RECORDS + 1)
@@ -439,6 +635,12 @@ class TrialStore:
             or state["quarantined_at"] != first["received_at"]
         ):
             raise TrialStoreError("trial sender quarantine state integrity check failed")
+        expected_state_digest = _provenance_sha256("sender-quarantine-anchor", {
+            "sender": state["sender"], "first_trial_id": state["first_trial_id"],
+            "reason": state["reason"], "quarantined_at": state["quarantined_at"],
+        })
+        if state["provenance_sha256"] != expected_state_digest:
+            raise TrialStoreError("trial sender quarantine provenance integrity check failed")
         return True
 
 
@@ -477,8 +679,8 @@ class TrialStore:
                             INSERT INTO trials(
                                 trial_id,source_identity_key,canonical_json,payload_sha256,outcome,system,node,source,
                                 run_id,check_id,check_version,check_config_sha256,attempt_id,
-                                first_sender,first_transport,bridge_run_id,received_at
-                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                first_sender,first_transport,bridge_run_id,received_at,provenance_sha256
+                            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """,
                             (
                                 trial_id, source_identity_key, raw, digest, envelope["outcome"], envelope["system"],
@@ -486,6 +688,12 @@ class TrialStore:
                                 envelope["check_id"], envelope["check_version"],
                                 envelope["check_config_sha256"], envelope["attempt_id"],
                                 sender, transport, bridge_run_id, now,
+                                _provenance_sha256("trial-first-receipt", {
+                                    "trial_id": trial_id, "source_identity_key": source_identity_key,
+                                    "payload_sha256": digest, "first_sender": sender,
+                                    "first_transport": transport, "bridge_run_id": bridge_run_id,
+                                    "received_at": now,
+                                }),
                             ),
                         )
                         status = "accepted" if envelope["outcome"] in {"pass", "fail"} else "non_pass_stored"
@@ -513,19 +721,28 @@ class TrialStore:
                     db.execute(
                         """
                         INSERT INTO trial_quarantine(
-                            trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,incoming_json,received_at
-                        ) VALUES(?,?,?,?,?,?,?,?)
+                            trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,incoming_json,received_at,provenance_sha256
+                        ) VALUES(?,?,?,?,?,?,?,?,?)
                         """,
                         (
                             trial_id, sender, transport, bridge_run_id,
                             conflict_reason, digest, raw, now,
+                            _provenance_sha256("conflict-quarantine", {
+                                "trial_id": trial_id, "sender": sender, "transport": transport,
+                                "bridge_run_id": bridge_run_id, "reason": conflict_reason,
+                                "incoming_sha256": digest, "received_at": now,
+                            }),
                         ),
                     )
                     db.execute(
                         "INSERT OR IGNORE INTO trial_quarantined_senders"
-                        "(sender,first_trial_id,reason,quarantined_at) VALUES(?,?,?,?)",
+                        "(sender,first_trial_id,reason,quarantined_at,provenance_sha256) VALUES(?,?,?,?,?)",
                         (
                             sender, trial_id, conflict_reason, now,
+                            _provenance_sha256("sender-quarantine-anchor", {
+                                "sender": sender, "first_trial_id": trial_id,
+                                "reason": conflict_reason, "quarantined_at": now,
+                            }),
                         ),
                     )
                     status = "conflict_quarantined"
@@ -619,6 +836,14 @@ class TrialStore:
         elif bridge_run_id is not None:
             raise TrialStoreError("trial bridge provenance integrity check failed")
         cls._verify_received_at(row["received_at"], "trial")
+        expected_provenance = _provenance_sha256("trial-first-receipt", {
+            "trial_id": row["trial_id"], "source_identity_key": row["source_identity_key"],
+            "payload_sha256": row["payload_sha256"], "first_sender": sender,
+            "first_transport": transport, "bridge_run_id": bridge_run_id,
+            "received_at": row["received_at"],
+        })
+        if row["provenance_sha256"] != expected_provenance:
+            raise TrialStoreError("trial first-receipt provenance integrity check failed")
 
     @classmethod
     def _iter_verified_trial_rows(cls, db: sqlite3.Connection):
@@ -626,7 +851,7 @@ class TrialStore:
         cursor = db.execute(
             "SELECT trial_id,source_identity_key,canonical_json,payload_sha256,outcome,"
             "system,node,source,run_id,check_id,check_version,check_config_sha256,attempt_id,"
-            "first_sender,first_transport,bridge_run_id,received_at "
+            "first_sender,first_transport,bridge_run_id,received_at,provenance_sha256 "
             "FROM trials ORDER BY trial_id"
         )
         seen = 0
@@ -666,6 +891,63 @@ class TrialStore:
         }:
             raise TrialStoreError("quarantine reason integrity check failed")
         cls._verify_received_at(row["received_at"], "quarantine")
+        expected_provenance = _provenance_sha256("conflict-quarantine", {
+            "trial_id": row["trial_id"], "sender": sender, "transport": transport,
+            "bridge_run_id": bridge_run_id, "reason": row["reason"],
+            "incoming_sha256": row["incoming_sha256"], "received_at": row["received_at"],
+        })
+        if row["provenance_sha256"] != expected_provenance:
+            raise TrialStoreError("quarantine provenance integrity check failed")
+
+
+    @classmethod
+    def _verify_receipt_row(cls, row: sqlite3.Row) -> None:
+        if not isinstance(row["trial_id"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["trial_id"]):
+            raise TrialStoreError("trial receipt identity integrity check failed")
+        if not isinstance(row["sender"], str) or not SENDER_RE.fullmatch(row["sender"]):
+            raise TrialStoreError("trial receipt sender provenance integrity check failed")
+        if row["transport"] not in {"fleet", "bridge"} or row["result"] not in _PROVENANCE_RESULTS:
+            raise TrialStoreError("trial receipt state integrity check failed")
+        if not isinstance(row["payload_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["payload_sha256"]):
+            raise TrialStoreError("trial receipt payload digest integrity check failed")
+        if row["transport"] == "bridge":
+            if not cls._valid_bridge_run_id(row["bridge_run_id"]):
+                raise TrialStoreError("trial receipt bridge provenance integrity check failed")
+        elif row["bridge_run_id"] is not None:
+            raise TrialStoreError("trial receipt bridge provenance integrity check failed")
+        cls._verify_received_at(row["received_at"], "receipt")
+        expected = _provenance_sha256("delivery-receipt", {
+            "trial_id": row["trial_id"], "sender": row["sender"],
+            "transport": row["transport"], "bridge_run_id": row["bridge_run_id"],
+            "result": row["result"], "payload_sha256": row["payload_sha256"],
+            "received_at": row["received_at"],
+        })
+        if row["provenance_sha256"] != expected:
+            raise TrialStoreError("trial receipt provenance integrity check failed")
+
+    def receipt_records(self) -> list[dict[str, Any]]:
+        """Return the bounded delivery audit only after validating every receipt digest."""
+        db = self._connect()
+        try:
+            db.execute("BEGIN")
+            rows = db.execute(
+                "SELECT receipt_id,trial_id,sender,transport,bridge_run_id,result,payload_sha256,"
+                "received_at,provenance_sha256 FROM trial_receipts ORDER BY receipt_id"
+            ).fetchmany(MAX_RECEIPTS + 1)
+            if len(rows) > MAX_RECEIPTS:
+                raise TrialStoreError("trial receipt integrity check exceeds the record bound")
+            records = []
+            for row in rows:
+                self._verify_receipt_row(row)
+                records.append({key: row[key] for key in (
+                    "receipt_id", "trial_id", "sender", "transport", "bridge_run_id",
+                    "result", "payload_sha256", "received_at", "provenance_sha256",
+                )})
+            return records
+        except sqlite3.Error as exc:
+            raise TrialStoreError("trial receipt read failed") from exc
+        finally:
+            db.close()
 
     def pool_snapshot(self) -> dict[str, Any]:
         db = self._connect()
@@ -711,7 +993,7 @@ class TrialStore:
         """Verify quarantine payloads and their cross-table sender enforcement state."""
         cursor = db.execute(
             "SELECT quarantine_id,trial_id,sender,transport,bridge_run_id,reason,incoming_sha256,"
-            "incoming_json,received_at FROM trial_quarantine ORDER BY quarantine_id"
+            "incoming_json,received_at,provenance_sha256 FROM trial_quarantine ORDER BY quarantine_id"
         )
         records = []
         first_by_sender: dict[str, tuple[str, str, float]] = {}
@@ -731,10 +1013,11 @@ class TrialStore:
                 "reason": row["reason"],
                 "incoming_sha256": row["incoming_sha256"],
                 "received_at": row["received_at"],
+                "provenance_sha256": row["provenance_sha256"],
             })
 
         sender_rows = db.execute(
-            "SELECT sender,first_trial_id,reason,quarantined_at "
+            "SELECT sender,first_trial_id,reason,quarantined_at,provenance_sha256 "
             "FROM trial_quarantined_senders ORDER BY sender"
         ).fetchmany(MAX_QUARANTINED_SENDERS + 1)
         if len(sender_rows) > MAX_QUARANTINED_SENDERS:
@@ -753,6 +1036,12 @@ class TrialStore:
                 or state["quarantined_at"] != first[2]
             ):
                 raise TrialStoreError("trial quarantined-sender state integrity check failed")
+            expected_state_digest = _provenance_sha256("sender-quarantine-anchor", {
+                "sender": sender, "first_trial_id": state["first_trial_id"],
+                "reason": state["reason"], "quarantined_at": state["quarantined_at"],
+            })
+            if state["provenance_sha256"] != expected_state_digest:
+                raise TrialStoreError("trial quarantined-sender provenance integrity check failed")
         if first_by_sender:
             raise TrialStoreError("trial quarantine sender enforcement state integrity check failed")
         return records

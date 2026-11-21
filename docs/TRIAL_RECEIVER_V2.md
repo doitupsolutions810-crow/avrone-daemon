@@ -53,7 +53,15 @@ accepted, duplicate, non_pass_stored, conflict_quarantined, and sender_quarantin
 An external MCP tool may expose avrone.trial.ingest with the same wrapper schemas, but its authenticated principal must be mapped to an allowlisted fleet sender before calling the receiver. Suggested events are avrone.trial.accepted.v1, avrone.trial.duplicate.v1, avrone.trial.non_pass.v1, and avrone.trial.quarantined.v1. These are contract names only; no external MCP server or dashboard is claimed to be deployed by this change.
 
 
-## Receiver database schema version 2
+## Receiver database schema version 3
+
+**Version 3 is reserved for the provenance-digest layout on this integration stack.** A separate
+open event-sequence proposal also used schema version 3 for a different table layout. Those two
+branches are not interchangeable: do not merge or cherry-pick the event-sequence v3 migration
+verbatim. Re-port its high-water feature as a subsequent schema version (v4) after this migration,
+with one ordered transaction and explicit tests for both feature sets. A database that claims v3
+but lacks the provenance columns now fails closed instead of receiving nullable columns without
+a backfill.
 
 The receiver database uses transactional schema migrations. Version 0 is the legacy unversioned
 layout; version 1 adds per-delivery `bridge_run_id` provenance to receipts and quarantine records.
@@ -81,6 +89,33 @@ attempt ID remains a distinct identity.
 The unique index is supplemented by insert/update triggers that reject NULL, non-text, non-hex,
 or non-64-character source identity keys. This preserves the invariant on migrated databases,
 where SQLite's additive column migration cannot retroactively add a NOT NULL constraint.
+
+
+
+## Receiver database schema version 3 — provenance digests
+
+Schema v3 adds a domain-separated SHA-256 provenance digest to first-seen trial rows,
+per-delivery receipts, conflict-quarantine rows, and sender-quarantine enforcement anchors.
+The digest binds the associated trial/source-identity/payload digest or receipt result to
+sender, transport, bridge-run scope, reason, and the exact binary64 receive timestamp.
+Read paths recompute the digest before exposing the corresponding record. The bounded
+receipt_records() audit reads at most 100,000 retained delivery receipts and verifies each
+record before returning it.
+
+The v2-to-v3 migration adds nullable columns transactionally, backfills in batches of 128,
+validates the existing provenance field shapes, installs insert and provenance-digest-update triggers requiring a
+lowercase 64-character hexadecimal digest, and advances PRAGMA user_version only after all
+backfills and triggers succeed. The migration runs under BEGIN IMMEDIATE; any malformed
+legacy provenance or write failure rolls back the column additions, digest backfills, and
+version change. This migration snapshots the currently stored v2 metadata; it cannot retroactively
+authenticate changes made before v3 because v2 had no receiver-metadata digest. Existing trial IDs,
+envelope bytes, outcomes, source/check-version fields,
+receipt order, and retention limits are unchanged.
+
+These digests are unkeyed tamper-evident checks against partial or accidental metadata
+rewrites. They are not signatures and do not stop a privileged actor from coherently
+rewriting metadata and recomputing all local digests. Per-peer public-key authentication
+and off-host signed anchoring remain separate controls.
 
 ## Remaining trust boundaries
 
@@ -110,3 +145,4 @@ These checks detect partial, accidental, or single-field local rewrites. They ar
 a cryptographic defense against a privileged actor who can coherently rewrite the
 canonical envelope, its digest, every projected column, and related SQLite state.
 Off-host signed anchoring remains a separate control.
+

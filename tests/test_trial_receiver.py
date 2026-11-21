@@ -220,7 +220,7 @@ def test_legacy_schema_migrates_and_preserves_bridge_run_per_delivery(tmp_path):
     finally:
         db.close()
 
-    assert version == 2
+    assert version == 3
     assert [(r["transport"], r["bridge_run_id"], r["result"]) for r in receipts] == [
         ("fleet", None, "accepted"),
         ("bridge", "bridge-run-1", "duplicate"),
@@ -245,6 +245,42 @@ def test_future_database_schema_is_refused_without_downgrade(tmp_path):
     db = sqlite3.connect(path)
     try:
         assert db.execute("PRAGMA user_version").fetchone()[0] == 99
+    finally:
+        db.close()
+
+
+def test_schema_v3_missing_provenance_column_fails_closed_without_backfill(tmp_path):
+    path = tmp_path / "schema-v3-feature-mismatch.sqlite3"
+    store = TrialStore(path)
+    envelope = sample()
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+
+    db = store._connect()
+    try:
+        db.execute("DROP TRIGGER IF EXISTS trials_provenance_sha256_required_insert")
+        db.execute("DROP TRIGGER IF EXISTS trials_provenance_sha256_required_update")
+        db.execute("ALTER TABLE trials DROP COLUMN provenance_sha256")
+        # Model the incompatible event-sequence v3 layout without importing that branch.
+        db.execute(
+            "CREATE TABLE trial_event_sequence_state ("
+            "event_table TEXT PRIMARY KEY, high_water INTEGER NOT NULL)"
+        )
+        db.execute("PRAGMA user_version=3")
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="schema version 3 is missing provenance metadata"):
+        TrialStore(path)
+
+    db = sqlite3.connect(path)
+    try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(trials)")}
+        assert "provenance_sha256" not in columns
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute(
+            "SELECT COUNT(*) FROM trial_event_sequence_state"
+        ).fetchone()[0] == 0
     finally:
         db.close()
 
@@ -306,7 +342,7 @@ def test_legacy_migration_backfills_source_identity_key(tmp_path):
     finally:
         db.close()
 
-    assert version == 2
+    assert version == 3
     assert row is not None and len(row["source_identity_key"]) == 64
 
 
@@ -362,14 +398,14 @@ def test_migrated_schema_rejects_missing_or_malformed_source_identity_keys(tmp_p
                 INSERT INTO trials(
                     trial_id,source_identity_key,canonical_json,payload_sha256,outcome,system,node,source,
                     run_id,check_id,check_version,check_config_sha256,attempt_id,
-                    first_sender,first_transport,bridge_run_id,received_at
+                    first_sender,first_transport,bridge_run_id,received_at,provenance_sha256
                 )
                 SELECT ?,NULL,canonical_json,payload_sha256,outcome,system,node,source,
                     run_id,check_id,check_version,check_config_sha256,attempt_id,
-                    first_sender,first_transport,bridge_run_id,received_at
+                    first_sender,first_transport,bridge_run_id,received_at,?
                 FROM trials WHERE trial_id=?
                 """,
-                ("f" * 64, envelope["trial_id"]),
+                ("f" * 64, "a" * 64, envelope["trial_id"]),
             )
         db.rollback()
 
@@ -403,7 +439,7 @@ def test_concurrent_fresh_store_initialization_is_serialized(tmp_path):
     with ThreadPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(initialize, range(workers)))
 
-    assert results == [(2, "ok")] * workers
+    assert results == [(3, "ok")] * workers
     store = TrialStore(path)
     assert store.ingest_many([sample()], sender="peer-a", transport="fleet")["accepted"] == 1
     assert store.pool_snapshot()["runs"] == 1
@@ -437,7 +473,7 @@ def test_concurrent_legacy_schema_migration_is_serialized_and_replay_safe(tmp_pa
     with ThreadPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(migrate, range(workers)))
 
-    assert all(version == 2 and integrity == "ok" and len(key) == 64
+    assert all(version == 3 and integrity == "ok" and len(key) == 64
                for version, integrity, key in results)
     reopened = TrialStore(path)
     duplicate = reopened.ingest_many(

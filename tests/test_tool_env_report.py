@@ -61,7 +61,7 @@ def test_text_report_redacts_everything_secret(env):
     assert "NOT_AVRONE_SECRET" not in out and "outside-prefix" not in out
 
 
-def test_json_and_prefix(env):
+def test_json_and_prefix(env, monkeypatch):
     d = json.loads(call(env, format="json", prefix="llm"))
     assert d["prefix"] == "AVRONE_LLM"
     assert set(d["env"]) == {"AVRONE_LLM_API_KEY", "AVRONE_LLM_BASE_URL"}
@@ -71,6 +71,16 @@ def test_json_and_prefix(env):
     d2 = json.loads(call(env, format="json", prefix="AVRONE_ADMIN"))
     assert d2["env"] == {"AVRONE_ADMIN_TOKEN": "***set***"}
     assert d2["settings"] == {"admin_token": "***set***", "admin_token_previous": "unset"}
+    # The rotation grace is a secret-shaped setting. A set value is presence-only.
+    monkeypatch.setenv("AVRONE_ADMIN_TOKEN_PREVIOUS", SECRET)
+    env.s.admin_token_previous = SECRET
+    d3 = json.loads(call(env, format="json", prefix="AVRONE_ADMIN"))
+    assert d3["env"] == {
+        "AVRONE_ADMIN_TOKEN": "***set***",
+        "AVRONE_ADMIN_TOKEN_PREVIOUS": "***set***",
+    }
+    assert d3["settings"] == {"admin_token": "***set***", "admin_token_previous": "***set***"}
+    assert SECRET not in json.dumps(d3)
 
 
 @pytest.mark.parametrize("bad", ["../x", "a b", "AVRONE-*", "X" * 100, "$HOME"])

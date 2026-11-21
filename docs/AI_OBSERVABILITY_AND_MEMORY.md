@@ -21,8 +21,12 @@ under a single AVRONE run.
 
 **Privacy default:** prompts, model outputs, and tool arguments/results are not sent.
 Set `AVRONE_POSTHOG_CAPTURE_CONTENT=true` only after approving cloud capture of those
-payloads for the data handled by this deployment. Token counts and costs are not fabricated;
-the current gateway normalizes response text and does not yet retain provider usage metadata.
+payloads for the data handled by this deployment. Input/output token counts are captured when
+the provider returns recognized usage fields (OpenAI-compatible `prompt_tokens` /
+`completion_tokens`, `input_tokens` / `output_tokens`, or Ollama `prompt_eval_count` /
+`eval_count`). Missing counts are omitted, never estimated. PostHog can calculate costs where
+its model pricing catalog supports the model; local-model costs may remain unavailable unless
+an explicit pricing configuration is added.
 
 Check **AI Observability → Traces** in the configured PostHog project after a real agent run.
 No telemetry is sent in mock-model mode.

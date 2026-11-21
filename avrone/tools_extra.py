@@ -835,8 +835,6 @@ def _tokens(s: str) -> set[str]:
 @off_loop
 async def t_memory_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
     mem = load_memory(_mem_file(ctx), _mem_ns(ctx))
-    if not mem:
-        return "No memories saved yet."
     query = str(args.get("query", "") or "").strip()
     recs = list(mem.values())
     if query:
@@ -854,14 +852,25 @@ async def t_memory_recall(ctx: "AgentContext", args: dict[str, Any]) -> str:
                 scored.append((score, r.get("ts", 0), r))
         scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
         recs = [r for _, _, r in scored]
-        if not recs:
-            return f"No memories match {query!r}."
     else:
         recs.sort(key=lambda r: r.get("ts", 0), reverse=True)
-    # round 147: keys and values are shown escaped: a key or value holding "\n- other: ..." printed
-    # rows that read as other memories (and peers can merge entries in over memory_sync)
-    out = [f"- {_tsesc(r['key'])}: {_tsesc(str(r.get('value', ''))[:1000], keep=chr(9))}" for r in recs[:20]]
-    return "\n".join(out)
+    # Keep local per-agent memory first; Iris is an optional owner-scoped semantic supplement.
+    out = [f"- {_tsesc(r['key'])}: {_tsesc(str(r.get('value', ''))[:1000], keep=chr(9))}"
+           for r in recs[:20]]
+    iris_text = ""
+    if query:
+        try:
+            from .iris_memory import recall_prompt
+            iris_text = recall_prompt(query)
+        except Exception:  # noqa: BLE001 - local recall must remain available
+            iris_text = ""
+    if iris_text:
+        if out:
+            out.append("")
+        out.extend(["Redis Iris long-term memories (owner-scoped; asynchronously extracted):", iris_text])
+    if out:
+        return "\n".join(out)
+    return f"No memories match {query!r}." if query else "No memories saved yet."
 
 
 @off_loop

@@ -37,7 +37,12 @@ def tree() -> str:
             out.append(f"├── tests/                  # {len(list(d.glob('test_*.py')))} test files, offline by default")
         else:
             out.append(f"├── {top}/")
-            for f in sorted(d.iterdir())[:12]:
+            # Generated caches are import-order dependent. Never put them in the handoff
+            # prompt: pytest may create __pycache__ between two calls to build().
+            ignored = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+                       ".git", ".venv", "venv", "node_modules"}
+            entries = [item for item in sorted(d.iterdir()) if item.name not in ignored]
+            for f in entries[:12]:
                 out.append(f"│   ├── {f.name}")
     for f in ("pyproject.toml", "Dockerfile", "docker-compose.yml", "README.md", "SYSTEM_ACCESS.md"):
         if (ROOT / f).exists():

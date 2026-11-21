@@ -70,6 +70,12 @@ def test_generation_capture_uses_agent_trace_ids_and_omits_content_by_default(mo
     assert "$ai_output_choices" not in props
 
 
+def test_trace_ids_normalize_agent_labels_to_posthog_safe_characters():
+    trace_id, session_id = ai_observability._trace_ids("avrone:run-1:Research Agent / 2")
+    assert trace_id == "avrone:run-1:Research-Agent---2"
+    assert session_id == "avrone:run-1"
+
+
 def test_content_is_captured_only_after_explicit_opt_in(monkeypatch):
     events = setup_posthog(monkeypatch, capture_content="true")
     messages = [{"role": "user", "content": "operator-approved prompt"}]

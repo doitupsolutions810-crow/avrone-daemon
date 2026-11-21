@@ -1,0 +1,2 @@
+{"ts": "2026-11-21T02:16:50.691663+00:00", "kind": "soak", "detail": "180.46s, offered=7000, delivered=7000, pending=0, failed=0, identity holds, rss delta 31796 KiB, file 1553796 bytes. No loss."}
+{"ts": "2026-11-21T02:14:10+00:00", "kind": "bug", "where": "Breaker.is_open", "detail": "open_until starts at 0, so a clock step below 0 looked like an open breaker and stopped a 429 retry after one call. Fixed: open only when open_until > 0 and now < open_until."}

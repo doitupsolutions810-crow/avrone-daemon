@@ -1,0 +1,14 @@
+{
+  "seconds": 180.46,
+  "offered": 7000,
+  "delivered": 7000,
+  "pending": 0,
+  "failed": 0,
+  "identity": true,
+  "posts": 7000,
+  "rss_kib_start": 35764,
+  "rss_kib_end": 67560,
+  "rss_kib_delta": 31796,
+  "file_bytes": 1553796,
+  "ts": "2026-11-21T02:16:50.691663+00:00"
+}

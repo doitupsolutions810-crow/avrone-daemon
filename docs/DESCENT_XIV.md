@@ -1,0 +1,112 @@
+# Descent XIV — The Dormant Bridge and the Non-Reproducible Anchor
+
+Date: 2026-11-06
+Baseline: avrone-daemon main at 8eea02f38464d28a045c1d3d925f2587ad918e9d; attested-history main at 75f8188e6c11668ac9e71de6f8a5a1decfff08cf.
+
+## Finding
+
+The cross-repository attestation path is represented in source but is not yet demonstrated end to end.
+
+1. `avrone/capgate_head_attest.py` defines `attest_if_enabled()`. Repository-wide code search returns the definition in that module only; there is no caller from `capgate.record()` or another runtime path.
+2. The module's default history path is `<data_dir>/attested/history.jsonl`. `.env.example` has no attestation path entry, and `docker-compose.yml` mounts `./data` but does not mount the separate `attested-history` checkout.
+3. The module appends an entry; it does not create a Git commit or independently invoke the external repository's verifier. A JSONL append is not yet a Git-anchored receipt.
+4. The external `attested-history/main` has a first receipt, but its recorded digest does not reproduce under the checked-in verifier's canonicalization rule. The Git blob is `82951f020ec64e179af6bca5dbc8498bb220d647`; the recorded digest is `7a9e2b07d7e9cdd226a207c487e9caf34f30c86bac34ef9fd14688ce5bb30a17`; the recomputed digest is `70377ae5544bfbfc42bcf17c77857cb231db70ecd86b84accfec5e324adca483`.
+5. The current external `verify.py` returns exit 0 when the history file is missing or empty. Thus the verifier has a false-green absence path in addition to the populated-ledger digest failure.
+6. The `capgate_head_attest.py --selftest` corruption fixture searched for the spaced text `"seq": 0`, but the writer emits compact JSON `"seq":0`. The mutation was a no-op and the self-test failed to exercise the intended tamper path. The fix is proposed in AVRONE PR #8.
+7. `avrone/evidence_pool.py` rejects duplicate trial IDs, but a trial record contains only `source`, `trial_id`, and `failed`. It does not enforce a common `check_id`, `check_version`, workflow revision, or runtime image. It correctly reports `independence: not_assessed`; callers must not pool unlike checks as though they were equivalent.
+
+## Why this matters
+
+The trust path has at least five distinct stages:
+
+`capability event -> capgate receipt -> head attestation -> external append-only ledger -> independent verification + Git anchor`
+
+An implementation at one stage does not prove the next. The current repository contains code for several stages, but the runtime invocation, external storage mount, and independent anchor are not verified. The external ledger currently fails its own digest check, so enabling writes against that file would be unsafe.
+
+## Great Scale mapping
+
+Use `phi = (1 + sqrt(5))/2` and `CONE = phi^-2 ~= 0.381966`. For an observed check rate `p`, `S = p(1-p)` and `Psi = CONE + S`.
+
+| State | r | Observed failures | Jeffreys p_J | S | Psi |
+|---|---:|---:|---:|---:|---:|
+| No ledger evidence | 0 | unmeasured | 0.5 | 0.25 | 0.631966 |
+| Existing CI census row | 7 | 6 | 0.1875 (pass-oriented) | 0.152344 | 0.534310 |
+| One observed digest-verification failure | 1 | 1 | 0.75 | 0.1875 | 0.569466 |
+
+The p/S/Psi values describe outcomes, not cryptographic integrity. Digest validity is a separate deterministic invariant. A valid-looking residual score cannot override a digest mismatch, missing file, or broken chain.
+
+**The deeper result:** absence is not a zero-failure trial, authorship is not verification, and an append is not an anchor. The bridge must carry provenance through every boundary, and the last verifier must reject both missing evidence and non-reproducible evidence.
+
+## Mitigation sequence
+
+1. Keep `AVRONE_CAPGATE_ATTEST` off until the external ledger is repaired by an append-preserving migration.
+2. Preserve the current `history.jsonl` bytes as a legacy artifact. Do not edit or silently re-hash its first entry.
+3. Make the external verifier fail closed: missing/empty/unreadable history is HOLD; malformed or non-reproducible entries are HOLD; only a non-empty valid chain can be VERIFIED. Draft implementation and tests are in attested-history PR #3.
+4. Agree on a migration genesis that references the legacy Git blob SHA, recorded digest, recomputed digest, and HOLD reason. The migration must not claim the legacy receipt verified.
+5. Add a runtime hook only after specifying its failure semantics: an attestation-write failure must be visible, but must not cause an already-executed tool action to be retried as though it never happened.
+6. Add an explicit host path and read/write mount for the external ledger. Keep append permission separate from Git commit/push permission.
+7. Treat Git anchoring as a separate privileged step. Verify the committed blob and commit SHA independently after the append.
+8. Extend trial records with `check_id`, `check_version`, `workflow_sha`, `runner_image_digest`, `run_id`, `job_id`, and an explicit outcome/censored state. Pool only compatible cohorts; retain source orientation and report independence as not assessed unless independently justified.
+9. Wire the Great Scale evidence pool into Bridge/lesson retention only after the trial envelope is stable and idempotent. Repeated derivations should accumulate only when their trial IDs are disjoint and their check definitions match.
+
+## Success criteria
+
+- `AVRONE_CAPGATE_ATTEST=off` preserves current behavior.
+- With attestation explicitly enabled, one capability event produces one receipt and one corresponding attestation attempt; retries and repeated callbacks are idempotent.
+- The external ledger path resolves to the intended mounted checkout, not an accidental private data-directory copy.
+- Symlink, FIFO, oversized, malformed, duplicate, digest-mismatched, and broken-chain ledgers fail closed.
+- A missing or empty ledger returns HOLD, never exit 0.
+- A valid non-empty chain passes an independent verifier and its exact blob is anchored by a Git commit.
+- The original legacy ledger bytes remain recoverable and unchanged.
+- Cross-node pooling rejects duplicate trial IDs and does not combine incompatible check versions.
+- Docker-backed Grok Bot `verify.sh` is run on a host with Docker Compose and both repositories present; its report, exit code, container logs, and resulting Git state are read back separately.
+
+## Verification status
+
+- Uploaded AVRONE v0.82.0 snapshot: 691 focused regression tests passed across two targeted batches; deployment-hardening tests: 5 passed; Python compileall passed.
+- `capgate_head_attest.py --selftest`: after correcting the fixture locally, 26 passed and 0 failed.
+- Full 256-file test suite: not completed; the execution environment terminated a large batch at its 300-second tool limit.
+- Docker: unavailable in this execution environment (`docker` executable absent). No Docker or Grok Bot `verify.sh` run is claimed.
+- Live repository changes: documentation and review branches only; no production runtime hook or automatic ledger migration has been merged.
+
+## Next falsifiable question
+
+Can the runtime emit a single, uniquely identified capability receipt that is (a) attested once, (b) committed to the external history without granting the agent Git authority, and (c) independently verified after a restart? The next descent should test that complete path under duplicate callbacks, process crash between append and commit, stale mounts, partial writes, and concurrent workers.
+## Additional execution-layer falsification
+
+The live `.github/workflows/ci.yml` had a second false-negative path: both checkout-hygiene scans ran `grep | while` under `set -o pipefail`. On a clean checkout with no wrapper lines, `grep` returns 1 and the job exits before dependency installation. GitHub Actions run 42322491312 on main confirms that the install step failed before pytest. The fix is included in AVRONE PR #10; its new run has passed dependency installation and is executing the test matrix.
+
+The same principle appears at two layers: an empty evidence search must not abort a healthy build, and an empty evidence ledger must not certify a healthy system. In both cases, absence must be represented explicitly rather than treated as success or an unhandled failure.
+## Squad and Docker execution availability
+
+The Grok Bot repository's `verify.sh` is a real local Docker verifier, not a harmless read-only probe. If `.env` is absent it copies `.env.full`; it then checks Docker/Compose, validates core and full Compose, builds and starts the full stack, runs live inference/browser/squad tests, writes `data/EVOLVE.md` and `data/VERIFY.md`, and optionally installs/runs the adjacent AVRONE suite in a virtual environment. Its default boot budget is 3600 seconds; 7200 can be selected for slower hosts. The script does not provide an unbounded wait.
+
+The script defaults `AVRONE_DIR` to `../Avrone`; in a workspace where the repository is named `avrone-daemon`, the combined gate should explicitly set `AVRONE_DIR=../avrone-daemon VERIFY_REQUIRE_AVRONE=true` after confirming the actual checkout layout.
+
+GitHub Actions metadata for Grok Bot main shows the latest `live-tests` run (40801560492) and scheduled `model-bench` run (41439417592) failed with `runner_id=0` and empty job steps. Those runs did not provide test execution evidence. In this session, the local environment has no Docker executable, and the connected browser cannot access the originating Codespaces tab. Therefore neither `verify.sh` nor a live Grok squad run was executed.
+## Harmonic gauge: a second absence-to-zero defect
+
+The `avrone-squad/harmonic/harmonic_dash.py` proposal is also not connected to the live app:
+
+- `inject_into_index()` appears only in its module and tests; no production caller injects the gauge into `avrone/static/index.html`.
+- The snippet requests `/api/codex/events?follow=1`; repository search finds no such route. AVRONE's live event interface is `/ws/events` (WebSocket), which is a different protocol.
+- The repository contains no `ThermoLedger` implementation and no producer for the referenced `restart_cost` event field.
+- The fetch logic does not check `response.ok`; it initializes `worst=0`, ignores non-JSON lines, then renders zero debt. A 404 or empty feed can therefore appear green. Network failures are swallowed without a visible stale/unknown state.
+- The existing smoke test serves a synthetic page and asserts that strings were injected. It does not load the real AVRONE static page, connect to a real event route, or verify a live debt measurement. Its `.smoke-tmp/index.html` write is also a persistent test side effect.
+
+The two isolated squad test files were run against the fetched source in a clean temporary workspace: **7 passed**. This proves the helper and synthetic smoke harness work; it does not prove dashboard integration.
+
+Mitigation: do not connect the gauge by merely changing the URL to `/ws/events`. First define a real debt metric and its provenance, add a producer to CodeX events, implement a WebSocket consumer with freshness/error states, inject the UI through the actual static-app startup path, and test it against the real app with no-data, 404, disconnect, reconnect, malformed event, and stale-event cases. Missing metrics must render UNKNOWN, never zero.
+## Latest parser/CI verification result
+
+AVRONE PR #10's corrected branch completed the full GitHub Actions matrix on both supported Python versions: Python 3.11 = 5,677 passed / 318 skipped in 195.04s; Python 3.12 = 5,677 passed / 318 skipped in 206.52s. This followed an earlier full run with 5,669 passed / 318 skipped / 6 failed. The five parser recursion failures and one generated-prompt count mismatch were corrected and the full matrix then passed. This validates the parser/CI/capgate-selftest patch; it does not validate Docker, the external ledger, or the dormant runtime integrations.
+## Runtime-hook placement
+
+Clarification: capgate's own receipt recording is already integrated into the gated tool path (`avrone/tools.py::_receipt` calls `capgate.record` in a worker thread after the tool result). The missing connection is specifically the *external head-attestation* call: `attest_if_enabled()` has no production caller.
+
+Do not naively call `attest_if_enabled()` after every receipt. `attest_head()` performs a full `capgate.verify_chain()` walk before appending an external history entry. Repeating a full O(n) walk after each of n tool calls creates O(n²) cumulative verification work. A safer design is one idempotent checkpoint at `run.done` (or a measured, bounded checkpoint cadence), with the run ID and receipt-head hash as the idempotency key. The checkpoint must report failure separately from the already-completed tool action so an agent does not repeat a side effect.
+## Harmonic asset supply-chain boundary
+
+The proposed injector adds D3 from `https://d3js.org/d3.v7.min.js` without a pinned local asset or integrity attribute. AVRONE's current admin UI reads its admin token from the password field or `localStorage` key `avrone_tok`. If a third-party script is injected into that same-origin page, it executes with the page's privileges and can read the token. This is not an active exposure today because the injector has no production caller; it becomes a high-impact risk if integrated naively.
+
+Integration requirement: vendor a reviewed, version-pinned D3 asset inside the repository (or use a rigorously pinned SRI/CSP design), never load a floating third-party script into the privileged console, and add a test that rejects external script URLs in the admin UI.

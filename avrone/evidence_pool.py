@@ -1,13 +1,3 @@
-
-def canonical_source_key(source: str) -> str:
-    """Return the exact case-insensitive source key used by the evidence pool."""
-    if not isinstance(source, str) or len(source) > MAX_SOURCE_CHARS * 4:
-        raise ValueError("source must be a non-empty string of at most 128 characters")
-    normalized = _canon(source)
-    if not normalized or len(normalized) > MAX_SOURCE_CHARS:
-        raise ValueError("source must be a non-empty string of at most 128 characters")
-    return normalized.casefold()
-
 """Bounded, provenance-aware pooling for Great Scale verification trials.
 
 This is an additive contract for future bridge/fleet consumers. It deliberately
@@ -52,6 +42,16 @@ def _canon(value: str) -> str:
     v = "".join(ch for ch in v if unicodedata.category(ch) != "Cf")
     return _WS.sub(" ", v).strip()
 
+
+
+def canonical_source_key(source: str) -> str:
+    """Return the exact case-insensitive source key used by the evidence pool."""
+    if not isinstance(source, str) or len(source) > MAX_SOURCE_CHARS * 4:
+        raise ValueError("source must be a non-empty string of at most 128 characters")
+    normalized = _canon(source)
+    if not normalized or len(normalized) > MAX_SOURCE_CHARS:
+        raise ValueError("source must be a non-empty string of at most 128 characters")
+    return normalized.casefold()
 
 def _shown(value: str, limit: int = 64) -> str:
     """An identifier as an error message may quote it: escaped, and cut to `limit` characters."""

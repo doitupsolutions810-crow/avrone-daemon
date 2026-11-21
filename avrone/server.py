@@ -1,43 +1,3 @@
-async def _ingest_trial_request(request: Request, transport: str):
-    payload = await _gateway(request, "trials")
-    from .trial_adapters import BridgeTrialAdapter, FleetTrialAdapter, strict_json_loads
-    from .trial_receiver import TrialStore, TrialStoreError
-
-    try:
-        # The fleet gateway authenticates the exact body bytes. Parse those same cached bytes
-        # again with duplicate-key, finite-number, UTF-8, depth and node-count checks.
-        raw = await request.body()
-        strict_payload = strict_json_loads(raw)
-        if strict_payload != payload:
-            raise ValueError("signed payload changed during strict parsing")
-        fleet = _fleet()
-
-        def persist():
-            store = TrialStore(Path(settings.data_dir) / "trials" / "trials.sqlite3")
-            adapter = FleetTrialAdapter(store) if transport == "fleet" else BridgeTrialAdapter(store)
-            return adapter.receive(strict_payload, strict_payload.get("from"), fleet.max_hops)
-
-        return await asyncio.to_thread(persist)
-    except ValueError as e:
-        raise HTTPException(400, str(e)[:300]) from None
-    except TrialStoreError as e:
-        raise HTTPException(503, str(e)) from None
-    except OSError:
-        raise HTTPException(503, "trial storage is unavailable") from None
-
-
-@app.post("/api/fleet/trials")
-async def fleet_trials(request: Request):
-    """Authenticated, bounded fleet trial ingest."""
-    return await _ingest_trial_request(request, "fleet")
-
-
-@app.post("/api/fleet/bridge/trials")
-async def fleet_bridge_trials(request: Request):
-    """Authenticated bridge-scoped trial relay; existing Bridge JSONL posts are unchanged."""
-    return await _ingest_trial_request(request, "bridge")
-
-
 """Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD)."""
 from __future__ import annotations
 
@@ -794,6 +754,46 @@ async def fleet_agentpack(request: Request):
         raise HTTPException(403, str(e)) from None
     except (ValueError, RuntimeError) as e:
         raise HTTPException(400, str(e)) from None
+
+
+async def _ingest_trial_request(request: Request, transport: str):
+    payload = await _gateway(request, "trials")
+    from .trial_adapters import BridgeTrialAdapter, FleetTrialAdapter, strict_json_loads
+    from .trial_receiver import TrialStore, TrialStoreError
+
+    try:
+        # The fleet gateway authenticates the exact body bytes. Parse those same cached bytes
+        # again with duplicate-key, finite-number, UTF-8, depth and node-count checks.
+        raw = await request.body()
+        strict_payload = strict_json_loads(raw)
+        if strict_payload != payload:
+            raise ValueError("signed payload changed during strict parsing")
+        fleet = _fleet()
+
+        def persist():
+            store = TrialStore(Path(settings.data_dir) / "trials" / "trials.sqlite3")
+            adapter = FleetTrialAdapter(store) if transport == "fleet" else BridgeTrialAdapter(store)
+            return adapter.receive(strict_payload, strict_payload.get("from"), fleet.max_hops)
+
+        return await asyncio.to_thread(persist)
+    except ValueError as e:
+        raise HTTPException(400, str(e)[:300]) from None
+    except TrialStoreError as e:
+        raise HTTPException(503, str(e)) from None
+    except OSError:
+        raise HTTPException(503, "trial storage is unavailable") from None
+
+
+@app.post("/api/fleet/trials")
+async def fleet_trials(request: Request):
+    """Authenticated, bounded fleet trial ingest."""
+    return await _ingest_trial_request(request, "fleet")
+
+
+@app.post("/api/fleet/bridge/trials")
+async def fleet_bridge_trials(request: Request):
+    """Authenticated bridge-scoped trial relay; existing Bridge JSONL posts are unchanged."""
+    return await _ingest_trial_request(request, "bridge")
 
 
 @app.post("/api/fleet/run")

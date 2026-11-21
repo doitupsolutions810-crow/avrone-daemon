@@ -1,10 +1,3 @@
-        if kind == "trials" and (not self.allow or sender not in self.allow):
-            # Evidence ingestion always requires an explicit, non-empty sender allowlist.
-            raise self._refuse(
-                "sender_not_allowed",
-                "trial ingestion requires sender in a non-empty AVRONE_FLEET_ALLOW",
-                **ctx,
-            )
 """Fleet: link AVRONE servers into a network of nodes that spawn agents on each other.
 
 Every AVRONE server can be a node, a router (a node with children), or both.
@@ -1300,6 +1293,13 @@ class FleetManager:
             if not self.allowed(sender):
                 why = "empty allowlist with AVRONE_FLEET_REQUIRE_ALLOW" if not self.allow else "AVRONE_FLEET_ALLOW"
                 raise self._refuse("sender_not_allowed", f"sender {sender} not in AVRONE_FLEET_ALLOW ({why})", **ctx)
+        if kind == "trials" and (not self.allow or sender not in self.allow):
+            # Evidence ingestion always requires an explicit, non-empty sender allowlist.
+            raise self._refuse(
+                "sender_not_allowed",
+                "trial ingestion requires sender in a non-empty AVRONE_FLEET_ALLOW",
+                **ctx,
+            )
         if kind == "agentpack" and (not self.allow or sender not in self.allow):
             # moving a whole agent home is never open to "any token holder": explicit allowlist only
             raise self._refuse("sender_not_allowed", f"agent migration from {sender or '?'} refused: sender must be "

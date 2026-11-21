@@ -145,22 +145,39 @@ def test_finite_nonnegative_clock_is_representable_across_all_provenance(
 
 
 def test_receiver_clock_is_sampled_only_after_writer_lock_is_acquired(tmp_path, monkeypatch):
-    """Lock contention must not let an earlier timestamp commit after a later one."""
+    """Prove the clock is not sampled while BEGIN IMMEDIATE is lock-blocked."""
     store = TrialStore(tmp_path / "private" / "trials.sqlite3")
     blocker = store._connect()
     blocker.execute("BEGIN IMMEDIATE")
-    started = Event()
+    begin_attempted = Event()
     clock_sampled = Event()
     real_time = trial_receiver.time.time
+    real_connect = store._connect
+
+    class BeginImmediateProbe:
+        """Transparent connection proxy that marks the exact lock attempt."""
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args):
+            if sql.strip().upper() == "BEGIN IMMEDIATE":
+                begin_attempted.set()
+            return self._connection.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    def instrumented_connect():
+        return BeginImmediateProbe(real_connect())
 
     def observed_clock():
         clock_sampled.set()
         return real_time()
 
+    monkeypatch.setattr(store, "_connect", instrumented_connect)
     monkeypatch.setattr(trial_receiver.time, "time", observed_clock)
 
     def deliver():
-        started.set()
         return store.ingest_many(
             [envelope("clock-after-lock")], sender="peer-c", transport="fleet"
         )
@@ -168,10 +185,11 @@ def test_receiver_clock_is_sampled_only_after_writer_lock_is_acquired(tmp_path, 
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(deliver)
-            assert started.wait(timeout=2)
-            # The worker is blocked at BEGIN IMMEDIATE; it must not have
-            # sampled a receipt timestamp before it owns the write lock.
-            assert not clock_sampled.wait(timeout=0.2)
+            # This event is emitted immediately before the real SQLite call.
+            # Since blocker still owns BEGIN IMMEDIATE, the worker cannot yet
+            # have returned from execute and therefore cannot have sampled time.
+            assert begin_attempted.wait(timeout=2)
+            assert not clock_sampled.is_set()
             blocker.commit()
             assert clock_sampled.wait(timeout=2)
             assert future.result(timeout=5)["accepted"] == 1

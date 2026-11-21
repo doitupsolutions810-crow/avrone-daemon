@@ -473,6 +473,10 @@ def _run_multiprocess_ingests(path, payload, sender, workers=6):
         return [status for _, status in results]
     finally:
         for process in processes:
+            # A process.start() failure can leave later Process objects
+            # unstarted; join() is invalid for those objects.
+            if process.pid is None:
+                continue
             if process.is_alive():
                 process.terminate()
             process.join(timeout=5)

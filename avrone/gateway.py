@@ -249,6 +249,7 @@ class Gateway:
             for attempt in range(per_up_tries):
                 try:
                     msgs = with_plain_text_nudge(messages) if nudge else messages
+                    _AI_USAGE.set(None)
                     started = time.perf_counter()
                     try:
                         out = await self._request(up, msgs, use_model, temperature, session)
@@ -259,7 +260,7 @@ class Gateway:
                             usage = _AI_USAGE.get() or {}
                             capture_generation(session=session, provider=up.provider, model=use_model,
                                                latency_s=time.perf_counter() - started,
-                                               messages=msgs, input_tokens=usage.get("input_tokens"),
+                                               messages=sanitize_messages(msgs), input_tokens=usage.get("input_tokens"),
                                                output_tokens=usage.get("output_tokens"), error=True)
                         except Exception:  # noqa: BLE001
                             pass
@@ -269,7 +270,7 @@ class Gateway:
                         usage = _AI_USAGE.get() or {}
                         capture_generation(session=session, provider=up.provider, model=use_model,
                                            latency_s=time.perf_counter() - started,
-                                           messages=msgs, output=out,
+                                           messages=sanitize_messages(msgs), output=out,
                                            input_tokens=usage.get("input_tokens"),
                                            output_tokens=usage.get("output_tokens"))
                     except Exception:  # noqa: BLE001 - observability must not affect model routing

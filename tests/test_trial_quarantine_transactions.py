@@ -429,3 +429,96 @@ def test_sigkill_during_legacy_backfill_rolls_back_schema_and_retries_migration(
     finally:
         db.close()
     assert migrated.pool_snapshot()["runs"] == 1
+
+
+# Round 224: independent OS processes, not only threads, race after recovery.
+# Every worker opens its own TrialStore before a shared barrier releases writes.
+
+def _multiprocess_ingest_worker(path, payload, sender, barrier, result_queue):
+    try:
+        store = TrialStore(path)
+        barrier.wait(timeout=30)
+        response = store.ingest_many(
+            [payload], sender=sender, transport="fleet"
+        )
+        result_queue.put(("ok", response["results"][0]["status"]))
+    except BaseException as exc:
+        result_queue.put(("error", repr(exc)))
+        raise
+
+
+def _run_multiprocess_ingests(path, payload, sender, workers=6):
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(workers + 1)
+    result_queue = context.Queue()
+    processes = [
+        context.Process(
+            target=_multiprocess_ingest_worker,
+            args=(str(path), payload, sender, barrier, result_queue),
+        )
+        for _ in range(workers)
+    ]
+    try:
+        for process in processes:
+            process.start()
+        # All processes have completed TrialStore startup and own independent
+        # connections before the parent releases the write race.
+        barrier.wait(timeout=30)
+        results = [result_queue.get(timeout=30) for _ in processes]
+        for process in processes:
+            process.join(timeout=15)
+        assert all(not process.is_alive() for process in processes)
+        assert [process.exitcode for process in processes] == [0] * workers
+        assert all(state == "ok" for state, _ in results), results
+        return [status for _, status in results]
+    finally:
+        for process in processes:
+            # A process.start() failure can leave later Process objects
+            # unstarted; join() is invalid for those objects.
+            if process.pid is None:
+                continue
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+        result_queue.close()
+        result_queue.join_thread()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="multiprocess SQLite race test requires POSIX")
+def test_independent_process_duplicate_replays_preserve_one_first_seen_trial(tmp_path):
+    path = tmp_path / "private" / "trials.sqlite3"
+    store = TrialStore(path)
+    payload = trial("process-duplicate-race")
+    assert store.ingest_many(
+        [payload], sender="peer-seed", transport="fleet"
+    )["accepted"] == 1
+
+    statuses = _run_multiprocess_ingests(
+        path, payload, "peer-process-replay", workers=6
+    )
+    assert statuses == ["duplicate"] * 6
+    assert _raw_counts_and_integrity(path) == (1, 0, 0, 7)
+    reopened = TrialStore(path)
+    assert reopened.pool_snapshot()["runs"] == 1
+    receipts = reopened.receipt_records()
+    assert sum(row["result"] == "accepted" for row in receipts) == 1
+    assert sum(row["result"] == "duplicate" for row in receipts) == 6
+
+
+@pytest.mark.skipif(os.name != "posix", reason="multiprocess SQLite race test requires POSIX")
+def test_independent_process_conflicts_create_exactly_one_sender_quarantine(tmp_path):
+    store, path = seeded(tmp_path)
+    conflicting = trial(outcome="fail")
+    statuses = _run_multiprocess_ingests(
+        path, conflicting, "peer-process-conflict", workers=6
+    )
+    assert statuses.count("conflict_quarantined") == 1
+    assert statuses.count("sender_quarantined") == 5
+    assert _raw_counts_and_integrity(path) == (1, 1, 1, 7)
+
+    reopened = TrialStore(path)
+    assert len(reopened.quarantine_records()) == 1
+    receipts = reopened.receipt_records()
+    assert sum(row["result"] == "conflict_quarantined" for row in receipts) == 1
+    assert sum(row["result"] == "sender_quarantined" for row in receipts) == 5
+    assert reopened.pool_snapshot()["runs"] == 1

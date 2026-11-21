@@ -249,6 +249,42 @@ def test_future_database_schema_is_refused_without_downgrade(tmp_path):
         db.close()
 
 
+def test_schema_v3_missing_provenance_column_fails_closed_without_backfill(tmp_path):
+    path = tmp_path / "schema-v3-feature-mismatch.sqlite3"
+    store = TrialStore(path)
+    envelope = sample()
+    store.ingest_many([envelope], sender="peer-a", transport="fleet")
+
+    db = store._connect()
+    try:
+        db.execute("DROP TRIGGER IF EXISTS trials_provenance_sha256_required_insert")
+        db.execute("DROP TRIGGER IF EXISTS trials_provenance_sha256_required_update")
+        db.execute("ALTER TABLE trials DROP COLUMN provenance_sha256")
+        # Model the incompatible event-sequence v3 layout without importing that branch.
+        db.execute(
+            "CREATE TABLE trial_event_sequence_state ("
+            "event_table TEXT PRIMARY KEY, high_water INTEGER NOT NULL)"
+        )
+        db.execute("PRAGMA user_version=3")
+        db.commit()
+    finally:
+        db.close()
+
+    with pytest.raises(TrialStoreError, match="schema version 3 is missing provenance metadata"):
+        TrialStore(path)
+
+    db = sqlite3.connect(path)
+    try:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(trials)")}
+        assert "provenance_sha256" not in columns
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute(
+            "SELECT COUNT(*) FROM trial_event_sequence_state"
+        ).fetchone()[0] == 0
+    finally:
+        db.close()
+
+
 def test_failed_schema_migration_rolls_back_added_provenance_column(tmp_path):
     path = tmp_path / "broken-legacy.sqlite3"
     _create_legacy_trial_store(path, malformed_receipts=True)

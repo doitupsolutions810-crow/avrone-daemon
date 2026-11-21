@@ -1,0 +1,26 @@
+{
+  "ollama": "0.40.16 at 127.0.0.1:11434, model qwen2.5:0.5b pulled",
+  "mock_squad": {
+    "command": "python3 -m avrone.cli squad ... -n 4 --max-steps 4",
+    "exit": 0,
+    "seconds": 0.6,
+    "workers": ["Researcher-1", "Engineer-2", "Critic-3"],
+    "tools": ["shell echo avrone-online && uname -s"],
+    "tests_written": [],
+    "found": "Canned mock replies. No test file."
+  },
+  "live_lanes": {
+    "lanes": ["robust", "tools", "deepcov", "newmods"],
+    "model": "qwen2.5:0.5b",
+    "max_steps": 8,
+    "exits": [0, 0, 0, 0],
+    "tests_written": [],
+    "found": "Each lane returned prose and stopped. No tool call and no evolve_propose."
+  },
+  "live_retry": {
+    "asked": "list_files tests",
+    "tool_call": "write_file shared/notes.txt",
+    "tests_written": [],
+    "found": "One tool call, the wrong tool, writing a 22-byte note in the lane data dir. No test."
+  }
+}

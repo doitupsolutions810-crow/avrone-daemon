@@ -114,6 +114,11 @@ def test_repeated_initialization_under_hostile_umasks_keeps_database_private(
     tmp_path, mask
 ):
     path = tmp_path / f"private-mask-{mask:o}" / "trials.sqlite3"
+    # The receiver requires an already-private 0700 parent. Create it before
+    # changing umask so this test isolates database/sidecar creation modes,
+    # rather than accidentally testing a parent-directory policy violation.
+    path.parent.mkdir(mode=0o700)
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     previous = os.umask(mask)
     try:
         store = TrialStore(path)

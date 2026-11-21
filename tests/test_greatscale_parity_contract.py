@@ -70,7 +70,9 @@ def test_evidence_snapshot_shape_and_orientation_channel():
     assert fail["orientation"] == "fail" and fail["onConeFloor"] is True  # heat is orientation-blind
     mixed = gs.evidence_snapshot(1, 200)
     assert mixed["orientation"] == "mixed"
-    assert mixed["S"] == gs.heat(1 / 200) == gs.heat(199 / 200)
+    # cross-formula compare: evidence_snapshot computes p*(1-p) from exact integer counts
+    # (199/40000), heat() multiplies floats (0.005*0.995); they differ at ~1e-18, so pin to 1e-12
+    assert abs(mixed["S"] - gs.heat(1 / 200)) < 1e-12 and abs(mixed["S"] - gs.heat(199 / 200)) < 1e-12
     assert mixed["runsFor95"] == 598
 
 

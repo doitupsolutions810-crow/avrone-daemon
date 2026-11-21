@@ -1008,10 +1008,12 @@ class TrinityCore:
             pass
         self.codex.emit(run_id, "tool.result", name, tool=tool, output=out[:4000])
         try:
-            from .ai_observability import capture_tool_span
-            capture_tool_span(run_id=run_id, agent=name, tool=tool, args=args, output=out,
-                              latency_s=time.perf_counter() - started,
-                              error=(call["error"] is not None or out.lstrip().startswith("ERROR")))
+            # Mock-model runs must not pollute real-agent telemetry with synthetic trajectories.
+            if getattr(getattr(self, "settings", None), "llm_mode", "live") != "mock":
+                from .ai_observability import capture_tool_span
+                capture_tool_span(run_id=run_id, agent=name, tool=tool, args=args, output=out,
+                                  latency_s=time.perf_counter() - started,
+                                  error=(call["error"] is not None or out.lstrip().upper().startswith("ERROR")))
         except Exception:  # noqa: BLE001 - observability must never change tool semantics
             pass
         return tool, out

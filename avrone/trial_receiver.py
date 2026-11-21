@@ -208,32 +208,73 @@ class TrialStore:
         return info.st_dev, info.st_ino
 
     def _assert_sidecar_files(self, *, require_private: bool | None = None) -> None:
-        """Do not let SQLite open planted or permission-weakened sidecars.
+        """Reject unsafe sidecars while tolerating an observed unlink/replace race.
 
-        During trusted legacy initialization, existing regular owned sidecars
-        may still be normalized to 0600 before SQLite opens them. Every
-        post-normalization check, and every check after initialization, requires
-        exact private permissions.
+        SQLite can unlink and recreate WAL/SHM sidecars as competing processes
+        open and close their last connections. Re-sample a changed pathname a
+        small bounded number of times; a stable symlink, non-regular file,
+        hardlink or non-private initialized sidecar still fails closed.
         """
         if require_private is None:
             require_private = self._initialized
         for suffix in ("-wal", "-shm", "-journal"):
             sidecar = Path(str(self.path) + suffix)
-            try:
-                info = sidecar.lstat()
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                raise TrialStoreError("trial database sidecar cannot be inspected") from exc
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                raise TrialStoreError(
-                    "trial database sidecar must be a regular single-link file"
+            for _attempt in range(3):
+                try:
+                    info = sidecar.lstat()
+                except FileNotFoundError:
+                    break
+                except OSError as exc:
+                    raise TrialStoreError(
+                        "trial database sidecar cannot be inspected"
+                    ) from exc
+
+                unsafe_type = (
+                    not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                 )
-            self._assert_file_owner(info, "trial database sidecar")
-            if require_private and stat.S_IMODE(info.st_mode) != 0o600:
+                unsafe_mode = (
+                    require_private and stat.S_IMODE(info.st_mode) != 0o600
+                )
+                if unsafe_type or unsafe_mode:
+                    # Distinguish a stable hostile file from a sidecar that
+                    # SQLite replaced/unlinked between our observations.
+                    try:
+                        current = sidecar.lstat()
+                    except FileNotFoundError:
+                        continue
+                    if (
+                        (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)
+                        or current.st_mode != info.st_mode
+                        or current.st_nlink != info.st_nlink
+                    ):
+                        continue
+                    if unsafe_type:
+                        raise TrialStoreError(
+                            "trial database sidecar " + suffix
+                            + " must be a regular single-link file "
+                            + f"(type={stat.S_IFMT(info.st_mode):#o}, "
+                            + f"nlink={info.st_nlink})"
+                        )
+                    raise TrialStoreError(
+                        "trial database sidecar permissions changed after initialization "
+                        "(expected 0600): " + suffix
+                    )
+
+                self._assert_file_owner(info, "trial database sidecar")
+                try:
+                    current = sidecar.lstat()
+                except FileNotFoundError:
+                    continue
+                if (
+                    (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino)
+                    and current.st_mode == info.st_mode
+                    and current.st_nlink == info.st_nlink
+                ):
+                    break
+            else:
                 raise TrialStoreError(
-                    "trial database sidecar permissions changed after initialization "
-                    "(expected 0600)"
+                    "trial database sidecar changed repeatedly during validation: "
+                    + suffix
                 )
 
     def _make_verified_file_private(

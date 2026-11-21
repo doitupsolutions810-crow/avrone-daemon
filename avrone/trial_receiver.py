@@ -445,19 +445,42 @@ class TrialStore:
         try:
             info = os.fstat(fd)
             identity = (info.st_dev, info.st_ino)
-            if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_nlink != 1
-                or stat.S_IMODE(info.st_mode) != 0o600
-            ):
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                 raise TrialStoreError(
-                    "new trial database must be a private regular single-link file"
+                    "new trial database must be a regular single-link file"
                 )
             self._assert_file_owner(info, "trial database")
-            if self._assert_database_file() != identity:
+            # os.open(mode=0600) is still filtered by the caller's umask.
+            # Under umask 0777 the descriptor is valid but the new inode has
+            # mode 000; normalize the already-pinned, owned inode explicitly.
+            os.fchmod(fd, 0o600)
+            secured = os.fstat(fd)
+            if (
+                (secured.st_dev, secured.st_ino) != identity
+                or not stat.S_ISREG(secured.st_mode)
+                or secured.st_nlink != 1
+                or stat.S_IMODE(secured.st_mode) != 0o600
+            ):
+                raise TrialStoreError(
+                    "new trial database could not be finalized as private 0600"
+                )
+            self._assert_file_owner(secured, "trial database")
+            try:
+                current = self.path.lstat()
+            except OSError as exc:
+                raise TrialStoreError(
+                    "new trial database path cannot be revalidated"
+                ) from exc
+            if (
+                (current.st_dev, current.st_ino) != identity
+                or not stat.S_ISREG(current.st_mode)
+                or current.st_nlink != 1
+                or stat.S_IMODE(current.st_mode) != 0o600
+            ):
                 raise TrialStoreError(
                     "trial database identity changed during exclusive creation"
                 )
+            self._assert_private_parent()
             return identity
         finally:
             os.close(fd)

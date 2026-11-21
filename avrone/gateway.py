@@ -272,7 +272,7 @@ class Gateway:
                                            latency_s=time.perf_counter() - started,
                                            messages=sanitize_messages(msgs), output=out,
                                            input_tokens=usage.get("input_tokens"),
-                                           output_tokens=usage.get("output_tokens"))
+                                           output_tokens=usage.get("output_tokens"), error=False)
                     except Exception:  # noqa: BLE001 - observability must not affect model routing
                         pass
                     up.record(True, self.threshold, self.cooldown)

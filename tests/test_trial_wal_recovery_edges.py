@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from avrone.trial_contract import make_trial
-from avrone.trial_receiver import TrialStore
+from avrone.trial_receiver import TrialStore, TrialStoreError
 
 
 def make_payload(attempt: str, outcome: str = "pass") -> dict:
@@ -148,3 +148,31 @@ def test_repeated_initialization_under_hostile_umasks_keeps_database_private(
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
     finally:
         os.umask(previous)
+
+
+
+def test_database_creation_fails_closed_when_descriptor_chmod_fails(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "private-chmod-failure" / "trials.sqlite3"
+    path.parent.mkdir(mode=0o700)
+    original_umask = os.umask(0o777)
+    sqlite_opened = False
+    original_connect = sqlite3.connect
+
+    def denied_fchmod(_fd, _mode):
+        raise PermissionError("injected fchmod denial")
+
+    def observed_connect(*args, **kwargs):
+        nonlocal sqlite_opened
+        sqlite_opened = True
+        return original_connect(*args, **kwargs)
+
+    try:
+        monkeypatch.setattr(os, "fchmod", denied_fchmod)
+        monkeypatch.setattr(sqlite3, "connect", observed_connect)
+        with pytest.raises(TrialStoreError, match="cannot be secured as private 0600"):
+            TrialStore(path)
+        assert not sqlite_opened
+    finally:
+        os.umask(original_umask)

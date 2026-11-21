@@ -405,6 +405,14 @@ class TrialStore:
                     db.execute("ALTER TABLE trials ADD COLUMN source_identity_key TEXT")
                     present.add("source_identity_key")
                 if "provenance_sha256" not in present:
+                    # A database already claiming this schema version must have the
+                    # complete v3 provenance layout. Do not silently add a nullable
+                    # column and skip backfill when another v3 feature layout is present.
+                    if version >= DB_SCHEMA_VERSION:
+                        raise TrialStoreError(
+                            f"trial database schema version {version} is missing "
+                            f"provenance metadata in {table}"
+                        )
                     db.execute(f"ALTER TABLE {table} ADD COLUMN provenance_sha256 TEXT")
                     present.add("provenance_sha256")
                 missing = required - present

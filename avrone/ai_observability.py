@@ -98,6 +98,8 @@ def capture_generation(
     latency_s: float,
     messages: list[dict[str, Any]] | None = None,
     output: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
     error: bool = False,
 ) -> None:
     """Capture one completed or failed upstream generation, without changing its result."""
@@ -110,6 +112,10 @@ def capture_generation(
         "$ai_latency": max(0.0, float(latency_s)),
         "$ai_is_error": bool(error),
     }
+    if isinstance(input_tokens, int) and not isinstance(input_tokens, bool) and input_tokens >= 0:
+        props["$ai_input_tokens"] = input_tokens
+    if isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens >= 0:
+        props["$ai_output_tokens"] = output_tokens
     if _truthy("AVRONE_POSTHOG_CAPTURE_CONTENT", False):
         if messages is not None:
             props["$ai_input"] = messages

@@ -55,6 +55,14 @@ An external MCP tool may expose avrone.trial.ingest with the same wrapper schema
 
 ## Receiver database schema version 3
 
+**Version 3 is reserved for the provenance-digest layout on this integration stack.** A separate
+open event-sequence proposal also used schema version 3 for a different table layout. Those two
+branches are not interchangeable: do not merge or cherry-pick the event-sequence v3 migration
+verbatim. Re-port its high-water feature as a subsequent schema version (v4) after this migration,
+with one ordered transaction and explicit tests for both feature sets. A database that claims v3
+but lacks the provenance columns now fails closed instead of receiving nullable columns without
+a backfill.
+
 The receiver database uses transactional schema migrations. Version 0 is the legacy unversioned
 layout; version 1 adds per-delivery `bridge_run_id` provenance to receipts and quarantine records.
 Version 2 adds a unique `source_identity_key` index. The key uses the evidence pool's NFKC,

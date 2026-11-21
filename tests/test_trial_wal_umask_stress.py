@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from avrone.trial_contract import make_trial
 from avrone.trial_receiver import TrialStore
 
 
@@ -170,3 +171,59 @@ def test_independent_workers_enforce_wal_privacy_across_umask_profiles(
     tmp_path, mode, mask, seed,
 ):
     run_profile(tmp_path, mode=mode, mask=mask, seed=seed)
+
+
+def test_trusted_legacy_wal_database_and_sidecars_are_private_before_sqlite_connect(
+    tmp_path, monkeypatch,
+):
+    """An existing WAL database must be normalized before connect can open sidecars."""
+    path = tmp_path / "private" / "trials.sqlite3"
+    initial = TrialStore(path)
+    payload = make_trial(
+        system="cyclekernel", node="node-wal-preopen", run_id="run-wal-preopen",
+        check_id="wal-preopen", check_version="v2",
+        attempt_id="legacy-sidecars", outcome="pass",
+    )
+    assert initial.ingest_many(
+        [payload], sender="peer-seed", transport="fleet"
+    )["accepted"] == 1
+
+    holder = sqlite3.connect(path)
+    try:
+        assert holder.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        # Force a committed WAL frame and keep the connection open so the
+        # existing -wal/-shm inodes remain present during legacy normalization.
+        holder.execute("UPDATE trials SET outcome=outcome")
+        holder.commit()
+        sidecars = [Path(str(path) + suffix) for suffix in ("-wal", "-shm")]
+        assert all(sidecar.exists() for sidecar in sidecars)
+
+        path.chmod(0o644)
+        for sidecar in sidecars:
+            sidecar.chmod(0o644)
+
+        original_connect = sqlite3.connect
+        observations = []
+
+        def guarded_connect(*args, **kwargs):
+            db_mode = stat.S_IMODE(path.stat().st_mode)
+            sidecar_modes = {
+                sidecar.name: stat.S_IMODE(sidecar.stat().st_mode)
+                for sidecar in sidecars if sidecar.exists()
+            }
+            observations.append((db_mode, sidecar_modes))
+            assert db_mode == 0o600
+            assert all(mode == 0o600 for mode in sidecar_modes.values())
+            return original_connect(*args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", guarded_connect)
+        reopened = TrialStore(path)
+        assert observations
+        assert reopened.pool_snapshot()["runs"] == 1
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert all(
+            stat.S_IMODE(sidecar.stat().st_mode) == 0o600
+            for sidecar in sidecars if sidecar.exists()
+        )
+    finally:
+        holder.close()

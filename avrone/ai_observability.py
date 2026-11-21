@@ -77,7 +77,7 @@ def _trace_ids(session: str | None) -> tuple[str, str | None]:
     # PostHog IDs accept a restricted character set. Agent labels can contain spaces or
     # punctuation, so normalize them without changing the AVRONE run's grouping structure.
     import re
-    safe = re.sub(r"[^A-Za-z0-9._@()!' :|~\\-]", "-", session).replace(" ", "-")[:200]
+    safe = re.sub(r"[^A-Za-z0-9._@()!':|~-]", "-", session).replace(" ", "-")[:200]
     parts = safe.split(":")
     session_id = ":".join(parts[:2]) if len(parts) >= 3 and parts[0] == "avrone" else safe
     return safe or uuid.uuid4().hex, session_id

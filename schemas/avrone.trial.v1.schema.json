@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.avrone.local/avrone.trial.v1.schema.json",
+  "title": "Legacy AVRONE Trial Envelope v1 (draft; boolean failed field)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "trial_id",
+    "system",
+    "node",
+    "source",
+    "run_id",
+    "check_id",
+    "check_version",
+    "check_config_sha256",
+    "attempt_id",
+    "failed"
+  ],
+  "properties": {
+    "schema": {
+      "const": "avrone.trial/v1"
+    },
+    "trial_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 513
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "check_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "check_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "check_config_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "failed": {
+      "type": "boolean"
+    },
+    "system": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "description": "Historical draft schema from PR #7. The v2 receiver does not accept this envelope; use avrone.trial/v2 with explicit outcome values.",
+  "x-status": "legacy-reference-only"
+}

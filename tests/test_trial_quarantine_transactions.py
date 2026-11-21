@@ -522,3 +522,101 @@ def test_independent_process_conflicts_create_exactly_one_sender_quarantine(tmp_
     assert sum(row["result"] == "conflict_quarantined" for row in receipts) == 1
     assert sum(row["result"] == "sender_quarantined" for row in receipts) == 5
     assert reopened.pool_snapshot()["runs"] == 1
+
+
+# Round 225: kill a writer while it is waiting for SQLite's cross-process lock,
+# then combine an unknown committed response with simultaneous replay.
+
+def _blocked_writer_worker(path, payload, ready, go, begin_attempted):
+    store = TrialStore(path)
+    real_connect = store._connect
+
+    class BeginProbe:
+        def __init__(self, connection):
+            self._connection = connection
+
+        def execute(self, sql, *args):
+            if sql.strip().upper() == "BEGIN IMMEDIATE":
+                begin_attempted.set()
+            return self._connection.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._connection, name)
+
+    def instrumented_connect():
+        return BeginProbe(real_connect())
+
+    store._connect = instrumented_connect
+    ready.set()
+    if not go.wait(20):
+        os._exit(85)
+    store.ingest_many([payload], sender="peer-lock-crash", transport="fleet")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL lock test requires POSIX")
+def test_sigkill_while_waiting_for_writer_lock_leaves_no_partial_evidence(tmp_path):
+    path = tmp_path / "private" / "trials.sqlite3"
+    store = TrialStore(path)
+    payload = trial("killed-while-lock-blocked")
+    context = multiprocessing.get_context("spawn")
+    ready = context.Event()
+    go = context.Event()
+    begin_attempted = context.Event()
+    process = context.Process(
+        target=_blocked_writer_worker,
+        args=(str(path), payload, ready, go, begin_attempted),
+    )
+    blocker = None
+    try:
+        process.start()
+        assert ready.wait(timeout=20)
+        blocker = store._connect()
+        blocker.execute("BEGIN IMMEDIATE")
+        go.set()
+        # The worker has reached the real SQLite call while the parent owns
+        # the writer lock. It cannot have made a transaction write yet.
+        assert begin_attempted.wait(timeout=20)
+        process.kill()
+        process.join(timeout=10)
+        assert not process.is_alive()
+        assert process.exitcode == -signal.SIGKILL
+        blocker.commit()
+    finally:
+        if process.pid is not None and process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+        if blocker is not None:
+            if blocker.in_transaction:
+                blocker.rollback()
+            blocker.close()
+
+    reopened = TrialStore(path)
+    assert _raw_counts_and_integrity(path) == (0, 0, 0, 0)
+    assert reopened.receipt_records() == []
+    assert reopened.pool_snapshot()["runs"] == 0
+    assert reopened.ingest_many(
+        [payload], sender="peer-lock-crash", transport="fleet"
+    )["accepted"] == 1
+    assert _raw_counts_and_integrity(path) == (1, 0, 0, 1)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGKILL recovery test requires POSIX")
+def test_unknown_commit_response_then_six_process_replays_are_all_duplicates(tmp_path):
+    path = tmp_path / "private" / "trials.sqlite3"
+    TrialStore(path)
+    payload = trial("unknown-response-process-replay")
+    _kill_at_event(
+        _crash_after_commit_worker,
+        (str(path), payload, "peer-unknown-response"),
+    )
+
+    statuses = _run_multiprocess_ingests(
+        path, payload, "peer-unknown-response", workers=6
+    )
+    assert statuses == ["duplicate"] * 6
+    assert _raw_counts_and_integrity(path) == (1, 0, 0, 7)
+    reopened = TrialStore(path)
+    receipts = reopened.receipt_records()
+    assert sum(row["result"] == "accepted" for row in receipts) == 1
+    assert sum(row["result"] == "duplicate" for row in receipts) == 6
+    assert reopened.pool_snapshot()["runs"] == 1

@@ -1,0 +1,6 @@
+[999fba86a8] run.start      Trinity            mode=chat size=-
+[999fba86a8] agent.spawn    Assistant-1        Assistant
+[999fba86a8] tool.call      Assistant-1        write_file {"path": "shared/notes.txt", "content": "This is a sample note."}
+[999fba86a8] tool.result    Assistant-1        wrote shared/notes.txt (22 bytes)
+[999fba86a8] agent.done     Assistant-1        The `write_file` tool has been successfully used to create or overwrite a file named `shared/notes.t
+[999fba86a8] run.done       Trinity            done

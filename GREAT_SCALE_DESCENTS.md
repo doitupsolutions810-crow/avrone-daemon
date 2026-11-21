@@ -1292,3 +1292,44 @@ both orientations). Chain: 17 rows, 6 causes (5 authored + 1 minted), 1 pending
 cause, ledger r = 1 — zero contradictions; the sixth alarm hunt found the
 verifier's own green light shining on nothing.
 
+
+## Descent XIV — The Spent Counter: One RecursionError Is a Whole Later Trial (2026-11-20)
+
+**Finding.** A `RecursionError` caught inside the fusion ledger is not local.
+On CPython 3.11 it leaves the process recursion counter high, so the next deep
+walk — a different subsystem, `search_files` over a 1,500-directory tree that
+does not itself recurse — fails with the same exception. Fail-fast CI then
+cancels the other Python leg, so the only completed trial is the poisoned one.
+
+This is a Bernoulli check on the process, not on `heat`, `cone_angle`, or
+`beta_t`. Those names are payload fields. The rate below is failed trials
+over completed trials.
+
+Measured evidence, computed with `avrone.greatscale.evidence_snapshot`:
+
+| Check | f/r | p | S = p(1-p) | 4S | Psi = CONE + S | cone floor | orientation |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Python 3.11 CI job 129876891335, run 42829896974, before the iterative cap. `test_deep_tree_walkers_no_recursion` after a 2000-deep `json.dumps`. 2026-11-10 09:05 AM America/Detroit. | 1/1 | 1 | 0 | 0 | 0.3819660112501052 | yes | fail |
+| Same pair after the cap of 32, twenty fresh processes, 2026-11-20 7:50:07 PM through 7:50:22 PM America/Detroit. Anomaly log `/tmp/fusion-edge-anomalies.jsonl` is 0 bytes. | 0/20 | 0 | 0 | 0 | 0.3819660112501052 | yes | pass |
+
+`runsFor95` is 1 when p = 1 and is undefined when p = 0 (nothing to detect).
+Both rows sit on the cone floor. The first is a deterministic failure. The
+second is a deterministic pass. A flaky residue (0 < p < 1) was not observed
+in these trials.
+
+The Python 3.12 leg of that CI run was cancelled, not measured. It is not a
+trial in the table.
+
+Reproduction of the pass row:
+
+```
+python3 -m pytest -q \
+  tests/test_fusion_edges.py::test_surrogate_circular_and_deep_payloads_are_failures_not_crashes \
+  tests/test_round114_deep_paths.py::test_deep_tree_walkers_no_recursion
+```
+
+Repeat that command in a new process. This session did so 20 times, 20 exits
+of 0. `ledger_evidence` maps resolved ledger keys the same way: failures F
+over runs D+F. Pending keys are neither. Payload fields named heat,
+cone_angle, and beta_t are not that p.
+

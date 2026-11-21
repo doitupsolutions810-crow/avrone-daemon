@@ -1,0 +1,22 @@
+[1e6babfb29] run.start      Trinity            mode=squad size=4
+[1e6babfb29] lead.plan      Planner            {"squad_size": 4}
+[1e6babfb29] lead.planned   Planner            Researcher, Engineer, Critic
+[1e6babfb29] agent.spawn    Researcher-1       Researcher
+[1e6babfb29] tool.call      Researcher-1       shell {"cmd": "echo avrone-online && uname -s"}
+[1e6babfb29] agent.spawn    Engineer-2         Engineer
+[1e6babfb29] tool.call      Engineer-2         shell {"cmd": "echo avrone-online && uname -s"}
+[1e6babfb29] agent.spawn    Critic-3           Critic
+[1e6babfb29] tool.call      Critic-3           shell {"cmd": "echo avrone-online && uname -s"}
+[1e6babfb29] tool.result    Researcher-1       $ echo avrone-online && uname -s [exit 0] avrone-online Linux 
+[1e6babfb29] agent.done     Researcher-1       Mock worker result: environment checked, findings ready.
+[1e6babfb29] tool.result    Engineer-2         $ echo avrone-online && uname -s [exit 0] avrone-online Linux 
+[1e6babfb29] agent.done     Engineer-2         Mock worker result: environment checked, findings ready.
+[1e6babfb29] tool.result    Critic-3           $ echo avrone-online && uname -s [exit 0] avrone-online Linux 
+[1e6babfb29] agent.done     Critic-3           Mock worker result: environment checked, findings ready.
+[1e6babfb29] bridge.post    Agent1:Researcher  {"post_id": "f2fc50f44571", "post_kind": "finding", "text": "Mock worker result: environment checked
+[1e6babfb29] bridge.post    Agent2:Engineer    {"post_id": "73893436a352", "post_kind": "finding", "text": "Mock worker result: environment checked
+[1e6babfb29] bridge.post    Agent3:Critic      {"post_id": "619618cdf8dc", "post_kind": "finding", "text": "Mock worker result: environment checked
+[1e6babfb29] bridge.round.start Bridge             {"round": 1, "workers": 3}
+[1e6babfb29] bridge.round.done Bridge             {"round": 1, "corrections": 0, "posts": 3}
+[1e6babfb29] lead.merge     Lead               {"agents": 3}
+[1e6babfb29] run.done       Trinity            done

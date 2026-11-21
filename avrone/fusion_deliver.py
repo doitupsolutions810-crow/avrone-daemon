@@ -26,6 +26,7 @@ stored. That is a syntax limit, not a physical measurement.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
@@ -37,9 +38,17 @@ from pathlib import Path
 from typing import Any, Callable
 from .bridge import _ID_RE
 from .fusion_loopback import origin_key
+from .textsafe import UNSAFE_RUN
 
 MAX_BODY = 4096
 FIELD_BUDGET = 512
+# A peer ack is a small JSON object. Anything larger is not buffered: the key
+# stays pending and the breaker stays closed.
+MAX_RESPONSE_BYTES = 65536
+# Stay far under CPython's recursion limit. json.dumps on a deeper tree raises
+# RecursionError, and on 3.11 catching that error leaves the recursion counter
+# high enough that a later deep walk in the same process fails immediately.
+MAX_NESTING = 32
 SOURCES = ("avrone", "cyclekernal", "greatscale")
 KINDS = ("finding", "question", "answer", "correction", "conclusion", "mood", "evidence", "health")
 RESEND_ON_CK_BOOT = frozenset({"avrone", "greatscale"})
@@ -286,8 +295,34 @@ def _check_known_fields(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _nesting_too_deep(value: Any, limit: int = MAX_NESTING) -> bool:
+    """Iterative depth and cycle check. This function does not recurse.
+
+    The path set is per branch. A dict stored under two keys is one JSON
+    value written twice, not a cycle, and it is legal.
+    """
+    stack: list[tuple[Any, int, frozenset[int]]] = [(value, 0, frozenset())]
+    while stack:
+        node, depth, path = stack.pop()
+        if depth > limit:
+            return True
+        if not isinstance(node, (dict, list, tuple)):
+            continue
+        mark = id(node)
+        if mark in path:
+            return True
+        nxt = path | frozenset((mark,))
+        children = node.values() if isinstance(node, dict) else node
+        for child in children:
+            if isinstance(child, (dict, list, tuple)):
+                stack.append((child, depth + 1, nxt))
+    return False
+
+
 def _payload_too_big(payload: dict[str, Any]) -> bool:
     for value in payload.values():
+        if _nesting_too_deep(value):
+            return True
         try:
             if len(_canonical(value)) > FIELD_BUDGET:
                 return True
@@ -333,8 +368,16 @@ def _json_problem(value: Any) -> str | None:
     return None
 
 
-def _wire_bytes(event: dict[str, Any]) -> bytes:
-    return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+def _wire_bytes(event: dict[str, Any]) -> bytes | None:
+    """UTF-8 JSON, or None when the document still cannot be encoded.
+
+    ``_json_problem`` names the usual causes. This is the last net, including a
+    recursion error, so a leftover document is a refusal and not a crash.
+    """
+    try:
+        return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except (UnicodeError, ValueError, TypeError, OverflowError, RecursionError):
+        return None
 
 
 def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any] | None, str | None]:
@@ -385,7 +428,10 @@ def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any
         "payload": payload,
         "ts": ts,
     }
-    if len(_wire_bytes(event)) > max_body:
+    raw = _wire_bytes(event)
+    if raw is None:
+        return None, "request body is not valid UTF-8"
+    if len(raw) > max_body:
         return None, "request body too large (max 4096 bytes)"
     return event, None
 
@@ -404,6 +450,30 @@ def is_mirror(event: dict[str, Any]) -> bool:
     if agent.lower().startswith("cyclekernal:"):
         return True
     return False
+
+
+def ledger_evidence(accounts: dict[str, int]) -> dict[str, Any]:
+    """Map resolved ledger outcomes onto the Great Scale evidence channel.
+
+    A trial is one admitted key that has left ``pending``. ``failures`` is F,
+    ``runs`` is D + F. Pending keys are not successes and not failures, so they
+    are not in the Bernoulli count. ``heat``, ``cone_angle``, and ``beta_t``
+    on a payload are unrelated fields and are not this ``p``.
+    """
+    from .greatscale import evidence_snapshot
+    delivered = int(accounts.get("D", 0))
+    failed = int(accounts.get("F", 0))
+    pending = int(accounts.get("P", 0))
+    admitted = int(accounts.get("A", delivered + failed + pending))
+    resolved = delivered + failed
+    out: dict[str, Any] = {
+        "A": admitted, "D": delivered, "P": pending, "F": failed, "resolved": resolved,
+    }
+    if resolved == 0:
+        out["note"] = "no resolved keys"
+        return out
+    out.update(evidence_snapshot(failed, resolved))
+    return out
 
 
 def event_from_post(post: dict[str, Any]) -> dict[str, Any]:
@@ -433,7 +503,9 @@ class Breaker:
         self.open_until = 0.0
 
     def is_open(self, now: float) -> bool:
-        return now < self.open_until
+        # open_until starts at 0. A clock that steps backward through 0 must not
+        # look like a tripped breaker.
+        return self.open_until > 0 and now < self.open_until
 
     def record_dial_failure(self, now: float, threshold: int, cooldown: float) -> None:
         self.fails += 1
@@ -459,6 +531,7 @@ class Ledger:
         self._breakers: dict[str, Breaker] = {}
         self._lock = threading.RLock()
         self._writable = True
+        self._file_owner: int | None = None
         self.load()
 
     def accounts(self) -> dict[str, int]:
@@ -487,9 +560,9 @@ class Ledger:
 
         Duplicate keeps the first payload. Failed is an explicit permanent
         failure (the body cannot fit) and is part of A and F, not a drop.
+        A save that does not land raises ``OSError`` and leaves the file as it was.
         """
-        with self._lock:
-            return self._offer(data)
+        return self._exclusive(lambda: self._offer(data))
 
     def _offer(self, data: Any) -> str:
         if isinstance(data, dict) and is_mirror(data):
@@ -503,7 +576,9 @@ class Ledger:
                 if key in self.entries:
                     return "duplicate"
                 self.entries[key] = self._row(key, None, "failed", err)
-                self.save()
+                if not self.save():
+                    self.entries.pop(key, None)
+                    raise OSError("ledger save failed")
                 return "failed"
             raise ValueError(err or "rejected")
         if is_mirror(event):
@@ -513,7 +588,9 @@ class Ledger:
         if key in self.entries:
             return "duplicate"
         self.entries[key] = self._row(key, event, "pending", None)
-        self.save()
+        if not self.save():
+            self.entries.pop(key, None)
+            raise OSError("ledger save failed")
         return "accepted"
 
     @staticmethod
@@ -535,8 +612,7 @@ class Ledger:
         deliveries are requeued when CycleKernal restarts; explicit failures
         stay failed because the payload itself was refused.
         """
-        with self._lock:
-            return self._note_boot(peer, boot)
+        return self._exclusive(lambda: self._note_boot(peer, boot))
 
     def _note_boot(self, peer: str, boot: Any) -> bool:
         if boot is None or boot == "":
@@ -547,21 +623,25 @@ class Ledger:
             return False
         text = str(boot)
         prev = self.boots.get(peer)
-        if prev is None:
-            self.boots[peer] = text
-            self.save()
-            return False
         if prev == text:
             return False
+        prior_boots = dict(self.boots)
+        prior_states = {key: row["state"] for key, row in self.entries.items()}
         self.boots[peer] = text
         changed = False
-        if peer == "cyclekernal":
+        if prev is not None and peer == "cyclekernal":
             for row in self.entries.values():
                 if row["state"] == "delivered" and row["source"] in RESEND_ON_CK_BOOT \
                         and isinstance(row.get("event"), dict):
                     row["state"] = "pending"
                     changed = True
-        self.save()
+        if not self.save():
+            self.boots.clear()
+            self.boots.update(prior_boots)
+            for key, state in prior_states.items():
+                if key in self.entries:
+                    self.entries[key]["state"] = state
+            raise OSError("ledger save failed")
         return changed
 
     def breaker_for(self, base: str) -> Breaker:
@@ -575,43 +655,74 @@ class Ledger:
     def load(self) -> None:
         if self.path is None or not self.path.exists():
             return
+        if not self._refresh_from_disk():
+            # Keep the bytes. Memory starts empty so a torn file is not replayed
+            # and is not replaced by an empty ledger.
+            self.entries.clear()
+            self.boots.clear()
+            self.cursor = ""
+
+    def _refresh_from_disk(self) -> bool:
+        """Replace memory from a readable file. False means the bytes must stay.
+
+        A torn write, a symlink, or a file over the cap is not a ledger this
+        process may replace. The next save would erase the only copy.
+        """
+        if self.path is None or not self.path.exists():
+            return True
         from .safeio import FileTooBig, read_capped
         try:
             raw = read_capped(self.path, STATE_MAX_BYTES)
         except FileTooBig:
-            # Keep the file. Saving over it would erase every pending event it holds.
             self._writable = False
-            self._discard()
-            return
+            self.state_errors += 1
+            return False
         if raw is None:
-            if self.path.exists():
-                self._discard()
-            return
+            self._writable = False
+            self.state_errors += 1
+            return False
         try:
             data = json.loads(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeError, RecursionError, TypeError, ValueError):
-            self._discard()
-            return
+            self._writable = False
+            self.state_errors += 1
+            return False
         if not isinstance(data, dict) or data.get("version") not in (1, 2):
-            self._discard()
-            return
-        self.cursor = data.get("cursor") if isinstance(data.get("cursor"), str) else ""
-        boots = data.get("boots") if isinstance(data.get("boots"), dict) else {}
-        self.boots = {str(k): str(v) for k, v in boots.items() if isinstance(v, (str, int)) and not isinstance(v, bool)}
+            self._writable = False
+            self.state_errors += 1
+            return False
+        return self._apply_data(data)
+
+    def _apply_data(self, data: dict[str, Any]) -> bool:
+        entries: "OrderedDict[tuple[str, str], dict[str, Any]]" = OrderedDict()
+        cursor = data.get("cursor") if isinstance(data.get("cursor"), str) else ""
+        boots_raw = data.get("boots") if isinstance(data.get("boots"), dict) else {}
+        boots = {str(k): str(v) for k, v in boots_raw.items()
+                 if isinstance(v, (str, int)) and not isinstance(v, bool)}
         if data.get("version") == 1:
-            self._load_v1_seen(data.get("seen"))
-            return
-        rows = data.get("entries")
-        if not isinstance(rows, list):
-            self._discard()
-            return
-        for row in rows:
-            parsed = self._parse_row(row)
-            if parsed is None:
-                continue
-            key = (parsed["source"], parsed["id"])
-            if key not in self.entries:
-                self.entries[key] = parsed
+            seen = data.get("seen")
+            if isinstance(seen, list):
+                for item in seen:
+                    if isinstance(item, str) and _ID_RE.match(item):
+                        key = ("avrone", item)
+                        entries[key] = self._row(key, None, "delivered", "version-1 seen")
+        else:
+            rows = data.get("entries")
+            if not isinstance(rows, list):
+                self._writable = False
+                self.state_errors += 1
+                return False
+            for row in rows:
+                parsed = self._parse_row(row)
+                if parsed is None:
+                    continue
+                key = (parsed["source"], parsed["id"])
+                if key not in entries:
+                    entries[key] = parsed
+        self.entries = entries
+        self.boots = boots
+        self.cursor = cursor
+        return True
 
     def _load_v1_seen(self, seen: Any) -> None:
         if not isinstance(seen, list):
@@ -665,9 +776,11 @@ class Ledger:
         self.cursor = ""
         self.state_errors += 1
 
-    def save(self) -> None:
-        if self.path is None or not getattr(self, "_writable", True):
-            return
+    def save(self) -> bool:
+        if self.path is None:
+            return True
+        if not getattr(self, "_writable", True):
+            return False
         payload = {
             "version": 2,
             "cursor": self.cursor,
@@ -678,9 +791,42 @@ class Ledger:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             from .safeio import atomic_write
-            atomic_write(self.path, json.dumps(payload, separators=(",", ":")), encoding="utf-8")
-        except OSError:
-            return
+            atomic_write(self.path, json.dumps(payload, separators=(",", ":"), ensure_ascii=True),
+                         encoding="utf-8")
+            return True
+        except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
+            return False
+
+    def _exclusive(self, fn: Callable[[], Any]) -> Any:
+        """One writer at a time, across threads and processes, reloading first.
+
+        A nested call on this thread (pump calling note_boot) does not take
+        the file lock again and does not reload over unsaved rows.
+        """
+        if self._file_owner == threading.get_ident():
+            return fn()
+        with self._lock:
+            if self.path is None:
+                self._file_owner = threading.get_ident()
+                try:
+                    return fn()
+                finally:
+                    self._file_owner = None
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = Path(str(self.path) + ".lock")
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+            self._file_owner = threading.get_ident()
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                if not self._refresh_from_disk():
+                    raise OSError("ledger file is not usable")
+                return fn()
+            finally:
+                self._file_owner = None
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
 
     def pump(self, transport: Transport, config: DeliverConfig | None = None, *, max_cycles: int = 8) -> dict[str, Any]:
         """Deliver pending keys. Each cycle is deadline-bounded. Stops when idle.
@@ -688,6 +834,9 @@ class Ledger:
         ``max_cycles`` is the hard stop so a peer that never recovers cannot
         loop forever. Pending keys stay pending; they are not failed.
         """
+        return self._exclusive(lambda: self._pump(transport, config, max_cycles=max_cycles))
+
+    def _pump(self, transport: Transport, config: DeliverConfig | None = None, *, max_cycles: int = 8) -> dict[str, Any]:
         config = config or config_from_env()
         cycles = 0
         calls = 0
@@ -766,6 +915,10 @@ class Ledger:
                 return "stopped", calls
             event = row["event"]
             body = _wire_bytes(event)
+            if body is None:
+                with self._lock:
+                    self._fail(row, 400, "request body is not valid UTF-8")
+                return "failed", calls
             if len(body) > config.max_body:
                 with self._lock:
                     self._fail(row, 413, "request body too large (max 4096 bytes)")
@@ -775,6 +928,10 @@ class Ledger:
                 "Idempotency-Key": event["id"],
             }
             if config.token:
+                if _header_unsafe(config.token):
+                    with self._lock:
+                        self.save()
+                    return "auth", calls
                 headers["X-Admin-Token"] = config.token
             timeout = self._call_timeout(config, start)
             result = transport("POST", _join(config.base, config.events_path), body, headers, timeout)
@@ -824,7 +981,28 @@ class Ledger:
         self.save()
 
 
+def _header_unsafe(value: str) -> bool:
+    """True when ``value`` must not be an HTTP header.
+
+    The same class ``fusion_peer._header_value`` uses: C0, C1, DEL, NEL,
+    U+2028/2029, and bidi controls, plus any character HTTP headers cannot
+    carry (they are latin-1). A bad token is not a dead peer.
+    """
+    if UNSAFE_RUN.search(value):
+        return True
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def _classify(result: HttpResult) -> str:
+    if result.error == "bad-header":
+        return "auth"
+    if result.error == "truncated":
+        # The peer spoke, but the body is not an ack we will buffer. Retry.
+        return "status5xx"
     if result.error in {"timeout", "refused"}:
         return "dial"
     if result.error:
@@ -842,6 +1020,10 @@ def _classify(result: HttpResult) -> str:
         return "status5xx"
     if 400 <= status < 500:
         return "permanent"
+    if 300 <= status < 400:
+        # Not a 2xx ack and not a dead socket. Do not open the breaker, and do
+        # not follow the Location: the admin token must stay on this origin.
+        return "status3xx"
     return "dial"
 
 
@@ -851,11 +1033,27 @@ def _join(base: str, path: str) -> str:
 
 
 def httpx_transport(method: str, url: str, body: bytes | None, headers: dict[str, str], timeout: float) -> HttpResult:
-    """One real HTTP call. ``trust_env`` is off so an HTTP proxy cannot swallow loopback."""
+    """One real HTTP call. ``trust_env`` is off so an HTTP proxy cannot swallow loopback.
+
+    The response is read in chunks and stopped at ``MAX_RESPONSE_BYTES``. A
+    slow, partial, or oversized body is an error result, not an exception.
+    """
     import httpx
+    if any(_header_unsafe(value) for value in headers.values()):
+        return HttpResult(0, None, "bad-header")
     try:
-        with httpx.Client(timeout=timeout, trust_env=False) as client:
-            response = client.request(method, url, content=body, headers=headers)
+        with httpx.Client(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+            with client.stream(method, url, content=body, headers=headers) as response:
+                buf = bytearray()
+                for chunk in response.iter_bytes():
+                    if not chunk:
+                        continue
+                    buf.extend(chunk)
+                    if len(buf) > MAX_RESPONSE_BYTES:
+                        return HttpResult(response.status_code, None, "truncated")
+                raw = bytes(buf)
+                retry_after = response.headers.get("retry-after")
+                status = response.status_code
     except httpx.TimeoutException:
         return HttpResult(0, None, "timeout")
     except httpx.ConnectError:
@@ -864,10 +1062,10 @@ def httpx_transport(method: str, url: str, body: bytes | None, headers: dict[str
         return HttpResult(0, None, "refused")
     parsed: dict[str, Any] | None = None
     try:
-        data = response.json()
+        data = json.loads(raw.decode("utf-8")) if raw else None
         if isinstance(data, dict):
             parsed = data
-    except (json.JSONDecodeError, UnicodeError, ValueError):
+    except (json.JSONDecodeError, UnicodeError, ValueError, RecursionError):
         parsed = None
-    return HttpResult(response.status_code, parsed, None, response.headers.get("retry-after"))
+    return HttpResult(status, parsed, None, retry_after)
 

@@ -1,0 +1,4 @@
+[59559e9593] run.start      Trinity            mode=chat size=-
+[59559e9593] agent.spawn    Assistant-1        Assistant
+[59559e9593] agent.done     Assistant-1        To begin, first ensure that the latest run logs are available. This includes the most recent `keep` 
+[59559e9593] run.done       Trinity            done

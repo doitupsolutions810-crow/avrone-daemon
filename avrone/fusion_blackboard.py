@@ -64,6 +64,8 @@ def normalize_blackboard_post(data: Any) -> tuple[dict[str, Any] | None, str | N
     elif not isinstance(raw_run, str):
         return None, "bad run id"
     else:
+        # Strip before the 80-character cut, so a blank id is "run" and a
+        # padded id does not lose its tail to leading spaces.
         run_id = raw_run.strip()[:80] or "run"
     return {
         "id": pid,

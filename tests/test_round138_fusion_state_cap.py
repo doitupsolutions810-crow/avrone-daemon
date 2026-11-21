@@ -73,5 +73,8 @@ def test_ledger_too_big_is_not_overwritten(tmp_path, monkeypatch):
     monkeypatch.setattr(fd, "STATE_MAX_BYTES", 100)
     again = fd.Ledger(path)
     assert again.state_errors == 1
-    again.offer(_event(99, "new"))
-    assert path.read_bytes() == before  # the events it could not read are still on disk
+    # A file we cannot read is not a silent accept, and it is not replaced.
+    import pytest
+    with pytest.raises(OSError):
+        again.offer(_event(99, "new"))
+    assert path.read_bytes() == before

@@ -1,0 +1,30 @@
+{
+  "run_id": "1e6babfb29",
+  "answer": "FINAL ANSWER (mock): merged the squad's findings into one answer.",
+  "agents": [
+    {
+      "role": "Researcher",
+      "focus": "Gather facts relevant to: Write one offline edge test for the fusion delivery ledger and say which file yo",
+      "result": "Mock worker result: environment checked, findings ready."
+    },
+    {
+      "role": "Engineer",
+      "focus": "Work out a concrete solution for: Write one offline edge test for the fusion delivery ledger and say which file yo",
+      "result": "Mock worker result: environment checked, findings ready."
+    },
+    {
+      "role": "Critic",
+      "focus": "Find flaws and risks in approaches to: Write one offline edge test for the fusion delivery ledger and say which file yo",
+      "result": "Mock worker result: environment checked, findings ready."
+    }
+  ],
+  "bridge": {
+    "rounds_run": 1,
+    "max_rounds": 1,
+    "stop_reason": "converged",
+    "corrections": 0,
+    "revised": 0,
+    "posts": 3,
+    "unresolved": 0
+  }
+}

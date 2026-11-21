@@ -268,6 +268,7 @@ def test_retryable_statuses_and_avrone_boot_keeps_findings(tmp_path):
             result = watch.submit(url, "secret", {**event, "id": "retry0000001"}, "retry0000001")
             assert result["error"] == error and result["remembered"] is False
             assert "retry0000001" not in watch.seen
+            watch._hold_until.clear()
         peer.mode = "ok"
         assert watch.submit(url, "secret", {**event, "id": "retry0000001"}, "retry0000001")["ok"] is True
 

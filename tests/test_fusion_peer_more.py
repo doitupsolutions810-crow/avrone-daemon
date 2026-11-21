@@ -225,6 +225,121 @@ def test_breaker_opens_on_timeout_not_on_500_and_a_probe_recovers():
         assert peer.gets.count("/health") == 2
 
 
+def test_loopback_spellings_share_a_breaker_and_a_proxy_is_ignored(monkeypatch):
+    with _Running() as peer:
+        host, port = peer.server_address
+        base = f"http://{host}:{port}"
+        watch = fp.FusionWatch()
+        urls = _urls(base)
+        urls.update(timeout=0.15, breaker_threshold=1, breaker_cooldown=30.0)
+        peer.health_delay = 0.4
+        opened = watch.watch_once(**urls)
+        assert opened["health"] == "timeout"
+        assert watch._circuit_blocked(f"http://[::1]:{port}/health") is True
+        assert watch._circuit_blocked(f"http://[::ffff:127.0.0.1]:{port}/health") is True
+        assert watch._circuit_blocked(f"http://127.0.0.2:{port}/health") is False
+        before = list(peer.gets)
+        skipped = watch._dial("GET", f"http://[::1]:{port}/health", timeout=0.2)
+        assert skipped["error"] == "circuit"
+        assert peer.gets == before
+
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+    with _Running() as peer:
+        host, port = peer.server_address
+        hop = fp._exchange("GET", f"http://{host}:{port}/health", timeout=1.0)
+        assert hop["ok"] is True and hop["body"]["status"] == "ghost-online"
+        assert "/health" in peer.gets
+
+
+def test_empty_2xx_is_delivered_and_ports_do_not_share_a_breaker_and_a_ledger_file_is_kept(tmp_path):
+    with _Running() as peer:
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        watch = fp.FusionWatch()
+        peer.mode = "204"
+        event = fp.event_from_post(POST)
+        first = watch.submit(base + "/v1/events", "secret", event, "find0000001")
+        assert first["ok"] is True and first["remembered"] is True and first["duplicate"] is False
+        second = watch.submit(base + "/v1/events", "secret", event, "find0000001")
+        assert second["skipped"] is True
+        assert peer.posts_hits == 1
+
+    with _Running() as left, _Running() as right:
+        left.health_delay = 0.4
+        watch = fp.FusionWatch()
+        urls = _urls(f"http://127.0.0.1:{left.server_address[1]}")
+        urls.update(timeout=0.15, breaker_threshold=1, breaker_cooldown=30.0)
+        assert watch.watch_once(**urls)["health"] == "timeout"
+        other = f"http://127.0.0.1:{right.server_address[1]}/health"
+        assert watch._circuit_blocked(other) is False
+        hop = watch._dial("GET", other, timeout=1.0)
+        assert hop["ok"] is True and "/health" in right.gets
+
+    ledger = {
+        "version": 2,
+        "cursor": "keep",
+        "boots": {"cyclekernal": "boot-a"},
+        "entries": [{
+            "source": "avrone", "id": "find0000001", "state": "pending",
+            "event": {"id": "find0000001", "source": "avrone"}, "detail": None,
+            "attempts": 0, "status": None,
+        }],
+        "state_errors": 0,
+    }
+    path = tmp_path / "ledger.json"
+    raw = json.dumps(ledger)
+    path.write_text(raw)
+    watch = fp.FusionWatch(path)
+    assert watch.seen == set() and watch._writable is False
+    assert watch._save() is False
+    assert path.read_text() == raw
+
+
+def test_retry_after_holds_the_origin_and_garbage_does_not_spin(tmp_path):
+    with _Running() as peer:
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        url = base + "/v1/events"
+        watch = fp.FusionWatch()
+        event = fp.event_from_post(POST)
+        peer.mode = "429"
+        peer.retry_after = "0"
+        first = watch.submit(url, "secret", event, "find0000001")
+        assert first["error"] == "retry" and first["remembered"] is False
+        assert peer.posts_hits == 1
+        held = watch.submit(url, "secret", event, "find0000001")
+        assert held["error"] == "retry" and peer.posts_hits == 1
+        watch._hold_until.clear()
+        peer.retry_after = "31"
+        watch.submit(url, "secret", event, "find0000001")
+        wait = next(iter(watch._hold_until.values())) - time.monotonic()
+        assert 0 < wait < 0.2
+        watch._hold_until.clear()
+        peer.retry_after = "Wednesday"
+        watch.submit(url, "secret", event, "find0000001")
+        wait = next(iter(watch._hold_until.values())) - time.monotonic()
+        assert 0 < wait < 0.2
+        peer.mode = "ok"
+        watch._hold_until.clear()
+        assert watch.submit(url, "secret", event, "find0000001")["ok"] is True
+
+    with _Running() as peer:
+        base = f"http://{peer.server_address[0]}:{peer.server_address[1]}"
+        watch = fp.FusionWatch()
+        peer.mode = "429"
+        peer.retry_after = "0.4"
+        event = fp.event_from_post(dict(POST, id="wait00000001", text="later"))
+        assert watch.submit(base + "/v1/events", "secret", event, "wait00000001")["error"] == "retry"
+        other = _Running()
+        try:
+            other.__enter__()
+            hopped = watch._dial("GET", f"http://127.0.0.1:{other.httpd.server_address[1]}/health", timeout=1.0)
+            assert hopped["ok"] is True
+        finally:
+            other.__exit__(None, None, None)
+
+
 def test_breaker_env_defaults_and_clamps(monkeypatch):
     monkeypatch.delenv("FUSION_BREAKER_THRESHOLD", raising=False)
     monkeypatch.delenv("FUSION_BREAKER_COOLDOWN", raising=False)

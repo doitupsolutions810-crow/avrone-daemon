@@ -238,6 +238,7 @@ class TrialStore:
 
     def _make_verified_file_private(
         self, path: Path, expected_identity: tuple[int, int], label: str,
+        *, allow_missing: bool = False,
     ) -> None:
         """Descriptor-pin one owned regular file before changing it to 0600."""
         nofollow = getattr(os, "O_NOFOLLOW", None)
@@ -248,8 +249,20 @@ class TrialStore:
         fd = None
         try:
             self._assert_no_symlink_components(path.parent, label)
+            self._assert_private_parent()
             flags = os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0)
-            fd = os.open(path, flags)
+            try:
+                fd = os.open(path, flags)
+            except FileNotFoundError:
+                # SQLite may unlink a sidecar when another process closes its
+                # last connection. Accept only a confirmed absence; the main
+                # database is never allowed to disappear at this boundary.
+                if allow_missing:
+                    try:
+                        path.lstat()
+                    except FileNotFoundError:
+                        return
+                raise
             info = os.fstat(fd)
             identity = (info.st_dev, info.st_ino)
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
@@ -268,6 +281,7 @@ class TrialStore:
                 raise TrialStoreError(label + " path changed during permission finalization")
             if stat.S_IMODE(after.st_mode) != 0o600:
                 raise TrialStoreError(label + " permissions could not be finalized to 0600")
+            self._assert_private_parent()
         except OSError as exc:
             raise TrialStoreError(
                 label + " cannot be secured before SQLite open"
@@ -307,7 +321,8 @@ class TrialStore:
                 )
             self._assert_file_owner(info, "trial database sidecar")
             self._make_verified_file_private(
-                sidecar, (info.st_dev, info.st_ino), "trial database sidecar"
+                sidecar, (info.st_dev, info.st_ino), "trial database sidecar",
+                allow_missing=True,
             )
         self._assert_sidecar_files(require_private=True)
 

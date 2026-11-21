@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from avrone import ai_observability
+from avrone import gateway as gateway_module
 import httpx
 
 from avrone.gateway import Gateway, LLMError

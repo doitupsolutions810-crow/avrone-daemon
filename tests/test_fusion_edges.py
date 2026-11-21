@@ -846,9 +846,11 @@ def test_board_post_round_trip_and_its_mirror_is_not_forwarded(client, tmp_path)
 
 
 def test_loose_blackboard_shapes_do_not_500(client):
-    assert _post(client, {"text": 1, "kind": " Finding "}).status_code == 200
-    row = client.get("/api/blackboard", headers=AUTH).json()["posts"][0]
-    assert row["text"] == "1" and row["kind"] == "finding"
+    # A number is not text. Main stores a string or refuses; it does not keep "1".
+    refused = _post(client, {"text": 1, "kind": " Finding "})
+    assert refused.status_code == 400
+    assert refused.json()["detail"] == "text must be a string"
+    assert client.get("/api/blackboard", headers=AUTH).json()["count"] == 0
     assert _post(client, {"id": "refs-dict", "text": "r", "refs": {"a": 1}}).status_code == 200
     stored = [p for p in client.get("/api/blackboard", headers=AUTH).json()["posts"] if p["id"] == "refs-dict"][0]
     assert stored["refs"] == []
@@ -1035,18 +1037,20 @@ def test_nesting_boundary_is_32_and_does_not_recurse(tmp_path):
 
 
 def test_bom_huge_timestamp_and_repeated_since_do_not_500(client):
+    # The server strips a UTF-8 BOM and then parses the post. It is not a 400.
     bom = b'\xef\xbb\xbf{"text":"hi"}'
     r = client.post("/api/blackboard", content=bom, headers=AUTH)
-    assert r.status_code == 400
-    assert client.get("/api/blackboard", headers=AUTH).json()["count"] == 0
+    assert r.status_code == 200, r.text
     huge = b'{"id":"huge-ts","text":"t","ts":' + b"9" * 400 + b"}"
     assert len(huge) < 4096
     r = client.post("/api/blackboard", content=huge, headers=AUTH)
     assert r.status_code == 200, r.text
-    row = client.get("/api/blackboard", headers=AUTH).json()["posts"][0]
-    assert row["id"] == "huge-ts" and row["ts"] == row["ts"] and row["ts"] > 0
+    posts = client.get("/api/blackboard", headers=AUTH).json()["posts"]
+    row = next(p for p in posts if p["id"] == "huge-ts")
+    assert row["ts"] == row["ts"] and row["ts"] > 0
+    assert any(p["text"] == "hi" for p in posts)
     both = client.get("/api/blackboard?since=missing&since=also", headers=AUTH)
-    assert both.status_code == 200 and both.json()["count"] == 1
+    assert both.status_code == 200 and both.json()["count"] == 2
 
 
 def test_ports_do_not_share_a_breaker_and_a_zone_id_is_still_loopback(tmp_path):
@@ -1087,6 +1091,44 @@ def test_tab_in_token_is_not_a_header_and_nesting_32_is_the_last_legal_depth(tmp
     report = ledger.pump(tape, _cfg(token="ab cd"), max_cycles=1)
     assert tape.posts == 1 and report["D"] == 1
     assert tape.headers[-1]["X-Admin-Token"] == "ab cd"
+
+
+def test_shared_child_is_legal_and_a_nel_token_does_not_open_the_breaker(tmp_path):
+    shared = {"k": 1}
+    raw = _event(eid="diamond")
+    raw["payload"] = {"text": "x", "left": shared, "right": shared}
+    event, err = prepare_event(raw)
+    assert err is None and event is not None
+    node: dict = {"n": 0}
+    cursor = node
+    for _ in range(32):
+        cursor["down"] = {}
+        cursor = cursor["down"]
+    deep = _event(eid="d32")
+    deep["payload"] = {"text": "x", "tree": node}
+    assert prepare_event(deep)[1] is None
+    clock = ManualClock()
+    tape = Tape(clock, ["200"])
+    ledger = Ledger(tmp_path / "diamond.json", clock)
+    assert ledger.offer(event) == "accepted"
+    report = ledger.pump(tape, _cfg(token="ab\u0085cd"), max_cycles=1)
+    assert tape.posts == 0 and report["P"] == 1 and report["F"] == 0
+    assert ledger.breaker_for("http://127.0.0.1:8090").fails == 0
+    report = ledger.pump(tape, _cfg(token="日"), max_cycles=1)
+    assert tape.posts == 0
+    assert ledger.breaker_for("http://127.0.0.1:8090").fails == 0
+
+
+def test_blackboard_redacts_a_secret_before_the_watchdog_reads_it(client):
+    from avrone.fusion_peer import event_from_post as peer_event
+    posted = _post(client, {"id": "red-1", "text": "api_key='abc-def'", "ts": 3})
+    assert posted.status_code == 200
+    row = client.get("/api/blackboard", headers=AUTH).json()["posts"][0]
+    assert "abc-def" not in row["text"]
+    assert "[REDACTED]" in row["text"]
+    event = peer_event(row)
+    assert event is not None
+    assert "abc-def" not in json.dumps(event)
 
 
 def test_resolved_ledger_maps_onto_greatscale_without_using_payload_fields(tmp_path):

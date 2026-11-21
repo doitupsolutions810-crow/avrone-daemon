@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Callable
 from .bridge import _ID_RE
 from .fusion_loopback import origin_key
+from .textsafe import UNSAFE_RUN
 
 MAX_BODY = 4096
 FIELD_BUDGET = 512
@@ -291,23 +292,26 @@ def _check_known_fields(payload: dict[str, Any]) -> str | None:
 
 
 def _nesting_too_deep(value: Any, limit: int = MAX_NESTING) -> bool:
-    """Iterative depth and cycle check. This function does not recurse."""
-    stack: list[tuple[Any, int]] = [(value, 0)]
-    seen: set[int] = set()
+    """Iterative depth and cycle check. This function does not recurse.
+
+    The path set is per branch. A dict stored under two keys is one JSON
+    value written twice, not a cycle, and it is legal.
+    """
+    stack: list[tuple[Any, int, frozenset[int]]] = [(value, 0, frozenset())]
     while stack:
-        node, depth = stack.pop()
+        node, depth, path = stack.pop()
         if depth > limit:
             return True
         if not isinstance(node, (dict, list, tuple)):
             continue
         mark = id(node)
-        if mark in seen:
+        if mark in path:
             return True
-        seen.add(mark)
+        nxt = path | frozenset((mark,))
         children = node.values() if isinstance(node, dict) else node
         for child in children:
             if isinstance(child, (dict, list, tuple)):
-                stack.append((child, depth + 1))
+                stack.append((child, depth + 1, nxt))
     return False
 
 
@@ -896,13 +900,19 @@ class Ledger:
 
 
 def _header_unsafe(value: str) -> bool:
-    """A C0 control or DEL in a header value is not a token and not a dead peer.
+    """True when ``value`` must not be an HTTP header.
 
-    CR and LF would split the header. The rest of C0, and DEL, are not a token
-    the peer can read. Space and every non-ASCII character stay, so a rotation
-    token with spaces is unchanged.
+    The same class ``fusion_peer._header_value`` uses: C0, C1, DEL, NEL,
+    U+2028/2029, and bidi controls, plus any character HTTP headers cannot
+    carry (they are latin-1). A bad token is not a dead peer.
     """
-    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+    if UNSAFE_RUN.search(value):
+        return True
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        return True
+    return False
 
 
 def _classify(result: HttpResult) -> str:

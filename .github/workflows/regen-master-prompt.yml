@@ -1,0 +1,65 @@
+# Regenerates MASTER_PROMPT.md from the live tree (test_master_prompt pins it), then runs the
+# full pytest gate and publishes docs/ci-latest-report.md so results stay readable in-repo.
+name: Regen master prompt and report
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: regen-gate
+  cancel-in-progress: false
+jobs:
+  regen-and-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      AVRONE_LLM_MODE: mock
+      AVRONE_RUNNER: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" pytest-cov
+      - name: Regenerate MASTER_PROMPT.md
+        run: python tools/make_master_prompt.py
+      - name: Commit regenerated file
+        run: |
+          git config user.name "avrone-regen-bot"
+          git config user.email "avrone-regen-bot@users.noreply.github.com"
+          if ! git diff --quiet MASTER_PROMPT.md; then
+            git add MASTER_PROMPT.md
+            git commit -m "Regenerate MASTER_PROMPT.md from live tree"
+            git push
+          fi
+      - name: Full gate
+        run: |
+          set +e
+          pytest -q > /tmp/pytest.log 2>&1
+          echo $? > /tmp/exit
+          tail -n 40 /tmp/pytest.log
+          test "$(cat /tmp/exit)" = 0
+      - name: Publish report
+        if: always()
+        run: |
+          {
+            echo "# CI gate report (auto-generated)"
+            echo
+            echo "- run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "- pytest exit: $(cat /tmp/exit 2>/dev/null || echo n/a)"
+            echo
+            echo '```text'
+            tail -n 60 /tmp/pytest.log 2>/dev/null || true
+            echo '```'
+          } > docs/ci-latest-report.md
+          git config user.name "avrone-regen-bot"
+          git config user.email "avrone-regen-bot@users.noreply.github.com"
+          git add docs/ci-latest-report.md
+          if ! git diff --cached --quiet; then
+            git commit -m "CI gate report"
+            git push
+          fi

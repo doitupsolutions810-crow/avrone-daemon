@@ -249,3 +249,94 @@ def test_http_request(env, monkeypatch):
     assert "unsupported method" in call(env, "http_request", method="TRACE", url="https://a.b")
     env.s.allow_network = False
     assert "disabled" in call(env, "http_request", method="GET", url="https://a.b")
+
+def test_search_files_eof_before_exit_must_not_kill_child(env, monkeypatch):
+    """A child that closes stdout just before exit must be reaped, not killed.
+
+    The full suite intermittently saw asyncio's child watcher report returncode
+    255 for a successful no-match scan because cleanup killed before wait().
+    """
+    class FakeStdin:
+        def write(self, data):
+            assert data
+        async def drain(self):
+            return None
+        def close(self):
+            return None
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stderr = None
+            self.returncode = None
+            self.killed = False
+            self.waited = False
+
+            async def no_lines():
+                if False:
+                    yield b""
+            self.stdout = no_lines()
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            self.waited = True
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    child = FakeProcess()
+
+    async def spawn(*args, **kwargs):
+        return child
+
+    monkeypatch.setattr(tx.asyncio, "create_subprocess_exec", spawn)
+    output = call(env, "search_files", pattern="nothing-can-match")
+    assert "No matches" in output
+    assert child.waited
+    assert not child.killed
+    assert child.returncode == 0
+
+
+def test_search_files_hung_child_still_killed_on_deadline(env, monkeypatch):
+    """Normal EOF must be safe without weakening the catastrophic-regex timeout."""
+    class FakeStdin:
+        def write(self, data):
+            return None
+        async def drain(self):
+            return None
+        def close(self):
+            return None
+
+    class HungProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stderr = None
+            self.returncode = None
+            self.killed = False
+
+            async def no_eof():
+                await asyncio.sleep(60)
+                if False:
+                    yield b""
+            self.stdout = no_eof()
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    child = HungProcess()
+
+    async def spawn(*args, **kwargs):
+        return child
+
+    monkeypatch.setattr(tx.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(tx, "SEARCH_TIMEOUT_S", 0.01)
+    output = call(env, "search_files", pattern="slow")
+    assert "search stopped after" in output
+    assert child.killed

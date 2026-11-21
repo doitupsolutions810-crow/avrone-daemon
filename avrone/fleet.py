@@ -1,3 +1,10 @@
+        if kind == "trials" and (not self.allow or sender not in self.allow):
+            # Evidence ingestion always requires an explicit, non-empty sender allowlist.
+            raise self._refuse(
+                "sender_not_allowed",
+                "trial ingestion requires sender in a non-empty AVRONE_FLEET_ALLOW",
+                **ctx,
+            )
 """Fleet: link AVRONE servers into a network of nodes that spawn agents on each other.
 
 Every AVRONE server can be a node, a router (a node with children), or both.
@@ -221,7 +228,7 @@ SPAWN_MODES = ("squad", "chat", "deep")
 PRIVILEGED_CAPABILITIES = {"priv:shell", "priv:admin"}
 PRIVILEGED_HEADER = "x-avrone-privileged"
 # non-spawn capabilities, kept apart from the (minimal) spawn/message table above
-SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}}
+SYNC_CAPABILITIES: dict[str, set[str]] = {"memory": {"memory:sync"}, "agentpack": {"agent:migrate"}, "trials": {"evidence:trial:ingest"}}
 # netsquad: a squad subtask placed on this node (runs as a sub-squad/chat here, may recurse further down)
 NET_CAPABILITIES: dict[str, set[str]] = {"run": {"squad:net"}}
 NETSQUAD_CAP = "squad:net"

@@ -1,3 +1,13 @@
+
+def canonical_source_key(source: str) -> str:
+    """Return the exact case-insensitive source key used by the evidence pool."""
+    if not isinstance(source, str) or len(source) > MAX_SOURCE_CHARS * 4:
+        raise ValueError("source must be a non-empty string of at most 128 characters")
+    normalized = _canon(source)
+    if not normalized or len(normalized) > MAX_SOURCE_CHARS:
+        raise ValueError("source must be a non-empty string of at most 128 characters")
+    return normalized.casefold()
+
 """Bounded, provenance-aware pooling for Great Scale verification trials.
 
 This is an additive contract for future bridge/fleet consumers. It deliberately
@@ -95,7 +105,7 @@ def pool_trials(trials: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             raise ValueError("source must be a non-empty string of at most 128 characters")
         if not trial_id or len(trial_id) > MAX_TRIAL_ID_CHARS:
             raise ValueError("trial_id must be a non-empty string of at most 256 characters")
-        source_key = source.casefold()  # host and node names are case-insensitive
+        source_key = canonical_source_key(source)  # host and node names are case-insensitive
         if source_key in source_names:
             source = source_names[source_key]  # report the first spelling seen
         if trial_id in seen:

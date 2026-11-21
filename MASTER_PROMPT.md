@@ -1,3 +1,6 @@
+│   ├── trial_adapters.py        Versioned fleet and bridge adapters for the AVRONE trial receiver.
+│   ├── trial_contract.py        Versioned, bounded trial identity contract for cross-system evidence.
+│   ├── trial_receiver.py        Durable, idempotent receiver for authenticated AVRONE trial envelopes.
 # AVRONE MASTER PROMPT (v0.161.0)
 
 You are taking over engineering of **AVRONE** as the owner's engineering partner. AVRONE is an
@@ -111,7 +114,7 @@ Avrone/
 │   ├── tools_statehealth.py     state_health + registry_audit: what an agent (or the self-evolve loop) can see about its own
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 395 test files, offline by default
+├── tests/                  # 442 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py

@@ -2,6 +2,8 @@
 exists, and the committed file matches a fresh generation."""
 import re
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
 from avrone import __version__
@@ -12,9 +14,29 @@ ROOT = Path(__file__).resolve().parent.parent
 MOD = runpy.run_path(str(ROOT / "tools" / "make_master_prompt.py"))
 
 
+def _clean_build() -> str:
+    code = "import runpy, sys; sys.stdout.write(runpy.run_path(sys.argv[1])['build']())"
+    r = subprocess.run([sys.executable, "-c", code, str(ROOT / "tools" / "make_master_prompt.py")],
+                       capture_output=True, text=True, cwd=str(ROOT))
+    if r.returncode != 0:
+        raise AssertionError("clean build failed: " + (r.stderr or "").strip()[:400])
+    return r.stdout
+
+
 def test_committed_prompt_is_current():
-    assert (ROOT / "MASTER_PROMPT.md").read_text(encoding="utf-8") == MOD["build"](), \
-        "run: python tools/make_master_prompt.py"
+    text = (ROOT / "MASTER_PROMPT.md").read_text(encoding="utf-8")
+    if text == MOD["build"]():  # fast path: pure, in-process
+        return
+    # a long pytest run can leave import/env side effects behind (fake modules stuffed into
+    # sys.modules, patched registries the generator consults); judge the committed file in a
+    # clean interpreter before calling it stale.
+    clean = _clean_build()
+    if text == clean:
+        return
+    first = next((i for i, (a, b) in enumerate(zip(text, clean)) if a != b), min(len(text), len(clean)))
+    raise AssertionError("run: python tools/make_master_prompt.py (clean build differs at char "
+                         + str(first) + ": committed " + repr(text[first:first + 60])
+                         + " vs clean " + repr(clean[first:first + 60]) + ")")
 
 
 def test_prompt_names_only_real_things():

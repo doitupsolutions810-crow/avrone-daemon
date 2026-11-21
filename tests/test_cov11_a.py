@@ -88,8 +88,11 @@ def test_inspect_tool_skips_vanished_and_redact_none():
 
 
 def test_route_of_bypass_error(monkeypatch):
-    monkeypatch.setattr(tools_routerstatus.urllib.request if hasattr(tools_routerstatus, "urllib") else
-                        __import__("urllib.request").request, "getproxies", lambda: {"https": "http://p:1"})
+    # round 64+: route_of asks httpx first (it honours ALL_PROXY); on any host without proxy env
+    # that short-circuits to "direct" and the urllib fallback below never runs. Pin the httpx seam
+    # off so this test exercises the fallback: an env proxy with a RAISING proxy_bypass must still
+    # report env-proxy (an odd NO_PROXY never breaks a read-only report).
+    monkeypatch.setattr(tools_routerstatus, "_httpx_route", lambda base_url: None)
     import urllib.request as ur
     monkeypatch.setattr(ur, "getproxies", lambda: {"https": "http://p:1"})
     monkeypatch.setattr(ur, "proxy_bypass", lambda h: (_ for _ in ()).throw(RuntimeError()))

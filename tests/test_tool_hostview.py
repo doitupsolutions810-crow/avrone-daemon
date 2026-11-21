@@ -48,7 +48,10 @@ def test_proc_status_zombie_and_caps(monkeypatch):
         out = run(hv.t_proc_status(None, {}))
         assert "1 zombie(s)" in out and f"- {z.pid} [Z]" in out
         monkeypatch.setattr(hv, "MAX_PROCS", 0)
-        assert "... 1 more" in run(hv.t_proc_status(None, {}))
+        # Other children of this process (a long suite leaves some) must not
+        # change the result: a cap of 0 hides every row, including this zombie.
+        capped = run(hv.t_proc_status(None, {}))
+        assert f"- {z.pid}" not in capped and " more" in capped
     finally:
         z.wait()
 

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from avrone import ai_observability
+import httpx
+
 from avrone.gateway import Gateway, LLMError
 
 
@@ -50,7 +52,7 @@ async def test_gateway_records_failed_generation_but_preserves_original_error(mo
     events = []
 
     async def request(upstream, messages, model, temperature, session):
-        raise LLMError("upstream offline")
+        raise httpx.ConnectError("upstream offline")
 
     monkeypatch.setattr(ai_observability, "capture_generation", lambda **kw: events.append(kw))
     gateway = Gateway(settings())

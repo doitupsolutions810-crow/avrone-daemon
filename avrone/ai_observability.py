@@ -27,6 +27,14 @@ def _truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def is_enabled() -> bool:
+    """True only when telemetry is explicitly or implicitly enabled and fully configured."""
+    token = os.getenv("POSTHOG_PROJECT_TOKEN", "").strip()
+    host = os.getenv("POSTHOG_HOST", "").strip()
+    enabled = _truthy("AVRONE_POSTHOG_ENABLED", bool(token and host))
+    return bool(enabled and token and host)
+
+
 def _warn_once(key: str, message: str) -> None:
     with _lock:
         if key in _warned:

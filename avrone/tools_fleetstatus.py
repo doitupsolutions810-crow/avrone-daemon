@@ -42,20 +42,26 @@ def _label(v: Any, n: int = 64) -> str:
     return s[:n] or "?"
 
 
+def _node_label(v: Any, n: int = 64) -> str:
+    """A node id for display. round 66: _label folded every unsafe character to "?" and cut at 64,
+    so "gpu\nbox", "gpu box" and "gpu?box" (or two ids sharing their first 64 chars) all printed as
+    the same node: a forged twin could pass for a real peer in the list and in "would pick next".
+    An id that had to be changed gets a short digest of the real one, so different ids stay apart."""
+    raw = str(v)
+    s = _label(raw, n)
+    if s == raw:
+        return s
+    import hashlib
+    return s[:n - 7] + "~" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:6]
+
+
 def _onoff(v: Any) -> str:
     return "on" if v else "off"
 
 
 def _int(v: Any, default: int, lo: int, hi: int) -> int | None:
-    if v is None or v == "":
-        return default
-    if isinstance(v, bool):
-        return None
-    try:
-        n = int(v)
-    except (TypeError, ValueError):
-        return None
-    return max(lo, min(hi, n))
+    from .argnum import tool_int  # round 45: one rule for inf, NaN, "1_000", Unicode digits
+    return tool_int(v, default, lo, hi, bad=None)
 
 
 def _num(v: Any) -> float | None:
@@ -96,7 +102,10 @@ def _settings(f: Any) -> dict[str, str]:
 
 def _local(core: Any) -> dict[str, Any] | None:
     from .fleet import local_health
-    h = local_health(core)
+    try:
+        h = local_health(core)
+    except Exception:  # noqa: BLE001 - round 53: a broken governor reading failed the whole view
+        return None
     if not isinstance(h, dict):
         return None
     out: dict[str, Any] = {"state": _label(h.get("state", "unknown"), 16)}
@@ -118,7 +127,7 @@ def fleet_status(ctx: "AgentContext", limit: int = 20, need: str = "") -> dict[s
                            "settings": None, "totals": None, "nodes": [], "more": 0, "would_pick": []}
     if f is None:
         return rep
-    rep["node_id"] = _label(getattr(f, "node_id", "?"))
+    rep["node_id"] = _node_label(getattr(f, "node_id", "?"))
     rep["settings"] = _settings(f)
     rep["fleet"] = rep["settings"]["fleet"]
     now = time.time()
@@ -126,15 +135,34 @@ def fleet_status(ctx: "AgentContext", limit: int = 20, need: str = "") -> dict[s
     by_state: dict[str, int] = {}
     eligible = 0
     rows = []
-    nodes = list(dict(getattr(f, "nodes", {}) or {}).values())
-    for n in sorted((n for n in nodes if isinstance(n, dict)), key=lambda n: str(n.get("node_id"))):
+    raw = getattr(f, "nodes", None)
+    reg = raw if isinstance(raw, dict) else {}  # round 53: a list/str registry raised out of dict()
+    nodes = []
+    for key, n in reg.items():
+        if not isinstance(n, dict):
+            continue
+        nid = n.get("node_id")
+        # round 53: a record without a text node_id was listed (and allow-checked) as "None"; the
+        # registry key is the id the fleet itself uses
+        nodes.append((nid if isinstance(nid, str) and nid else str(key), n))
+    for nid, n in sorted(nodes, key=lambda t: t[0]):
         # copy only well-typed fields; health is re-sanitized (fleet.json may be stale or edited)
-        clean = {"node_id": n.get("node_id"), "last_seen": _num(n.get("last_seen")) or 0.0,
-                 "load": _num(n.get("load")) or 0.0, "health": sanitize_health(n.get("health"))}
-        status = f.status_of(clean)
-        state = f.node_state(clean)
         try:
-            allowed = bool(f.allowed(str(n.get("node_id", ""))))
+            health = sanitize_health(n.get("health"))
+        except Exception:  # noqa: BLE001
+            health = None
+        clean = {"node_id": nid, "last_seen": _num(n.get("last_seen")) or 0.0,
+                 "load": _num(n.get("load")) or 0.0, "health": health}
+        try:  # round 53: one record that broke status_of/node_state failed the whole view
+            status = _label(f.status_of(clean), 16)
+        except Exception:  # noqa: BLE001
+            status = "unknown"
+        try:
+            state = _label(f.node_state(clean), 16)
+        except Exception:  # noqa: BLE001
+            state = "unknown"
+        try:
+            allowed = bool(f.allowed(nid))
         except Exception:  # noqa: BLE001
             allowed = False
         ok = status == "online" and state not in EXCLUDED_STATES and allowed
@@ -143,19 +171,31 @@ def fleet_status(ctx: "AgentContext", limit: int = 20, need: str = "") -> dict[s
         by_state[state] = by_state.get(state, 0) + 1
         caps = n.get("capabilities") if isinstance(n.get("capabilities"), dict) else {}
         kids = n.get("children")
-        h = clean["health"] or {}
-        rows.append({"node_id": _label(n.get("node_id")), "status": status, "state": _label(state, 16),
-                     "score": health_score(clean) if status == "online" else None,
+        h = clean["health"] if isinstance(clean["health"], dict) else {}
+        score = None
+        if status == "online":
+            try:
+                score = _num(health_score(clean))
+            except Exception:  # noqa: BLE001
+                score = None
+        try:
+            # round 66: a last_seen in the future (clock stepped back, edited fleet.json) printed
+            # "0s ago" next to "offline"; it is reported as a negative age and shown as such
+            ago = int(now - clean["last_seen"]) if clean["last_seen"] else None
+        except (OverflowError, ValueError):
+            ago = None
+        rows.append({"node_id": _node_label(nid), "status": status, "state": state,
+                     "score": score,
                      "eligible": ok, "allowed": allowed, "load": clean["load"],
                      "headroom": h.get("headroom"), "temp_c": h.get("temp_c") if status == "online" else None,
                      "runner": _label(caps.get("runner", "?"), 32),
                      "children": len(kids) if isinstance(kids, (list, dict)) else 0,
-                     "seen_s_ago": max(0, int(now - clean["last_seen"])) if clean["last_seen"] else None})
+                     "seen_s_ago": ago})
     rep["totals"] = {"known": len(rows), "eligible": eligible, "by_status": by_status, "by_state": by_state}
     rep["nodes"] = rows[:limit]
     rep["more"] = max(0, len(rows) - limit)
     try:
-        rep["would_pick"] = [_label(n.get("node_id")) for n in f.select_nodes(FLEET_STATUS_PICK, need or None)]
+        rep["would_pick"] = [_node_label(n.get("node_id")) for n in f.select_nodes(FLEET_STATUS_PICK, need or None)]
     except Exception:  # noqa: BLE001  -- a malformed record must not break the read-only view
         rep["would_pick"] = []
     rep["need"] = need or None
@@ -173,7 +213,10 @@ def _json(rep: dict[str, Any]) -> str:
         rep["nodes"] = rep["nodes"][:-1]
         rep["more"] += 1
         text = json.dumps(rep, indent=1, sort_keys=True)
-    return _cap(text)
+    if len(text) > FLEET_STATUS_MAX_CHARS:  # round 53: never cut JSON; compact, then drop by_* maps
+        text = json.dumps(rep, sort_keys=True, separators=(",", ":"))
+    return text if len(text) <= FLEET_STATUS_MAX_CHARS else json.dumps(
+        {"error": "fleet_status report too large", "known": (rep.get("totals") or {}).get("known")})
 
 
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
@@ -181,11 +224,15 @@ async def t_fleet_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     limit = _int(args.get("limit"), 20, 1, FLEET_STATUS_MAX_LIMIT)
     if limit is None:
         return "ERROR: limit must be an integer"
-    need = str(args.get("need") or "").strip()
+    raw_need = args.get("need")
+    if raw_need is not None and not isinstance(raw_need, str):
+        return "ERROR: need must be text"  # round 53: ["docker"] was str()-ed
+    need = (raw_need or "").strip()
     if not _NEED_RE.fullmatch(need):
         return "ERROR: need must be letters, digits, '.', '_', ':' or '-' (max 64), e.g. \"docker\""
     rep = fleet_status(ctx, limit, need)
-    if str(args.get("format", "text")).lower() == "json":
+    fmt = args.get("format", "text")
+    if isinstance(fmt, str) and fmt.strip().lower() == "json":
         return _json(rep)
     lh = rep["local_health"]
     lhs = ("unknown (no governor reading)" if not lh else
@@ -206,7 +253,8 @@ async def t_fleet_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
         extra = f" score={r['score']}" if r["score"] is not None else ""
         if r["temp_c"] is not None:
             extra += f" temp={r['temp_c']}C"
-        seen = "never" if r["seen_s_ago"] is None else f"{r['seen_s_ago']}s ago"
+        seen = ("never" if r["seen_s_ago"] is None else f"{r['seen_s_ago']}s ago" if r["seen_s_ago"] >= 0
+                else f"{-r['seen_s_ago']}s IN THE FUTURE (clock skew?)")
         lines.append(f"- {r['node_id']} [{r['status']}/{r['state']}]{extra} load={r['load']:g} "
                      f"runner={r['runner']} children={r['children']} seen={seen}"
                      f"{'' if r['allowed'] else ' NOT-ALLOWED'}{' eligible' if r['eligible'] else ''}")

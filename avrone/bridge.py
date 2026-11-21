@@ -25,6 +25,7 @@ reviewers read what the first wave concluded.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import json
 import math
 import contextlib
@@ -45,17 +46,15 @@ MAX_REFS = 20
 DEFAULT_MAX_POSTS, HARD_MAX_POSTS = 500, 5000
 DEFAULT_ROUNDS, HARD_MAX_ROUNDS = 1, 3
 _RUN_RE = re.compile(r"[^A-Za-z0-9_.-]")
-_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}$")
+_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,80}\Z")
 
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
 def _int_env(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(os.getenv(name, "").strip() or default)
-    except ValueError:
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(lo, min(hi, n))
 
 
@@ -90,8 +89,19 @@ def safe_run_id(run_id: Any) -> str:
     return (rid or "run") + "-" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:12]
 
 
-def _clip(text: Any) -> str:
-    t = str(text if text is not None else "").strip()
+def _clip(text: Any, redact: bool = True) -> str:
+    """Round 154: the text is redacted before it is kept. The bridge journal is relayed to every
+    peer (fleet relay, the fusion evidence bus), and only the CodeX copy of a post was redacted, so
+    a finding that quoted a config ("token=...", "curl -u admin:pw") was shipped verbatim. Merged
+    remote posts go through here too, so a peer that did not redact is not re-exported as is.
+    Redacting before the cut keeps a token from being cut into a shape no rule knows. Journal
+    replay passes redact=False: those lines were redacted when they were written, and a replay
+    runs on every blackboard poll."""
+    t = str(text if text is not None else "")
+    if redact:
+        from .ctxspawn import redact as _redact
+        t = _redact(t)
+    t = t.strip()
     return t if len(t) <= MAX_TEXT else t[: MAX_TEXT - 3] + "..."
 
 
@@ -136,6 +146,23 @@ class BridgeError(ValueError):
     """A post refused (bad kind, empty text, unknown refs)."""
 
 
+def usable_data_dir(data_dir: Any) -> "Path | str | None":
+    """data_dir as configured, or None when it is not a usable directory setting.
+
+    Round 76: "" / whitespace became Path(".") (the bridge and the lessons landed in whatever
+    directory the server was started from) and a non-path value (an int, a dict) raised TypeError
+    out of Bridge(); both now mean "no data_dir"."""
+    if isinstance(data_dir, str):
+        return data_dir if data_dir.strip() else None
+    if isinstance(data_dir, os.PathLike):
+        try:
+            v = os.fspath(data_dir)
+        except (TypeError, AttributeError):
+            return None
+        return data_dir if isinstance(v, (str, bytes)) and v.strip() else None
+    return None
+
+
 class Bridge:
     def __init__(self, run_id: str, data_dir: Path | str | None = None, codex: Any = None,
                  node_id: str = "local", limit: int | None = None):
@@ -144,6 +171,7 @@ class Bridge:
         self.node_id = str(node_id or "local")
         self.limit = int(limit) if limit else max_posts()
         self.path: Path | None = None
+        data_dir = usable_data_dir(data_dir)  # round 76: "" wrote the bridge under the process cwd
         if data_dir is not None:
             d = Path(data_dir) / "bridge"
             d.mkdir(parents=True, exist_ok=True)
@@ -220,7 +248,7 @@ class Bridge:
         if rec.get("kind") not in KINDS or not isinstance(rec.get("text"), str):
             return None
         rec["refs"] = _refs(rec.get("refs"))
-        rec["text"] = _clip(rec["text"])
+        rec["text"] = _clip(rec["text"], redact=False)
         return rec
 
     @contextlib.contextmanager
@@ -348,7 +376,8 @@ class Bridge:
                     stats["skipped"] += 1
                     continue
                 rec = {"id": rec["id"], "run_id": self.run_id, "agent": str(rec.get("agent") or "agent")[:80],
-                       "role": str(rec.get("role") or "")[:60], "kind": rec["kind"], "text": rec["text"],
+                       "role": str(rec.get("role") or "")[:60], "kind": rec["kind"],
+                       "text": _clip(rec["text"]),  # round 154: a peer's post is redacted before we keep it
                        "refs": rec["refs"], "ts": _remote_ts(rec.get("ts")),
                        "origin_node": str(rec.get("origin_node") or origin)[:80]}
                 self._posts[rec["id"]] = rec
@@ -485,6 +514,8 @@ def for_core(core: Any, run_id: str) -> Bridge:
 def load_posts(data_dir: Path | str, run_id: str) -> list[dict[str, Any]] | None:
     """Posts persisted for a run, or None when that run has no bridge file."""
     rid = safe_run_id(bridge_run_id(run_id))
+    if usable_data_dir(data_dir) is None:  # round 76: "" read the bridge under the process cwd
+        return None
     p = Path(data_dir) / "bridge" / f"{rid}.jsonl"
     if not p.exists():
         return None
@@ -517,10 +548,8 @@ async def t_bridge_post(ctx: Any, args: dict[str, Any]) -> str:
 @off_loop  # round 96: await-free, reads/writes files; ran on the event loop
 async def t_bridge_read(ctx: Any, args: dict[str, Any]) -> str:
     b = for_core(ctx.core, ctx.run_id)
-    try:
-        limit = int(args.get("limit") or 30)
-    except (TypeError, ValueError):
-        limit = 30
+    from .argnum import tool_int
+    limit = tool_int(args.get("limit") or 30, 30)
     posts = b.read(kind=args.get("kind"), agent=args.get("agent"), since=args.get("since"),
                    query=args.get("query"), limit=limit)
     return compact(posts)
@@ -577,7 +606,8 @@ _STOP = frozenset("the and for with that this from what are was were has have ha
 
 
 def lessons_enabled() -> bool:
-    return os.getenv("AVRONE_LESSONS", "on").strip().lower() not in ("off", "0", "false", "no", "disabled")
+    from .config import switch_word  # round 84: '"off"' from a compose .env kept lessons ON
+    return switch_word(os.environ.get("AVRONE_LESSONS"), "on") not in ("off", "0", "false", "no", "disabled")
 
 
 def lessons_max() -> int:
@@ -635,17 +665,21 @@ def distill_lessons(data_dir: Path | str, bridge: "Bridge", task: str = "", k: i
                 break
         if len(picks) >= k:
             break
-    if not picks:
+    if not picks or usable_data_dir(data_dir) is None:  # round 76: "" learned into the process cwd
         return []
     with lessons_lock(data_dir):  # load-check-save is one step, so concurrent runs never both "learn" a key
         store = _store(data_dir)
         have = store.load(LESSONS_NS)
         saved: list[str] = []
+        # round 168: the run's task text was stored raw as lesson metadata in memory.jsonl, so a key
+        # in a task persisted to disk (and synced to the fleet parent). Redact first, then cut.
+        from .ctxspawn import redact
+        task_meta = redact(str(task))[:200]
         for t in picks:
             key = lesson_key(t)
             if key in have or key in saved:
                 continue
-            store.save(LESSONS_NS, key, t, run_id=bridge.run_id, task=str(task)[:200])
+            store.save(LESSONS_NS, key, t, run_id=bridge.run_id, task=task_meta)
             saved.append(key)
         if saved:
             store.trim(LESSONS_NS, lessons_max())
@@ -654,6 +688,8 @@ def distill_lessons(data_dir: Path | str, bridge: "Bridge", task: str = "", k: i
 
 def relevant_lessons(data_dir: Path | str, task: str, max_chars: int = LESSONS_CHARS) -> list[str]:
     """Lessons sharing keywords with `task`, best overlap first (newest breaks ties), within max_chars."""
+    if usable_data_dir(data_dir) is None:  # round 76: "" primed workers from ./memory.jsonl
+        return []
     try:
         recs = list(_store(data_dir).load(LESSONS_NS).values())
     except OSError:
@@ -728,3 +764,50 @@ def parse_revise(reply: Any) -> tuple[list[dict[str, Any]], str]:
             break
     revised = obj.get("revised")
     return posts, revised.strip() if isinstance(revised, str) else ""
+
+
+# --------------------------------------------------------------------------- journal scrub
+class _JournalRef:
+    """Just enough of a Bridge for _file_lock: the journal path."""
+    def __init__(self, path: Path):
+        self.path = path
+
+
+def fix_journal(path: Path | str, core: Any = None) -> bool:
+    """Round 158: redact a bridge journal written before v0.147 (posts were stored raw: a finding
+    quoting "token=..." went to every peer and the fusion bus). Lines are redacted value by value
+    and dumped again, so the journal stays valid JSONL; bytes that are not UTF-8 are kept. Runs
+    under the same thread lock and cross-process file lock as append and compaction, then
+    reloads any open Bridge for this journal, whose ring still held the raw text in memory.
+    True when the journal was rewritten. A journal over JOURNAL_READ_MAX is left alone."""
+    from .safeio import atomic_write, read_regular
+    from .tools_secrets import _redact_line, _kinds, _line_hides_secret
+    p = Path(path)
+    if p.is_symlink() or not p.is_file() or p.suffix != ".jsonl":
+        return False
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(str(p.resolve()), threading.RLock())
+    with lock:
+        with Bridge._file_lock(_JournalRef(p)):  # type: ignore[arg-type]
+            try:
+                if p.stat().st_size > JOURNAL_READ_MAX:
+                    return False
+            except OSError:
+                return False
+            raw = read_regular(p, JOURNAL_READ_MAX)
+            if raw is None:
+                return False
+            text = raw.decode("utf-8", errors="surrogateescape")
+            out = [(_redact_line(ln) if _kinds(ln) or _line_hides_secret(ln) else ln) for ln in text.split("\n")]
+            new = "\n".join(out)
+            if new == text:
+                return False
+            atomic_write(p, new.encode("utf-8", errors="surrogateescape"), fsync=True)
+        cache = getattr(core, "_bridges", None) if core is not None else None
+        for b in list(cache.values()) if cache else []:
+            try:
+                if b.path is not None and b.path.resolve() == p.resolve():
+                    b._load()
+            except OSError:
+                pass
+    return True

@@ -28,7 +28,7 @@ from .tools_extra import _client
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-HOST_RE = re.compile(r"^[A-Za-z0-9.\-:\[\]_]{1,253}$")
+HOST_RE = re.compile(r"^[A-Za-z0-9.\-:\[\]_]{1,253}\Z")
 RTYPES = {"A", "AAAA", "MX", "TXT", "NS", "CNAME", "SOA", "PTR", "CAA", "SRV"}
 
 
@@ -61,7 +61,8 @@ async def t_dns_lookup(ctx: "AgentContext", args: dict[str, Any]) -> str:
             out.append("system: " + ", ".join(sorted({i[4][0] for i in infos})))
         except socket.gaierror as e:
             out.append(f"system: {e}")
-    doh = os.environ.get("AVRONE_DOH_URL", "https://cloudflare-dns.com/dns-query")
+    from .config import clean_secret  # round 87: a quoted URL was sent verbatim (httpx UnsupportedProtocol)
+    doh = clean_secret(os.environ.get("AVRONE_DOH_URL")) or "https://cloudflare-dns.com/dns-query"
     try:
         async with _client(15) as c:
             r = await c.get(doh, params={"name": host, "type": rtype}, headers={"accept": "application/dns-json"})
@@ -77,8 +78,11 @@ async def t_dns_lookup(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 async def t_tcp_ping(ctx: "AgentContext", args: dict[str, Any]) -> str:
     host = _host(args)
-    port = int(args.get("port", 443))
-    count = max(1, min(int(args.get("count", 4)), 10))
+    from .argnum import tool_int  # round 45: "abc", 1e999 and NaN raised out of the tool
+    port = tool_int(args.get("port"), 443, bad=None)
+    if port is None or isinstance(args.get("port"), float) and not float(args.get("port")).is_integer():
+        return "ERROR: port must be an integer 1..65535"
+    count = tool_int(args.get("count"), 4, 1, 10)
     if not 1 <= port <= 65535:
         return "ERROR: port out of range"
     times: list[float] = []
@@ -105,7 +109,8 @@ async def t_tcp_ping(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 async def t_traceroute(ctx: "AgentContext", args: dict[str, Any]) -> str:
     host = _host(args)
-    hops = max(1, min(int(args.get("max_hops", 20)), 30))
+    from .argnum import tool_int
+    hops = tool_int(args.get("max_hops"), 20, 1, 30)
     for binary, argv in (
         ("mtr", ["mtr", "-r", "-n", "-c", "1", "-m", str(hops), host]),
         ("traceroute", ["traceroute", "-n", "-q", "1", "-w", "2", "-m", str(hops), host]),
@@ -160,7 +165,8 @@ async def t_ip_geo(ctx: "AgentContext", args: dict[str, Any]) -> str:
             ip = infos[0][4][0]
         if ipaddress.ip_address(ip).is_private:
             return f"{h} -> {ip}: private address, no public geolocation"
-    base = os.environ.get("AVRONE_GEOIP_URL", "https://ipwho.is/")
+    from .config import clean_secret
+    base = clean_secret(os.environ.get("AVRONE_GEOIP_URL")) or "https://ipwho.is/"
     async with _client(15) as c:
         r = await c.get(base + ip)
     d = r.json()

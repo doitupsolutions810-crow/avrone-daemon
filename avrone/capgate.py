@@ -53,20 +53,43 @@ class CapDenied(PermissionError):
 
 
 def mode() -> str:
-    m = (os.environ.get("AVRONE_CAPGATE") or "off").strip().lower()
-    return m if m in MODES else "off"
+    raw = os.environ.get("AVRONE_CAPGATE") or ""
+    # round 83: AVRONE_CAPGATE="enforce" from a compose .env kept its quotes and read as "off" -
+    # the gate was silently open while the operator believed it enforced
+    from .config import clean_secret
+    m = clean_secret(raw).lower() or "off"
+    if m in MODES:
+        return m
+    _warn_mode(raw)
+    return "off"
+
+
+_WARNED: set[str] = set()
+
+
+def _warn_mode(raw: str) -> None:
+    """An unknown mode stays off (pinned by test_capgate), but it must not be silent: a typo such
+    as "enfroce" meant an operator believed the gate was enforcing."""
+    from .textsafe import escape
+    key = raw[:40]
+    if key in _WARNED or len(_WARNED) > 32:
+        return
+    _WARNED.add(key)
+    import sys
+    print(f"AVRONE: unknown AVRONE_CAPGATE value '{escape(key)}'; capability gate is OFF "
+          f"(use off, audit or enforce)", file=sys.stderr)
 
 
 def _key() -> bytes:
-    k = (os.environ.get("AVRONE_CAPGATE_KEY") or os.environ.get("AVRONE_FLEET_TOKEN") or "").strip()
+    from .config import shared_key_text  # round 82: "  " key hid the fleet token default
+    k = shared_key_text()
     return (k or _PROC_KEY).encode()
 
 
 def ttl() -> int:
-    try:
-        n = int(os.environ.get("AVRONE_CAPGATE_TTL", "3600"))
-    except (TypeError, ValueError):
-        n = 3600
+    raw = (os.environ.get("AVRONE_CAPGATE_TTL") or "").strip().strip("'\"").strip()
+    # round 82: int() took fullwidth digits, and a quoted '"600"' became 3600 silently
+    n = int(raw) if raw.isascii() and raw.isdigit() else 3600
     return max(30, min(n, 86400))
 
 
@@ -93,7 +116,11 @@ def _clean_rights(rights: Any) -> list[str]:
 
 
 def policy() -> dict[str, list[str]]:
-    raw = os.environ.get("AVRONE_CAPGATE_POLICY", "")
+    raw = (os.environ.get("AVRONE_CAPGATE_POLICY") or "").strip()
+    # round 83: a quoted object ('{"*":["echo"]}' or "{...}" kept by compose) failed to parse and
+    # granted nothing; the outer quotes are removed only around something that looks like JSON
+    if len(raw) >= 4 and raw[0] == raw[-1] and raw[0] in "'\"" and raw[1:-1].strip()[:1] in "{[":
+        raw = raw[1:-1].strip()
     try:
         obj = _jloads(raw) if raw.strip() else {"*": ["*"]}
     except (json.JSONDecodeError, RecursionError):
@@ -421,7 +448,8 @@ def data_dir_of(ctx: Any) -> Path | None:
     s = getattr(core, "settings", None)
     d = getattr(s, "data_dir", None)
     # only a real path: a mocked or misconfigured settings object must never become a directory name
-    return Path(d) if isinstance(d, (str, Path)) and str(d) else None
+    # round 77: "  " passed str(d) and became a directory named by spaces under the cwd
+    return Path(d) if isinstance(d, (str, Path)) and str(d).strip() else None
 
 
 def attenuate_for_child(parent: dict[str, Any], child_name: str, role: str | None = None) -> dict[str, Any]:

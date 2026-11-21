@@ -14,3 +14,29 @@ import re
 UNSAFE_CLASS = "[\x00-\x1f\x7f-\x9f\u2028\u2029\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]"
 UNSAFE_RUN = re.compile(UNSAFE_CLASS + "+")
 UNSAFE_ONE = re.compile(UNSAFE_CLASS)
+
+
+def _esc(m: "re.Match[str]") -> str:
+    c = ord(m.group())
+    return f"\\x{c:02x}" if c < 0x100 else f"\\u{c:04x}"
+
+
+def escape(s: object, keep: str = "") -> str:
+    """Round 146: a name shown inside a listing (a file name, a process command line), with each
+    unsafe character written as a visible escape (\\x0a, \\u202e). File names and argv are chosen
+    by whoever created them: "a\\nFORGED" printed a line of its own in list_files, read_file's
+    directory hint and proc_status, and U+202E reversed the rest of the row. Escaping, not
+    blanking, keeps two names that differ only in a control character apart. Characters in `keep`
+    (a tab in a matched source line) are left as they are."""
+    if keep:
+        return UNSAFE_ONE.sub(lambda m: m.group() if m.group() in keep else _esc(m), str(s))
+    return UNSAFE_ONE.sub(_esc, str(s))
+
+
+def lines_keepends(s: str) -> list[str]:
+    """Round 147: split on "\n" only, keeping it. str.splitlines() also splits on "\r", "\x0b",
+    "\x0c", "\x1c"-"\x1e", NEL, U+2028 and U+2029, so diff_files cut one source line in two and
+    marked the first half "\\ No newline at end of file"; git, patch and editors see one line."""
+    out = s.split("\n")
+    last = out.pop()
+    return [x + "\n" for x in out] + ([last] if last else [])

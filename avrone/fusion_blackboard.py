@@ -20,10 +20,14 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
-from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core
+from .bridge import KINDS, Bridge, BridgeError, _ID_RE, _clip, _refs, _remote_ts, for_core, usable_data_dir
 
 _ORDER_NAME = "_fanin_order.json"
-_ORDER_MAX_BYTES = 1_048_576
+# Round 137: this was 1 MiB, but _save_order writes any size. After a restart, an order file over
+# the cap (about 12k long ids or 95k short ones) was ignored and rebuilt by ts. A post accepted late
+# with an older ts then sorted before the relay's `since` cursor and was never delivered. 64 MiB
+# holds millions of ids; the bridge rings evict long before that.
+_ORDER_MAX_BYTES = 64 * 1024 * 1024
 _GUARD = threading.Lock()
 
 
@@ -38,7 +42,11 @@ def normalize_blackboard_post(data: Any) -> tuple[dict[str, Any] | None, str | N
     kind = str(data.get("kind") or "finding").strip().lower()
     if kind not in KINDS:
         return None, f"kind must be one of {', '.join(KINDS)}"
-    text = _clip(data.get("text"))
+    raw_text = data.get("text")
+    if raw_text is not None and not isinstance(raw_text, str):
+        # Round 44: a JSON object, list or number used to be stored as its Python repr ("{'a': 1}")
+        return None, "text must be a string"
+    text = _clip(raw_text)
     if not text:
         return None, "text is required"
     raw_id = data.get("id")
@@ -56,19 +64,29 @@ def normalize_blackboard_post(data: Any) -> tuple[dict[str, Any] | None, str | N
     elif not isinstance(raw_run, str):
         return None, "bad run id"
     else:
-        clipped = raw_run[:80]
-        run_id = clipped if clipped.strip() else "run"
+        # Strip before the 80-character cut, so a blank id is "run" and a
+        # padded id does not lose its tail to leading spaces.
+        run_id = raw_run.strip()[:80] or "run"
     return {
         "id": pid,
         "run_id": run_id or "run",
-        "agent": str(data.get("agent") or "agent")[:80],
-        "role": str(data.get("role") or "")[:60],
+        "agent": _label(data.get("agent"), 80) or "agent",
+        "role": _label(data.get("role"), 60),
         "kind": kind,
         "text": text,
         "refs": _string_refs(data.get("refs")),
         "ts": _remote_ts(data.get("ts")),
-        "origin_node": str(data.get("origin_node") or "local")[:80],
+        "origin_node": _label(data.get("origin_node"), 80) or "local",
     }, None
+
+
+def _label(value: Any, limit: int) -> str:
+    """agent/role/origin_node: a string only (a peer's object or list used to be stored as its
+    repr), trimmed and cut to `limit` characters. Like post text, the characters are stored as
+    written; display paths (bridge.compact, tools.one_line) flatten controls and bidi marks."""
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:limit].strip()
 
 
 def _string_refs(refs: Any) -> list[str]:
@@ -85,7 +103,7 @@ def _string_refs(refs: Any) -> list[str]:
 
 def _data_dir(core: Any) -> Path | None:
     settings = getattr(core, "settings", None)
-    data_dir = getattr(settings, "data_dir", None)
+    data_dir = usable_data_dir(getattr(settings, "data_dir", None))  # round 77: "" was the cwd
     return None if data_dir is None else Path(data_dir)
 
 
@@ -205,7 +223,9 @@ def _load_order(core: Any) -> "OrderedDict[str, None]":
         from .safeio import FileTooBig, read_capped
         try:
             raw = read_capped(path, _ORDER_MAX_BYTES)
-        except FileTooBig:
+        except (FileTooBig, OSError):
+            # Round 44: an unreadable order file (permissions, EIO) made every blackboard GET a 500.
+            # Rebuilding the order by ts is the same fallback as a missing file.
             raw = None
         if raw:
             try:

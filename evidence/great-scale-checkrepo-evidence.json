@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v103",
+  "finding": "The script warns when the repo HEAD moves while the autopilot is running. If the carried patches are gone it refuses. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "headMove": "warn and continue",
+  "patchesGone": "refuse",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The check_repo holds."
+}

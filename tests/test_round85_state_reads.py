@@ -76,7 +76,7 @@ def test_oversized_fleet_json_is_set_aside(tmp_path, monkeypatch):
     (tmp_path / "fleet.json").write_text(json.dumps({"nodes": {}, "pad": "x" * 5000}))
     fm = FleetManager(_core(tmp_path), data_dir=tmp_path)
     assert len(fm.nodes) == 0
-    assert any(p.name.startswith("fleet.json.corrupt-") for p in tmp_path.iterdir())
+    assert any(p.name.startswith(("fleet.json.corrupt-", "fleet.json.toobig-")) for p in tmp_path.iterdir())  # round 143: toobig
 
 
 def test_symlinked_fleet_json_not_read_or_renamed(tmp_path):

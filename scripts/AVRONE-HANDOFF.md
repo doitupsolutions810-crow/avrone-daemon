@@ -568,3 +568,685 @@ merge without his word.
   - Children inherited the real stdout, so a lingering child held the client's pipe open.
   - Fixes: `shutdown()` waits up to the grace period (at least 1 s), then cancels the core build, and stops the runner and MCP of a core that finished during shutdown. `protocol_stdout()` gives JSON-RPC a private, non-inheritable dup of fd 1 and points fd 1 at stderr, so a stray child print can't corrupt the protocol either.
   - Six new tests in tests/test_mcp_server_robust.py. The subprocess test then passed 6 of 6 runs.
+
+## Hardening round 41 (Hark edge-case series; not the v0.x "round 1xx" series): fsunify on case-insensitive filesystems
+- **Agent-isolation bypass on macOS and Windows.** `shared/Agents/<other>/...`, `shared/AGENTS/...`, `shared/agents./...` and `shared/agents::$INDEX_ALLOCATION/...` resolved to paths that `is_relative_to(ws/agents)` called outside. On APFS, HFS+ and NTFS they are the same directory, so one agent could read or overwrite another agent's dir and dodge its own quota through `shared/`. A symlink whose target names the agents root in another case slipped past the same way.
+  - `_touches_agents()` now also compares the first component casefolded, with NTFS `:stream` syntax and trailing dots and spaces removed.
+  - Names that only look similar stay allowed: `agents-notes`, `my-agents`, `x/agents`, and an `Agents/` folder inside your own dir.
+  - On Linux this refuses `shared/Agents/` even though it would be a separate dir. That is deliberate: the same tree has to behave the same on a Mac.
+- **Unusable agent dir.**
+  - `agent_root()` used to leak a raw `OSError` with the host's absolute path when mkdir failed (read-only disk, permissions). It now raises an audited `AgentFSError`.
+  - A file sitting where the dir should be is refused.
+  - A symlink loop gives a plain refusal.
+- **`display()`** no longer raises on a symlink loop or a broken agent dir.
+- Tests: `tests/test_fsunify_robust.py`.
+
+## Hardening round 42 (Hark edge-case series): logsafe against every argument shape
+- **Non-string arguments went into the server log raw.** Round 150 cleaned only `str` and exception arguments. A `Path("ckpt\nWARNING avrone.fleet ... trusted")`, an object whose `__str__` or `__repr__` held outside text, or a list or dict holding ESC or U+202E could all forge a line or reach the operator's terminal.
+  - They are now wrapped in `_Shown`, so `%s`, `%r` and format specs all render the cleaned and redacted text.
+  - Numbers (`numbers.Number`: int, float, bool, Decimal, Fraction, numpy scalars) and `None` pass through, so `%d`, `%x`, `%.2f` and `%c` keep working.
+  - bytes are left alone, because their repr already escapes control bytes.
+- **Template injection.** With arguments present, the template was never checked, so `log.warning(f"peer {name}: %s", err)` put ESC, `\r` or U+202E from `name` straight through. Templates now keep `\n` and `\t` only; everything else in the unsafe class is escaped.
+- **Non-str messages.** `log.warning(exc)` or `log.info(obj)` with no arguments was rendered by `str(msg)` unescaped. It is now converted, redacted and escaped.
+- **One raising `__str__` disabled cleaning for the whole record**, because the outer `except` swallowed it and left every argument raw. Each argument is now cleaned on its own, and a bad one renders as `<unprintable T: E>`.
+- **Size.** A 50 MB MCP stderr line went into one log line, and every redaction regex ran over it.
+  - Arguments are capped by `AVRONE_LOG_ARG_MAX_CHARS` (default 65536, clamped 256..4 MiB), with a `...[log arg truncated: N chars]` marker.
+  - Redaction sees at most 4x the cap.
+- Tests: `tests/test_logsafe_robust.py`.
+
+## Hardening round 43 (Hark edge-case series): evidence_pool identity canonicalisation
+- **Duplicate relays in disguise.** `pool_trials` exists so one outcome relayed twice can't count as two confirmations, but it compared raw strings. All of these were "distinct" trial_ids and were counted twice:
+  - NFC vs NFD (`trial-é`), a zero-width space or joiner, a BOM, a soft hyphen, and bidi marks
+  - fullwidth digits, ligatures, and no-break or ideographic spaces
+  - Identity fields are now NFKC-normalised, Unicode format characters (Cf) are removed, and whitespace runs collapse to one space.
+- **Fake silos.** `Node-A`, `node-a` and `node-a\u200b` were separate sources, so one node could fake an orientation conflict. Sources are now grouped case-insensitively after canonicalisation, the first spelling seen is reported, and the source cap counts canonical names. Trial ids stay case-sensitive.
+- **Control characters and lone surrogates** in either field are refused. They used to pass into the report and break JSON encoding.
+- **Lengths are checked on the canonical form.** Padding no longer rejects a valid id, and NFKC expansion (U+FDFA becomes 18 characters) can't get past the limits. A raw bound of 4x the limit comes first.
+- **Duplicate error messages** quote the id escaped to ASCII and cut to 64 characters.
+- **Input checks:**
+  - A lone dict, a string, bytes or None as `trials` gets a clear refusal.
+  - A Mapping whose `.get` raises becomes a ValueError.
+- Tests: `tests/test_evidence_pool_robust.py`.
+
+## Hardening round 44 (Hark edge-case series): `$` anchors and blackboard field hygiene
+- **Trailing-newline ids, repo-wide.** In Python, `$` also matches just before a final `\n`. So every `^...$` whole-string validator accepted `"id\n"`. 19 validators in 12 modules now end in `\Z`:
+  - bridge `_ID_RE`. Proven: `p1` and `p1\n` were stored as two blackboard posts, a duplicate-relay bypass.
+  - fleet node id, ts, nonce and sig
+  - memstore namespace
+  - checkpoint id and key, and the sender check
+  - agentpack manifest names and pack file name
+  - agentkit package and skill name
+  - evolve skill name
+  - gateway name
+  - netdiag host
+  - recon label and TLD
+  - lessonforget key
+- **Regression guard:** `test_no_dollar_anchored_validators_left` scans `avrone/*.py` and fails on any new `^...$` pattern. `(?m)` line scans are allowed.
+- **`fusion_blackboard.normalize_blackboard_post`:**
+  - **Text** must be a string. A JSON object, list or number used to be stored as its Python repr.
+  - **agent, role and origin_node:** strings only, trimmed and cut to their limits. A blank or non-string value takes the default.
+  - **Characters are still stored as written.** The board keeps them and display paths (`bridge.compact`, `tools.one_line`) flatten them, per the existing fusion tests. An attempt to escape on store broke that contract, and the gate caught it, so it was reverted.
+  - **run_id** is trimmed.
+- **Fan-in order file:** an unreadable file (permissions, EIO) used to make every `GET /api/blackboard` return a 500. It is now rebuilt by ts, the same as a missing file.
+- Tests: `tests/test_fusion_blackboard_robust.py`.
+
+## Hardening round 45 (Hark edge-case series): integer tool arguments
+- **inf from model JSON.** `gateway._parse_args` uses Python's json, which turns `1e999` (valid JSON) and the `Infinity` and `NaN` extensions into floats. `int(inf)` raises OverflowError, and these helpers caught only `(TypeError, ValueError)`, so the tool call failed instead of falling back to its default:
+  - `tools_extra._int`, which is used by about 8 tools
+  - fs_read `max_chars`, bridge_read, log_health `runs`, lesson_recall `limit`
+  - the netdiag tcp_ping and traceroute args. These had no guard at all, so `"abc"` raised too.
+- **Digit look-alikes.** `str.isdigit()` is True for `"²"`, but `int()` refuses it:
+  - lesson_recall raised on it.
+  - `server._content_length_over` raised on a `Content-Length: \xb2` header (latin-1 superscript): an unauthenticated 500 from the body-cap middleware. It now requires ASCII.
+  - `int()` also accepted `"1_000"`, Arabic-Indic and full-width digits.
+- **New `avrone/argnum.py`, `tool_int(v, default, lo, hi, bad=default)`:**
+  - Accepts ints (not bool), finite floats (truncated as before), and ASCII integer or float text.
+  - `+inf` and `-inf` clamp to the bound when one exists.
+  - NaN, bools, Unicode digits, underscores and other types return `bad`.
+- **Wired in:** tools_extra, codexstats, fleetstatus and mempeek (`bad=None`, so junk still reports an error), agentfs_tools, agentkit resources, bridge, tools_limits, lessonrecall, netdiag (bad port gives `ERROR: port must be an integer`).
+- **Behaviour change:** `True` as a count now gives the default instead of 1.
+- Tests: `tests/test_argnum_robust.py`.
+
+## Hardening round 46 (Hark edge-case series): capgate_head_attest
+This is the attested-history bridge from daemon main. No test in the suite imported it.
+- **Its own `--selftest` failed: 25 passed, 1 failed.** The "middle corruption" check replaced `'"seq": 0'`, but the log is compact JSON (`"seq":0`), so nothing was edited. The check is fixed and now really tampers with the line.
+- **seq was never validated.** On a digest-valid line, the next append behaved like this:
+  - `"seq": "x"` raised ValueError.
+  - `true` attested as seq 2.
+  - `1.5` was truncated.
+  - `Infinity` raised OverflowError.
+  - A missing seq raised KeyError.
+  - Skipped or repeated seqs passed.
+  - Fix: every line's seq must be an int equal to its position. A bad one raises OSError, so the log fails closed as designed.
+- **Strict JSON reads:**
+  - Duplicate keys are refused. Python keeps the last value while other readers may keep the first, so one line could verify here and mean something else elsewhere.
+  - `NaN` and `Infinity` are refused.
+  - Writes use `allow_nan=False`.
+- **Note and verify_error** are text: bytes are decoded, lone surrogates become U+FFFD, and the length is capped at 200. A non-string error, such as a dict holding NaN, could otherwise write a non-JSON line and brick the log.
+- **CLI:** a refused log prints one line to stderr and exits 1 instead of a traceback.
+- Tests: `tests/test_capgate_head_attest_robust.py`, which also runs the module selftest.
+
+## Hardening round 47 (Hark edge-case series): flake_probe
+- **`runs`:**
+  - `1e999` raised OverflowError out of the tool.
+  - `2.7` ran 2 times and `"1_0"` ran 10.
+  - NaN, inf, non-integral floats, Unicode digits and bools are now refused. The value goes through `argnum.tool_int`.
+- **Timeout sentinel forgery:** a timed-out run was marked with a string, so a tool returning those exact characters counted as a timeout. The sentinel is now an object compared by identity, and str-subclass outputs are converted to plain str.
+- **One raising run sank the whole probe** (duck-typed registries; the real Registry already catches). It is now an `ERROR: <Type> raised` output.
+- **Other output and counting fixes:**
+  - bytes are decoded.
+  - A hostile `__str__` becomes an error output.
+  - `ARG ERROR` refusals are counted as errors.
+- **Budget:** a run started near the end of the budget could overrun it by a full `run_timeout` (20 s). Later runs now get only what is left.
+- **first_diff_line:**
+  - `"x"` vs `"x\n"` and `"x\r\n"` vs `"x\n"` used to name a line past the end of both outputs. Ending-only differences now name the first line whose ending differs.
+  - Extra lines still name the first extra line.
+- **args:** `allow_nan=False`. Args must survive a JSON round trip, so non-str keys at any depth are refused; `{1: "a"}` used to probe the same as `{"1": "a"}`.
+- **format:** `" json "` is accepted.
+- Tests: `tests/test_flakeprobe_robust.py`.
+
+## Hardening round 48 (Hark edge-case series): fusion_loopback + fusion_plane
+
+### fusion_loopback (the HTTP access policy's loopback test, proxy bypass, doctor, breaker buckets)
+- **Brackets:** `host_text` called `.strip("[]")`, which removed any number of brackets from either end. So `]127.0.0.1[` and `[[::1]]` counted as loopback. Only one matched `[...]` pair is removed now.
+- **Zones:** `%` cut a zone from any name, so `127.0.0.1%evil` and `localhost%x` passed `caller_allowed`. That matters behind a trusted proxy that copies X-Forwarded-For. A zone is now allowed only on an IPv6 literal.
+- **Other characters:**
+  - Control characters, NUL, zero-width and non-ASCII characters are refused.
+  - Only spaces and tabs are trimmed, so `127.0.0.1\n` is no longer loopback.
+  - Bytes are decoded as ASCII, and non-str values are refused.
+- **is_any_loopback:** accepts one trailing root dot (`localhost.`) and rejects `.localhost` and `a..localhost`.
+- **origin_key:**
+  - `parts.port` raised ValueError outside the try (`:99999`, `:abc`). It now returns `invalid:`.
+  - The default port was None, so `http://localhost` and `https://localhost` shared one breaker, while `http://localhost` and `:80` did not. Ports now default by scheme.
+  - Non-loopback IPv6 keys are bracketed.
+
+### fusion_plane.classify_execute
+- A list or dict status raised TypeError (unhashable in a set test).
+- A str subclass, or any object with an always-true `__eq__`, could pose as SUCCEEDED, and a dict subclass's `.get()` could answer anything. Only exact `str` values are read, through `dict.get`.
+- A SUCCEEDED body with an `error` key or `result: not_executed` is now `contradictory` and not executed.
+- **Error reasons:** the reason used to be `str(body["error"])`. It was unbounded, multi-line, could call a hostile `__str__`, and an error spelled `plane_succeeded` came back as that reason code. **Behaviour change:** the reason is now `error`, and a clean single-line `detail` of at most 200 characters is added.
+
+- Tests: `tests/test_fusion_seams_robust.py`.
+
+## Hardening round 49 (Hark edge-case series): searchproc + tools_lessonforget
+
+### searchproc (search_files' child scan)
+- **Line numbers:** lines were split with `str.splitlines()`, which also breaks on `\x0c`, `\x0b`, `\x1c`-`\x1e`, NEL, U+2028/9 and a lone `\r`. After a form feed in a Python file every reported line number was off, and a pattern could not match across one.
+  - Lines now split on `\n` only, the same rule as grep, editors and `textsafe.lines_keepends`.
+  - A CRLF's `\r` is dropped.
+  - A leading UTF-8 BOM is dropped, so `^` anchors match line 1.
+- **Deep trees:** `os.walk` is recursive on Python 3.11, the oldest version pyproject allows. A tree about 1000 directories deep raised RecursionError, and search_files returned nothing. The walk now uses an explicit stack. It keeps the same sorted depth-first order, and symlinked directories are still not entered.
+- **Limits:**
+  - `max_files` was off by one: the scan read one file past it.
+  - cap, max_files and max_bytes are bounded and must be ints.
+  - The matched line is cut before it is stripped.
+  - diff_main's `n` is clamped to 0..10000.
+
+### tools_lessonforget
+- **lesson_forget args:**
+  - A dict, list or number key or reason was converted with `str()`. It is now refused.
+  - A reason made only of invisible characters (ZWSP, BOM, bidi, soft hyphen) passed the "required" check. It is now refused.
+  - The reason is flattened to one line.
+- **Corrupt store entries:** an entry that was a string or a list raised AttributeError *after* the delete, so the agent was told the forget failed when it had actually happened. The value shown in the correction post is now flattened.
+- **bridge_status:**
+  - Question text with `\n` or U+2028 forged rows of the status output. It is now flattened, following the round 44 rule: store raw, flatten on display.
+  - Agent names, kinds and ids are escaped.
+  - A post missing kind or agent raised KeyError. A string refs value `"q1"` answered questions `q` and `1`, and an unhashable ref raised TypeError. Posts are now read defensively.
+- Tests: `tests/test_searchproc_lessonforget_robust.py`.
+
+## Hardening round 50 (Hark edge-case series): tools_gatewayview + tools_lessonrecall
+
+### replay_guard
+- **Boot guard:** a boot guard of inf raised OverflowError and NaN raised ValueError out of `int()`. A guard far in the future printed an unbounded countdown. It is now clamped to 0..2 windows.
+- **Nonce cache:** a non-dict cache crashed the tool. Bool expiry times are not counted as live.
+- **Readable check:**
+  - `Path.exists()` raising PermissionError crashed the tool. It now reports "unreadable".
+  - A dangling symlink counts as present.
+  - The check now uses the fleet's own `_load_nonce_snapshot` (O_NOFOLLOW, 64 MB cap, safeio json), so "readable" agrees with what the fleet can boot from.
+
+### stream_status
+- A subscriber with no `qsize()` or `maxsize` crashed the whole status. It is now skipped.
+- `maxsize <= 0` counts as unbounded, the way asyncio does. A maxsize of -1 used to be shown as FULL.
+- The subscriber cap allows 1024 subscribers, and every one printed a row. Rows are now sorted deepest first and capped at 30, with a "more not shown" line.
+- Bad counters (None, negative, str, bool) show as 0.
+
+### lesson_recall
+- A non-dict entry in the store crashed rank() and the tool with AttributeError. Such entries are skipped, and a store holding only corrupt entries is reported as such.
+- A finite ts far in the future (1e300, or a peer whose clock is a year ahead) sorted to the top forever and printed "0s ago". Anything past now + 300 s is treated as junk: it sorts last and shows "?". Bool ts values are junk too.
+- A non-text topic (dict, list or number) was converted with `str()`. It is now refused.
+- Tests: `tests/test_gatewayview_lessonrecall_robust.py`.
+
+## Hardening round 51 (Hark edge-case series): tools_researchnote + tools_agenthome
+
+### research_note / redact_text
+- Splitting a token with a zero-width character (`ghp_A1` + U+200B + `b2...`) let it slip past every secret pattern, though it reads the same to a person. redact_text now drops the invisible joiners first (ZWSP, ZWNJ, ZWJ, WJ, BOM, soft hyphen, U+180E). Stored notes lose these characters too.
+- A URL password that contains `@` (`https://u:p@ss@host`) leaked the part after the first `@`. Userinfo is now masked up to the last `@` before the host.
+- Invisible-only text posted a note that looked empty. It is now refused.
+- A non-text topic or kind was converted with `str()`. It is now refused.
+- Topic whitespace is collapsed.
+- A secret in the topic now sets the "masked" flag.
+- Masking can make a note longer (`a@` becomes `***@`), and the bridge then cut it at 4000 without saying so. A note that is over the cap after masking is now refused with the masked length.
+- An OSError from the bridge now returns an ERROR instead of raising.
+- A corrupt lesson store (ValueError, AttributeError or TypeError) raised after the note was already posted, so the agent was told the tool failed. It now reports "not stored".
+
+### agent_home
+- `os.walk` recurses on Python 3.11, so a home about 1000 directories deep raised RecursionError. The scan now uses an explicit stack, visits in sorted order, and enters only real directories found by lstat.
+- A pool record with `uses` set to "abc", inf or 1.5 raised out of `int()`. Such a value now gives `uses: None`.
+- An idle time of NaN or inf, or a float record of inf, made format=json emit `NaN`/`Infinity`. The dump now uses `allow_nan=False`.
+- A JSON dump over the cap was cut into invalid JSON. It now falls back to compact form, then to an error object.
+- The node id was printed raw, so a newline in it forged lines. It is now cleaned.
+- `born_here` compared the home node after it was clipped to 80 characters, so a long node id read as "imported". It now compares the raw values.
+- A format argument that isn't a string gives text output.
+- Tests: `tests/test_researchnote_agenthome_robust.py`.
+
+## Hardening round 52 (Hark edge-case series): tools_mempeek + tools_introspect.redact_value + tools_packpeer
+
+### redact_value (used by env_report and memory_peek)
+- A zero-width character inside a token hid it from every token pattern. A secret-shaped NAME was hidden the same way (`TOK` + U+200B + `EN`), and so was a fullwidth one (`ＴＯＫＥＮ`).
+- Checks now run on a detection form: invisible joiners dropped, then NFKC. The displayed value is unchanged, so emoji ZWJ sequences survive.
+- URL userinfo is masked up to the last `@` before the host. Before, `u:p@ss@host` showed `ss@host`.
+
+### memory_peek
+- Token detection (`_secretish`) uses the same detection form.
+- A lone surrogate in a stored value (from a hand-edited or peer-synced memory.jsonl) raised UnicodeEncodeError and failed the whole peek. Byte counts now use `surrogatepass`, and the display shows U+FFFD.
+- A non-dict record or namespace no longer raises.
+- A non-text prefix is refused. A format argument that isn't a string gives text output.
+- A format=json dump over the cap was cut into invalid JSON. It now falls back to compact form, then drops shown rows into `more`.
+
+### pack_list / peer_audit / fleet_forget
+- These printed raw text that could forge rows. Pack file names (`a\n- ok.tar.gz: OK`, U+202E), manifest agent_id and origin, PackError text, peer ids and status were all printed as-is. All are now passed through `textsafe.escape` and clipped.
+- An unexpected reader error (EOFError, RecursionError and similar) or a manifest that isn't a dict raised out of pack_list and hid every other pack. It is now a REFUSED row.
+- peer_audit: non-dict nodes, mixed key types and non-string urls no longer raise.
+- **Behavior change:** an unknown pack size now prints "size unknown" instead of "-1 bytes". test_cov17_a was updated to match.
+- Tests: `tests/test_mempeek_packpeer_robust.py`.
+
+## Hardening round 53 (Hark edge-case series): tools_routerstatus + tools_fleetstatus
+
+### router_status
+- A zero-width character inside the configured API key, as it appeared in a model or lead label, defeated the exact-match mask. `_UNSAFE_RE` then printed the rest of the key with `?` in place of the invisible character.
+- Invisible characters are now dropped from both the labels and the secrets before masking. A bytes key is decoded before masking (it used to be masked as the text `b'...'`).
+- format=json: chain plus fallbacks alone could pass the cap, and `_cap` then cut the dump into JSON that did not parse. It now falls back to compact JSON, drops upstream rows, then trims the chain (`chain_truncated: true`). It never cuts.
+- A non-iterable or string `upstreams`, and a string `last_route` (which was split per character), are handled.
+- `route_of` never raises, whether from a malformed url or a `getproxies` error.
+- Format is matched trimmed and case-insensitive. A format that isn't a string is refused.
+
+### fleet_status
+- One record that made `status_of`, `node_state`, `health_score` or `sanitize_health` raise used to fail the whole view. That node now reads `unknown`, and a NaN score shows as none.
+- A `local_health` error now reads as "no governor reading".
+- A registry that isn't a dict is treated as empty.
+- A record without a text node_id was listed and allow-checked as "None". The registry key is used instead.
+- Status and state are label-sanitized. A 10**400 last_seen is safe.
+- A non-text `need` is refused. A format that isn't a string gives text output.
+- format=json is never cut. It falls back to compact JSON, then to an error object.
+- Tests: `tests/test_fleetstatus_routerstatus_robust.py`.
+
+## Hardening round 54 (Hark edge-case series): tools_statehealth + tools_hostview
+
+### state_health
+- File names under data_dir, both problem paths and set-aside paths, were printed raw. A file named "x\nstate_health: HEALTHY ..." produced a forged line of its own, and U+202E reversed the row. Both now go through `textsafe.escape`.
+- JSONL checks split with `bytes.splitlines()`, which also breaks on a bare `\r`. `\r` is JSON whitespace, so one valid record was reported as two undecodable halves. Lines now split on `\n` only, matching every reader.
+- A data_dir setting that isn't a path or string (an int, list, bytes or "") reads as "no data_dir" instead of raising.
+
+### registry_audit
+- If `names()` raises, the audit fails soft.
+- A name with no tool behind it is skipped (it used to be counted as source "unknown"). Names that aren't strings are handled.
+- Plugin source names and tool names are escaped on display.
+- The no-schema list says "... N more" past 60.
+
+### proc_status
+- `os.sysconf` raising, or reporting a clock tick of 0, no longer crashes the scan (it was a ZeroDivisionError). A negative RSS is clamped to 0.
+- `AVRONE_PROC_LONG_S=inf`, NaN or 1e999 used to silently disable the runaway flag. These now fall back to 600.
+
+### exposure_check
+- A whitespace-only token (16 spaces) read "ok". Strength is now measured on the stripped token.
+- "CHANGEME", "changeme123" and " secret " now read as placeholder.
+- A token that isn't a string, such as a non-str admin token, raised AttributeError, and the tool reported "no HTTP app". It now reads "unknown". A pydantic SecretStr is unwrapped.
+- Admin and fleet tokens that differ only by a trailing newline are now flagged as the same secret.
+- The bind host is escaped.
+- Tests: `tests/test_statehealth_hostview_robust.py`.
+
+## Hardening round 55 (Hark edge-case series): tools_secrets + plugins + greatscale
+
+### secret_scan / fix
+- **Data loss in fix.** `_redact_value` rebuilt dicts with a comprehension. Two secret-shaped keys both redacted to `[REDACTED]`, so only the last entry survived, and fix silently deleted the other from the run log. Colliding keys now get `#2`, `#3` and so on.
+- **JSON-escaped secrets.** An env secret holding a quote or backslash appears JSON-escaped in event lines. The raw-text scan missed it and reported CLEAN, even though fix (which decodes lines) would have masked it. Whole escaped JSON lines are now decoded during the scan, reported as kind `json-escaped-secret`.
+  - The check is gated on `\"`, `\\`, `\u` and `\/`. A line holding only `\n` is not decoded.
+  - `_line_hides_secret` now also checks lines that open with `[` or are indented.
+- **Memory.** Every hit was kept in memory, so a 256 MiB run log of short flagged lines built millions of dicts. Rows past `HITS_KEEP` (5000) are counted instead. The flagged-path set that fix uses stays complete.
+- **File selection.** `.env.local`, `.env.production` and `prod.env.bak` were skipped by suffix, and so were `.pem`, `.key`, `.conf`, `.properties`, `.tfvars` and `.xml`. All are now scanned.
+- **Scope.** " runs" and "RUNS" are accepted.
+
+### load_plugins
+- A dotted or dashed file name (`my.plugin.py`) gave a dotted module name.
+- `foo.py` and a `foo.pkg/` package both used stem "foo" and shared one `sys.modules` slot.
+- Module names are now identifiers, unique, and never replace an existing `sys.modules` entry. A package directory keeps its full name.
+- A custom BaseException subclass raised by a plugin escaped `except (Exception, SystemExit)` and could kill the node. It is now reported. KeyboardInterrupt and CancelledError still propagate.
+- Error text is clipped to 500 characters and escaped. An exception whose `__str__` raises reads `<unprintable>`.
+- An unreadable plugins dir becomes a report instead of crashing startup. An `__init__.py` that is a directory is skipped.
+
+### great_scale
+- `heat(NaN)` returned 0, which read as "on the cone floor" (JS gives NaN). It now returns NaN, which fails `cone_compliant`.
+- `runs_to_detect` now uses `log1p`, and `detectInRuns` uses `-expm1(runs * log1p(-p))`. The old `1 - (1 - p)**runs` drifted about 1.6e-8 relative at p=1e-9 with 1e9 runs.
+- A non-finite alpha is refused. Format matching is trimmed and case-insensitive.
+
+Tests: `tests/test_secrets_plugins_greatscale_robust.py`.
+
+## Hardening round 56 (Hark edge-case series): presence + bootstrap
+
+### presence
+- **Blocking the event loop.** `environment()` ran `ip -j addr` (up to 3 s) and getaddrinfo(hostname) on the event loop. Every directory call after the 60 s cache expired stalled the whole server. Both now run in a thread.
+- **Cache.** It was keyed by `id(core)` alone, so a new core at a recycled id got the old node's environment. The cache now stores a weakref to the core and checks it, and is bounded at 64 entries, dropping dead cores first.
+- **`_host_interfaces`.** An odd `ip -j` output (a dict, null addr_info, non-dict entries) raised AttributeError or TypeError out of presence. Such entries are now skipped.
+- **`agents()`.** started=None, a string or NaN made `sorted()` raise, and a non-dict entry or a non-dict `core.active` crashed. Order is unchanged otherwise.
+- **`find_agent`.** The ref is trimmed (" Builder-3" and "Builder-3\n" used to match nothing). A non-string or empty ref raises LookupError. The ambiguity message now escapes peer routes and names, which were joined raw, so a name containing a newline forged lines.
+
+### bootstrap
+- **`_describe`.** A self-referencing hook return value (a list holding itself, or a status() that includes self) recursed to RecursionError, and the hook's try turned that into a bogus "error". It now has a cycle guard, a depth cap of 12, and caps of 500 items and 2000-character strings. NaN and inf become strings, so the JSON stays valid. Raising properties, `__repr__` or `name` fall back to `<Type>`.
+- Hook error text in `/api/extensions` is clipped to 500 characters and escaped.
+- **`run_cleanups`.** A cleanup that calls `sys.exit()` no longer skips the remaining cleanups.
+- **`apply_tool_focus`.** An `AVRONE_TOOLS_ONLY` naming no known tool (a typo, or "none") removed every tool. It now keeps all tools and logs a warning. Partial matches still trim.
+
+Tests: `tests/test_presence_bootstrap_robust.py`.
+
+## Hardening round 57 (Hark edge-case series): secretshapes, raw-JSON redaction, fusion_deliver
+
+### secretshapes
+- **pgpass ReDoS.** The user part `[^\s:]*[g-zG-Z_*][^\s:]*` tried every split of a long colon-free run, and the rule's gate is ":", so it ran on almost every event. A 40,000-char line took 6.8 s and a 160,000-char line took 104 s, on the event loop. Its runs are now letter-free-prefix plus possessive, so the cost is linear (1,000,000 chars in 12 ms). Output is identical on LF text (differential fuzz).
+- **pgpass CRLF.** `host:5432:db:user:pw\r\n` leaked, because `$` does not match before `\r`. It is now masked.
+- **Case-insensitive gates.** Rules compiled with (?i) were gated case-sensitively, so `COOKIE:`, `Machine host password x`, `"Auth"`/`"IdentityToken"`, `convertto-securestring` and `Client-Key-Data:` skipped their rule and went out raw. Their gate words are now lower case and ctxspawn tests them on the folded text (`folded_gate`, `_FOLDED_ANY`).
+- **Quoted CLI values.** `--password "x"`, `--password 'a b'`, `mysql -p'x'`, `curl -u "u:p"` and `sshpass -p 'x'` leaked. The quote is now kept and the value inside it is masked. A JSON-escaped `\"` and `--flag\tvalue` in raw lines are handled too.
+
+### ctxspawn (redact on raw JSON lines; secret_scan fix rewrites run logs with it)
+- **key=value rule.** The value ran through quotes. `{"cmd": "x token=abc", "n": 1}` lost its closing quote, `token=abc\nnext` swallowed the escape, and `{"a": "token=", "b": "c"}` took `", "` as the value and masked the next key. Now an unquoted value stops at `"` and at JSON escapes, a quoted value honours `\"` and must end at a non-word character, a single-quoted value never spans a `"`, an escaped `\"...\"` value is taken whole, and an unclosed value keeps its opening quote or `[`.
+- **Authorization rule.** It ate the `\` of `\"` and `\n`, and now stops there.
+- In 240,000 fuzzed JSON lines through every rule, 11,073 of 20,000 used to come out invalid. Now none do.
+- `tests/test_round63_redact_redos.py`'s old-regex comparison skips the quote cases that now differ on purpose.
+
+### fusion_deliver
+- `retry_delay`: `2 ** attempts` overflowed float at the 1,025th retry (OverflowError mid-cycle). The exponent is now capped.
+- `prepare_event`: NaN/Infinity nested in the payload went out as bare `NaN` (not JSON). A lone surrogate in the payload or run_id raised UnicodeEncodeError. Non-string keys collided (`{1:..,"1":..}`) or made sort_keys raise TypeError. Sets and other objects reached the "too large" message. Each now gets an explicit `(None, detail)`.
+
+Tests: `tests/test_secretshapes_fusion_robust.py`.
+
+## Hardening round 58 (2026-11-14): safeio edges
+
+`avrone/safeio.py` is the shared primitive for every state write and capped read. Fixes:
+
+- **umask window.** `_default_mode()` and `tools.atomic_write_bytes` read the umask as `umask(0)` then `umask(old)`. For that moment the umask was 0 for every thread, so a file another thread created came out world-writable. Two racing first calls could also cache 0 forever. `current_umask()` now reads `/proc/self/status` (`Umask:`) without changing anything. Where `/proc` isn't available, it swaps once, under a lock, through `0o077` (so the window is restrictive).
+- **Temp-name leaks.** `os.replace` onto a directory, or a refused chmod, raised `'.d.39xnzo5r.tmp' -> 'd'`. Round 121 had removed exactly this from the mkstemp path. `with_target(e, p, tmp)` now renames those errors to the target, in both `atomic_write` and `tools.atomic_write_bytes`.
+- **fsync durability.** `atomic_write(fsync=True)` synced the data but not the rename, so after a power loss the old file could come back. It now calls `fsync_dir(parent)` (best effort).
+- **open_append fd leak.** With a bad mode, the fd was opened and then `fdopen` raised, leaking 1 fd per call. Modes like `"r"`/`"w"` were silently accepted, and it created the file anyway. The mode is now validated before the open.
+- **read_capped allocation.** `f.read(max_bytes + 1)` allocated the whole cap up front: a 2-byte file under a 1 GB cap peaked at 1,000,004,810 bytes (callers pass `quota_bytes()+1MB` and env-sized caps). A cap past ssize_t raised OverflowError. Reads now grow with the file (size+1, then 64 KiB steps), and the grew-past-cap check is kept.
+- **Negative caps.** `read_regular(p, -3)` raised ValueError from `read()`, and `read_capped(empty, -1)` raised FileTooBig. Both caps now clamp to 0.
+- **Impossible paths.** A NUL in the path (ValueError) and a path through a regular file (NotADirectoryError) escaped callers that catch only FileNotFoundError/FileTooBig. Both now read as None, meaning missing.
+- **flock_wait.** `timeout_s=inf`/`1e308` waited forever. It's now NaN-safe and capped at 3600 s, matching `AVRONE_LOCK_WAIT_S`.
+
+Tests: `tests/test_safeio_robust.py` (59 tests).
+
+## Hardening round 59 (2026-11-14): agent fs tools + boolean tool args
+
+- **String booleans (destructive).** `bool(args.get(...))` read `"false"` as True. Models often quote booleans, so `fs_delete {"recursive": "false"}` deleted a non-empty directory, and `fs_write {"append": "false"}` appended. `fleet_agents live_only` and `agent_message wait` had the same bug. New `argnum.tool_bool(v, default)`:
+  - true/false words, in any case or spacing;
+  - numbers, where 0 is False;
+  - NaN, None, lists, objects and unknown words all fall back to the default.
+  It's used in `agentfs_tools` (3 places) and `fleet` (2).
+- **Host path disclosure.** OSErrors went out raw with absolute host paths. Examples: `fs_write a.txt/b` gave "[Errno 17] File exists: '/srv/.../agents/a1/a.txt'", ENAMETOOLONG echoed the whole absolute path, and rmtree's PermissionError did the same. `_fs_errors` turns each OSError into an AgentFSError naming the path relative to the agent dir (or just its basename if it's outside), clipped to 200 chars and escaped, and audits it as `agentfs.error`.
+- **Unescaped echoes.** fs_write/fs_list/fs_delete/fs_read echoed names like `"e\x1b[31m\nFORGED\u202e"` raw, so a name could print fake listing rows. Round 148 had escaped only "not found". `_shown()` now escapes every echoed name, including the agent id in the list header. The audit log keeps the raw path.
+- **Path type.** A non-string path (`["x"]`, `7`, `{}`) was str()-ed into a file name `"['x']"`. It's now refused and audited.
+- **Content edge cases.**
+  - A lone surrogate (half an emoji from a model's JSON) raised UnicodeEncodeError. It's now written as U+FFFD.
+  - `content: null` wrote the text `"None"`. It now writes an empty file.
+- **Kept on purpose.** `fs_delete` on a FIFO is still refused, per `test_cov7_config_agentfs::test_delete_special_file_refused`. Its message is now escaped.
+
+Tests: `tests/test_agentfs_tools_robust.py`.
+
+## Hardening round 60: agent home containers (`agentcontainer.py`, `sovereign.py`)
+
+- **Busy homes were reaped mid-command.** Idleness was measured from `ensure()`. A command running longer than `AVRONE_AGENT_IDLE_SECS` (600 s by default) therefore had its container removed with `docker rm -f` as soon as any other agent called `ensure()`. The command died and the home's state was lost. The pool now has `begin(name)` and `end(name)`, which keep an active count. Homes with active commands are skipped by the reaper, and idle time counts from `end()`. `Sovereign.run` wraps both exec attempts (first and recreate) in begin/end inside `try`/`finally`. `state()` shows `active` and never reports a negative idle time.
+- **Image as option.** The image was passed as the first positional argument of `docker run`, so `AVRONE_DOCKER_IMAGE="--privileged"` ran the container privileged, using the image `sleep`. The new `check_image()` requires a leading letter or digit, followed only by `[A-Za-z0-9._/:@+-]`, up to 512 characters. Anything else raises `ValueError`. It applies in `persistent_run_argv`, `Sovereign.start` (which wraps the error in a RuntimeError) and the isolated `docker run`.
+- **Bytes inspect output.** `str(b"true|/x")` produced `"b'true|/x'"`, so a running home was read as not running and was removed and recreated. `parse_inspect` now decodes bytes first.
+- **Cache cross-handout.** The cached home was returned without checking which directory it belonged to. `ensure()` now raises `ForeignContainer` if the cached home's `agent_dir` differs from the requested resolved directory.
+- Tests: `tests/test_agentcontainer_robust.py` (53).
+
+## Hardening round 61: run-log and secret tools (`tools_limits.py`, `tools_secrets.py`)
+
+- **Overflow on prune.** `older_than_days` and `keep` had no upper bound. `run_logs {"prune": true, "older_than_days": 10**400}` passed `check()`, then raised OverflowError ("int too large to convert to float") in the cutoff. The report path did the same once a node had more logs than `keep`, and the whole 400-digit number was echoed back. Both now go through `argnum.tool_int`, clamped to `MAX_DAYS` = 36500 and `MAX_KEEP` = 1,000,000. Junk is still an ERROR, never the default, because prune deletes. `prune()` itself clamps `older_than_days` to 1..MAX_DAYS, so a direct negative age can't move the cutoff into the future.
+- **`now=0.0` ignored.** `prune(..., now=0.0)` used `now or time.time()`, so it fell back to the wall clock. It now uses `is None`.
+- **Quoted booleans from check()-less entry points.** MCP, fleet and admin calls skip `check()`. With `run_logs {"prune": "true"}`, the prune was silently skipped and the call reported a dry run. With `secret_scan {"fix": "true"}`, the scan reported FOUND and fixed nothing, and `fix: "true"` with scope workspace wasn't refused. Both now use `argnum.tool_bool`, and unknown words stay False.
+- **Non-dict `core.active`.** A list raised AttributeError partway through the prune. It now counts as no active runs. The current run's own `run_id` is still kept.
+- **Clock skew.** A log with a future mtime read "newest -5d ago". `_ago()` now says "in the future (clock skew)".
+- **limits_status crash.** A single non-numeric `run_agents` count (a str, None or NaN) raised TypeError in the sort, and the whole status call failed. Counts are now filtered, and run ids are escaped, because an id holding a newline forged a limit line. A bool `max_parallel` printed "= True", and a bool semaphore value did arithmetic; both are now ignored.
+- **mcp_selftest report.** A non-object `serverInfo` raised AttributeError outside the try. A tool without a name (None) raised TypeError in the join. The protocol, server name and tool names were printed raw. The report now FAILs on a bad serverInfo and escapes every echoed field.
+- Tests: `tests/test_limits_secrets_robust.py` (74).
+
+## Hardening round 62: flake_probe and bridge_status (`tools_flakeprobe.py`, `tools_lessonforget.py`)
+
+- **Wrong diff line numbers.** `_first_diff_line` split with `splitlines()`, which also breaks at U+2028/U+2029, `\x0b`, `\x0c`, `\x1c`–`\x1e`, `\x85` and a lone `\r`. A tool output holding one named a line that doesn't exist in the `\n`-split text: `"a\u2028b\nc"` vs `"a\u2028b\nd"` reported line 3 instead of 2. The new `_lines()` splits on `\n` only (project rule), with ending-only differences still found.
+- **Digest collision.** `_digest` encoded with `errors="replace"`, so every lone surrogate became `?`. `"a\ud800"` and `"a\ud801"` (and `"x\ud800y"` vs `"x?y"`) shared a digest, so the report said 1 distinct output while counting 1 differing run. It now uses `surrogatepass`; valid text hashes exactly as before.
+- **bridge_status crash.** A question post whose id was unhashable (a list or dict from a relayed post) raised TypeError in the `in replied` set lookup, and the whole status failed. A non-str id now simply stays open, since a str ref can never answer it.
+- **Forged header.** The run id (and a non-int ring bound) was printed raw, so `"r1\n- FORGED"` printed a line of its own, and bidi or ANSI characters reached the reader. Both are now escaped.
+- Tests: `tests/test_flakeprobe_bridgestatus_robust.py` (50).
+
+## Hardening round 63: lessons stored credentials (`tools_researchnote.py`), pack_list order (`tools_packpeer.py`)
+
+- **Credentials persisted as lessons (security).** `redact_text` masked token shapes (bearer, `sk-`/`ghp_`, AWS ids, JWTs, PEM, URL userinfo, mixed-case blobs) but not secret assignments or auth headers. Examples: `password=hunter2xyz`, `DB_PASSWORD: s3cr3tPass!`, `api_key = abcd...`, `Authorization: Basic dXNl...`, `x-api-key: 0123...`, `client_secret: ...`. `research_note` stored them raw as lessons in `memory.jsonl` (the bridge copy was masked by the bridge's own redaction), so every later run on a related task was primed with the credential. The tool output also echoed it unmasked. `redact_text` now also runs `ctxspawn.redact` (the codex on-write redactor, rule-gated so plain prose is untouched). A failure in it never fails the note, and the token shapes still apply. Because `lesson_recall`, `lesson_forget` and `bridge_status` display through `redact_text`, credentials already stored are masked on display too; they stay in the file until `secret_scan scope=data fix=true` scrubs memory. Masking that lengthens a note past 4000 chars is still refused, never cut.
+- **pack_list order.** Packs were listed in scandir (filesystem) order, so "first 50 shown" named a different 50 from one call to the next, and `flake_probe` would flag the tool nondeterministic. They're now sorted by name.
+- Reviewed with no bugs found: `tools_mempeek` (namespace sanitized by `agent_namespace`; values redacted before truncation) and `peer_audit` (check_node_url messages carry no url).
+- Tests: `tests/test_researchnote_lessons_robust.py` (32).
+
+## Hardening round 64: router_status route (`tools_routerstatus.py`), codex_stats JSON and line splitting (`tools_codexstats.py`)
+
+- **Wrong route under ALL_PROXY.** `route_of` used urllib's view, which only checked the url's own scheme key. httpx (the gateway's client, `trust_env=True` for non-loopback) also honors `ALL_PROXY`/`all_proxy`, so router_status said `route=direct` while every upstream call went through the proxy. `route_of` now asks httpx itself (`Client(trust_env=True)._transport_for_url`). If httpx can't say (for example a `socks5://` ALL_PROXY without socksio), it falls back to urllib with `all` included. Loopback stays direct. The proxy is never printed.
+- Only rows that are shown get a route, because each check builds an httpx client and a misconfigured chain of thousands built thousands of them.
+- **codex_stats format=json not parseable.** `_cap` cut an over-long indented dump mid-string (60 long kinds, 60 tools and 50 recent rows come to about 12k characters). A new `_json_capped` compacts first, then drops the oldest recent rows (`recent_trimmed`), then the smallest tool and kind counts (`tools_hidden`/`kinds_hidden`). The output always parses and stays under the cap.
+- **Records split at Unicode separators.** The log tail was split with `splitlines()`, so a raw U+2028/U+0085/`\x0b`/`\x0c`/`\x1c`–`\x1e` inside a JSON string from a non-codex writer broke the record in two and the event vanished from every count. It now splits on `\n` only; CRLF still parses.
+- Reviewed with no bugs found: `tools_gatewayview` (replay_guard, stream_status).
+- `test_route_of_getproxies_raising` now pins `_httpx_route` to None, so it still exercises the urllib fallback.
+- Tests: `tests/test_routerstatus_codexstats_robust.py` (33).
+
+## Hardening round 65: proc_status argv secrets, exposure_check token rating (`tools_hostview.py`), registry_audit reach and bool args (`tools_statehealth.py`)
+
+- **Credentials in proc_status (security).** It hid env vars but printed each child's argv, so `--password=hunter2`, `--token abc`, `-H Authorization: Bearer ...`, `x-api-key: ...` and `postgres://u:pw@db` reached the agent, and from there its logs and sibling agents. A new `_redact_cmd` masks the value of any flag whose name says secret (password, passwd, pwd, secret, token, api-key, access-key, private-key, credential, auth; a following `-flag` is never eaten), then runs `redact_text` (token shapes plus the codex redactor). It runs on the full argv before the 160-char cut. On any error it shows only `argv[0] ***`.
+- **Weak tokens rated "ok" (security).** `_token_strength` only checked one placeholder prefix, so `secret-secret-secret` (named in the round-54 comment as handled), `passwordpassword`, `adminadminadmin123`, `tokentokentoken12345` and `1234567890123456` all rated "ok", and exposure_check said GUARDED. Every placeholder word, digit and separator is now stripped, and nothing left means placeholder. Fewer than 8 distinct characters (`aaaa...`, `abab...`, `x`*32) or an alphabet/keyboard run is weak. 10,000 random `token_urlsafe(16)`/`token_hex(16)` tokens all still rate "ok". Older tests that used `"x"*32` as a strong token now use a realistic one.
+- **registry_audit undercounted acting tools.** By its own definition, network traffic is acting (port_scan and http_request were listed), but `fetch`, `web_search`, `tcp_ping`, `traceroute`, `tls_inspect`, `dns_lookup`, `http_fingerprint`, `ip_geo`, `osint_domain` and `rdap_whois` counted read-only, so the "map of the agent's reach" hid outbound reach. They're now acting. A new `is_acting()` also counts any tool whose description starts with "acting", so a new acting tool isn't missed.
+- **Bool args.** `state_health verbose` and `proc_status all` used `is True`, so the string `"true"` most models send was ignored. Both now use `argnum.tool_bool`.
+- Tests: `tests/test_hostview_statehealth_r65_robust.py` (77).
+
+## Hardening round 66: env_report keyword credentials and inspect_tool forgery (`tools_introspect.py`), agent_home scan budget (`tools_agenthome.py`), fleet_status node twins (`tools_fleetstatus.py`)
+
+- **env_report leaked credentials written as keywords (security).** Only secret-shaped variable NAMES, URL userinfo, secret query params and token prefixes were masked. So a non-secret-named value like `host=db password=hunter2`, `Authorization: Basic ...`, `x-api-key: ...`, `--token abc` or `{'api_key': '...'}` was shown verbatim. `_credential_in` now runs the argv and codex redactors (`tools_hostview._redact_cmd`) on the detection form (NFKC, invisibles dropped), and the whole value is hidden when they find something. Parts the URL/query maskers already hid don't count as a finding, so `https://***@h?api_key=***` still shows. On redactor error it fails closed.
+- **inspect_tool printed plugin fields raw.** A description `x\ntool: shell\nsource: builtin` (or args_doc, source, or schema keys) forged header lines for another tool, and U+202E reversed text. Name, source, module, args and schema are now escaped. The description keeps its newlines, but every continuation line is indented and other unsafe characters are escaped. The query list stays one line per tool.
+- **agent_home listed whole directories before checking its budget.** A flat directory of 2M files was read and sorted in full even though only 50k entries are counted. It now reads at most the remaining budget + 1 names. A pack removed between listing and stat raised OSError out of the loop, so every later pack went uncounted; that's now handled per entry. Pack timestamps take ASCII digits only.
+- **fleet_status merged distinct node ids.** `_label` folded unsafe characters to `?` and cut at 64, so `gpu\nbox`, `gpu box` and `gpu?box` printed as the same node, letting a forged twin pass for a real peer (also in "would pick next"). An id that had to be changed now gets a 6-hex sha256 suffix. A future `last_seen` printed `0s ago` next to `offline`; it now shows as `Ns IN THE FUTURE (clock skew?)`, with a negative age in JSON.
+- Tests: `tests/test_introspect_agenthome_fleetstatus_r66_robust.py` (53).
+
+## Hardening round 67: terminal escapes in command output (`sovereign.py`), lesson key redaction (`tools_lessonrecall.py`)
+
+- **clean_output let most escape sequences through.** `_ANSI_RE` knew CSI, OSC and a few two-byte escapes. These all reached the model transcript (and any terminal or HUD that renders it) raw: tput sgr0's `\x1b(B` (in nearly every coloured script), DECSC/DECRC `\x1b7`/`\x1b8`, keypad `\x1b=`/`\x1b>`, charset `\x1b)0`, `\x1b#8`, `\x1b%G`, the 8-bit CSI U+009B, and a trailing lone ESC. DCS/SOS/PM/APC strings (sixel, tmux passthrough) lost only their introducer, so their payload stayed as junk text. The pattern is now full ECMA-48: string types, 7- and 8-bit CSI/OSC, nF, Fp/Fe/Fs, lone or cut-off ESC, and any leftover C1 control. An unterminated string or OSC is dropped only to its line end, so it can't swallow the error on the next line. The pattern runs again after the carriage-return collapse, because joining a redrawn line can rejoin a split escape. A 3,000-case fuzz test confirms no ESC or CSI byte survives. Plain text, `[1m` without ESC, tabs and emoji are untouched.
+- **lesson_recall showed lesson keys unredacted.** The value and task were masked, but a lesson stored under a token-shaped or `password=` key printed it in full. The key now goes through `redact_text` and is capped at 120 characters.
+- Gate note: `test_shell_runner_robust.py::test_timeout_kills_whole_process_group` failed once in a 70-file related run under load, then passed 3 times in isolation. It's timing, not the change.
+- Tests: `tests/test_sovereign_ansi_lessonkey_r67_robust.py` (41).
+
+## Hardening round 68: `agentpack_tools.py` (export/import/migrate), `tools_researchnote.py` (masked flag)
+
+- **agent_pack_export raised on I/O errors.** An unreadable file in the home (`export_pack` OSError), a full disk or a read-only data dir (`mkdir`/`atomic_write`) raised out of the tool, and nothing was audited. Each now returns `ERROR: ...` and emits `agentpack.failed`. The message gives only the exception type and errno name (`OSError ENOSPC`), never the path.
+- **agent_pack_import** returned no clean error when a pack was unreadable or vanished between the `is_file` check and the read. That now gives an audited error that says the home is unchanged. A non-text `name` (dict or list) was `str()`-ed into the audit and the error. It is now refused. Refusal text is shown as one masked line.
+- **agent_migrate echoed the peer's error body raw.** `RuntimeError("... -> 400: <body>")` reached the model unchanged, so a peer could forge extra result lines (`\n`, `\r`, U+2028), reverse the text (U+202E), reflect an `Authorization: Bearer` header back, or flood the result. The error is now one line, redacted, and capped at 500 characters, and fails closed to `(unprintable)`. A non-text `target` is refused. `target` is stripped, capped at 200, and empty means `auto`. The success line is flattened too.
+- **research_note reported "(secret-shaped tokens masked)" when nothing was masked.** `redact_text` also drops invisible joiners, so any note pasted with a zero-width space or BOM claimed a secret had been masked. The note is now compared against its invisible-stripped form, and a token split by a zero-width space is still reported as masked.
+- Tests: `tests/test_agentpack_tools_researchnote_r68_robust.py` (44). The codex stub uses the real `emit(run_id, kind, agent, **data)` signature, because a `name=` field would collide with a stub parameter called `name`.
+
+## Hardening round 69: fleet tool arguments (`fleet.py`: remote_spawn, remote_broadcast, agent_message, queue_submit)
+
+This round came from the `bool(args.get(...))` audit. No bare `bool(args.get())` is left in avrone/. `ctxspawn._bool` (share_dir) is deliberately narrower than `tool_bool` and fails closed, so it stays as it is. The audit found these str()/truthiness bugs:
+- **remote_spawn `privileged`.** `str(v)` turned `{"privileged": "false"}` into the capability `priv:false`, so an ordinary spawn was sent as a privileged request and refused. `true` became `priv:True`. Off values are now None, False, 0 and the false words (from `argnum._FALSE_WORDS`). Accepted values are `shell`, `admin`, `priv:shell` and `priv:admin`, in any case or spacing. Anything else, including `true`, is refused locally before any network call.
+- **node/mode null.** `str(args.get("node", "auto"))` turned `{"node": null}` into the route `["None"]` for remote_spawn and queue_submit, and queued jobs stored mode `"None"`. Now null or blank means `auto` or `squad`. Routes are trimmed per segment. A non-text node is refused. An unknown mode is refused up front, where before the remote silently ran it as squad.
+- **remote_broadcast `nodes` as a string.** The string was iterated character by character, so `"router1"` dispatched the task to up to 8 one-letter nodes. A string now means one node. Any non-list, or a list with non-text items, is refused.
+- **Missing required args.** A missing `task`, `agent` or `message` raised KeyError out of remote_spawn, remote_broadcast and agent_message. Dict, list or number values were `str()`-ed into the prompt sent to a peer. Each is now `ERROR: <key> is required (a non-empty string)`.
+- **Peer error forging a broadcast section.** A peer's raw error could add a `## b` section, posing as another node's answer. `_tool_err` makes it one masked line, capped at 300 characters, and fails closed to the exception type.
+- Tests: `tests/test_fleet_toolargs_r69_robust.py` (75).
+
+## Hardening round 70: Trinity Core helpers (`trinity.py`: deep rounds, deep report parsing, planner subtasks, reply text, compaction)
+
+- **Deep runs declared convergence while the lead was still listing fixes.** `_NONE_RE` matched any line *starting* with none/na/nothing, so `Nothing in the docs supports the 5s timeout`, `NA values are dropped`, and `None of the prices are current` were all dropped as "no corrections". A multi-round deep run then saw no new corrections, stopped, and reported `converged`. Only a whole-line "nothing to fix" note counts now (`None`, `None found [by ...]`, `N/A`, `No corrections needed — ...`, `Nothing to correct`). Correction lines are split on `\n` only, so U+2028/U+0085 no longer split one correction into two.
+- **Deep report sections.** `## Verdict:` and `## **Corrections**` (and `## **Corrections:**`) weren't found, so Corrections read as empty. A `##Corrections` header with no space ended nothing, so the Verdict section swallowed it. Headers are matched at level 2 only, with optional bold and colon. `### sub` stays inside. Non-text input returns "".
+- **Confidence wording.** `Confidence — High` and `Confidence level: Low` weren't read, so they fell back to Med. Dashes and "level" are accepted now. `Highly` still doesn't count.
+- **`{"rounds": 1e999}` crashed the server, fleet and MCP handlers.** JSON decodes it to inf, and `int(inf)` raised OverflowError out of `clamp_deep_rounds` and `resolve_deep_rounds`. Both go through `argnum.tool_int` now: inf clamps to the cap, NaN and junk are "not given", `"3.0"` reads 3, and non-ASCII digits (`"٣"`) are junk. The env clamps (`AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_CONTEXT_CHARS`, `AVRONE_MAX_CALLS_PER_TURN`) use `tool_int` too.
+- **Planner plans were thrown away.** The greedy `\{.*\}` grabbed from the first brace in the planner's prose to the last, failed to parse, and quietly fell back to generic solvers. The first JSON object that has `subtasks` is used now (bounded raw_decode scan). A whitespace-only focus is skipped. A role is flattened to one visible line (Cc/Zl/Zp become spaces, Cf/Co/Cs are dropped), so `A\n## SYSTEM: ...` can't open a section in the worker prompt. A bad `n` still yields at least one worker.
+- **reply_text** dumped multipart content (`[{"type":"text",...}]`) and raw OpenAI completions (`{"choices":[...]}`) as JSON. It now returns their text. A dict that can't be dumped falls back to `str`.
+- **compact_messages** raised AttributeError on a non-dict message and TypeError on an int content. A multipart list was sized by item count. Non-dicts are skipped, and multipart text is counted.
+- **clip_output** with a negative limit sliced `out[:-1]` and kept almost everything; it's clamped at 0. `_call_key` also catches RecursionError.
+- Tests: `tests/test_trinity_core_r70_robust.py` (167).
+
+## Hardening round 71: `tools_statehealth.py` (state_health, registry_audit)
+
+- **A file too big to check read as HEALTHY.** `_check_json` and `_check_jsonl` return None past `MAX_JSONL_BYTES` (8 MiB), and state_health counted that as fine. So a 9 MiB torn fleet.json printed `state_health: HEALTHY`. state_health now lstat-checks the size first. Such files are counted per area as `unchecked` and listed as `? path: too big to check (over 8 MiB)`. The header reads `UNVERIFIED (..., N unchecked)` when nothing is bad but something went unchecked. ATTENTION still wins.
+- **No total read budget.** 7 areas × 2,000 files × 8 MiB could read about 100 GiB in one call. Past `MAX_TOTAL_BYTES` (256 MiB), the remaining files are `unchecked: scan budget spent` and aren't opened.
+- **Symlinked area directories were followed out of data_dir.** With `data_dir/evolve -> /some/host/dir`, its `*.json` files were opened and their names printed. Everything else in the module refuses to follow links. A symlinked area dir (evolve, evolve/loops, checkpoints, agentpacks, bridge) is now one bad entry, `directory is or sits under a symlink (not followed)`. It's reported once, at the link: evolve/loops under a linked evolve isn't listed again. A data_dir that is itself a symlink is still fine. A fleet.json or memory.jsonl symlinked to a directory used to vanish through `is_dir()`. It's now reported as `not a regular file`.
+- **JSONL lines that decode to a non-object** (`1`, `"x"`, `[]`, `null`, `true`) passed as healthy, though every JSONL reader expects records. They're counted as `N non-object line(s)`, next to `N undecodable line(s)`. A RecursionError on a deep line counts as undecodable.
+- **`state_health("")` scanned the process cwd** (`Path("")` is `.`). Blank data_dir now means nothing configured, in the function and in the tool.
+- **Non-dict args** (null, list, string) raised AttributeError out of both tools on a direct call. They're treated as `{}`.
+- **registry_audit**: a name listed twice was counted twice and shown twice under "no arg schema". Names are deduplicated now. A non-dict schema (`"str"`, a list) counted as having a schema, though `validate_args` checks nothing for it. It's listed under no arg schema now. `{"source": 3}` or a list used to audit every tool silently as if no filter was given. It's refused with an error.
+- Tests: `tests/test_statehealth_r71_robust.py` (59).
+
+## Hardening round 72: agent pack restore and export (`agentpack.py`)
+
+- **A manifest `memory` that isn't an object crashed import.** `[1]` or `"abc"` raised AttributeError out of read_pack, which became a 500 on fleet migrate and a crash in pack verify. It's refused as `bad memory in manifest` now.
+- **`total_bytes` was trusted.** A pack without it raised KeyError *after* the files were already installed. A string was echoed back as `"bytes": "x"`. The import result now reports the verified byte count. The field is optional, but if present it must be a non-negative int, else `bad total_bytes in manifest`. That check runs before anything is installed.
+- **Unsafe characters passed the path check.** The check covered only C0 and DEL. C1 controls (U+0085 is a newline to many tools), U+2028/2029, and bidi overrides got through: `invoice\u202etxt.exe` displays as `invoiceexe.txt`. `_check_rel` uses `avrone.textsafe.UNSAFE_ONE` now. Ordinary Unicode, emoji and ZWJ names still import.
+- **Export built packs no node can import.** Invalid UTF-8, a backslash, control or bidi characters, case twins (`Notes.md` beside `notes.md`), NFC/NFD twins and file/dir case conflicts all exported fine and failed only on the receiver, after the transfer. Export now runs the same `_check_rel` plus the shared `_check_names`, and refuses up front. `test_export_with_case_twins_fails_import_clearly` now expects the refusal at export.
+- **A regular file or FIFO at `agents/<id>` was swapped aside and leaked.** It was replaced silently, and `rmtree` couldn't remove it, so a stray `.old-<id>-*` entry was left behind. Import refuses it now: `exists and is not a directory`. A dangling symlink is still refused as a symlink.
+- **Install OSErrors carried the host's absolute path to the sending peer.** The message is now the exception type and errno name only, for example `FileExistsError (EEXIST)`.
+- **A non-bytes bundle** (str, None) raised TypeError. It's refused as `bundle must be bytes`. bytearray and memoryview still work.
+- Tests: `tests/test_agentpack_r72_robust.py` (68).
+
+## Hardening round 73: agent home containers (`agentcontainer.py`)
+
+- **Byte results hid a dead container.** `container_gone` used `str()` on stdout. With an exec_fn that returns bytes, `str(b"")` is `"b''"`, which isn't empty, so a removed or stopped container was never seen as gone and never recreated. stdout and stderr are decoded now (UTF-8, replace).
+- **Mount paths broke at Unicode line separators.** `parse_inspect` used `splitlines()`, which also splits on U+2028/2029, U+0085, \x1c to \x1e, \v and \f. A live home whose path held one read as mounting another directory and was refused as a ForeignContainer. It now splits on `\n` only, per the standing rule.
+- **`mem=True` / `cpu=True` meant the minimum** (1.0 was clamped to 256 MiB / 0.1 CPU). Bools now fall back to the default.
+- **"could not start agent container" carried raw stderr**: a bytes repr, ANSI escapes, and newlines that could forge log lines. It's now decoded, folded to one line, escaped with `textsafe.escape`, and capped at 300 characters.
+- Tests: `tests/test_agentcontainer_r73_robust.py` (45).
+
+## Hardening round 74: lesson recall (`tools_lessonrecall.py`)
+
+- **Non-dict args crashed.** null, a list or a string as args raised AttributeError out of `lesson_recall`. They're treated as `{}` now, which lists the newest lessons.
+- **A blank data_dir read the process cwd.** `""` is `Path("")`, which is `.`, so lessons were read from whatever `./memory.jsonl` the server started beside. Whitespace read a directory literally named `"  "`. Blank now means no data_dir.
+- **Non-text task and key fields printed as Python reprs**, for example `(… {'t': 1})`. Only text is shown now. A missing or non-text key shows as `?`.
+- **Combining-mark floods.** A lesson of `docker` plus 400 U+0301 spent the whole 300-character digest on one stacked glyph that paints over neighbouring lines. Runs of combining marks (Mn/Me) are capped at 4 in the value, key and task. Real accents, Vietnamese NFD, pointed Hebrew and Devanagari conjuncts are untouched.
+- Tests: `tests/test_lessonrecall_r74_robust.py` (30). They set `AVRONE_LESSONS=on`, because the suite's default is off.
+
+## Hardening round 75: flake probe (`tools_flakeprobe.py`)
+
+- **Non-dict args crashed.** null, a list or a string raised AttributeError. They're treated as `{}`, which gives the "give tool" error.
+- **A non-text `tool` was str()-ed.** `["env_report"]` and `{"a": 1}` reached the allow-list check as their reprs. They're refused as `tool must be text` before any run.
+- **`format` fell back to text silently.** `["json"]`, `"xml"` and `1` all produced the text report. They're refused now, before any run. `json` and `text` are matched case-insensitively and trimmed. null and `""` mean text.
+- **A ctx without `core` raised AttributeError.** It now reports `the tool registry is not available`.
+- **Schema reasons were trusted.** `bad[1]` on a string showed one character. A 1-tuple raised IndexError, and `True` raised TypeError. A newline in the reason added a forged line to the report. The reason is now taken safely, flattened with `one_line`, and capped at 300 characters. A non-text reason reads `invalid args`.
+- Tests: `tests/test_flakeprobe_r75_robust.py` (47).
+
+## Hardening round 76: research note and bridge data_dir (`tools_researchnote.py`, `bridge.py`)
+
+- **A blank data_dir wrote into the server's working directory.** `""` and whitespace became `Path(".")`. research_note then wrote `./memory.jsonl` and `./bridge/`. `distill_lessons` learned into the same files, and `relevant_lessons` primed workers from whatever `./memory.jsonl` held. The new `bridge.usable_data_dir` treats blank, whitespace and non-path values (int, dict, bytes, a PathLike that raises or is blank) as no data_dir. With no data_dir, `Bridge` stays in memory, `load_posts` returns None, `distill_lessons` returns [] and `relevant_lessons` returns [].
+- **A non-path data_dir crashed.** An int or dict raised TypeError out of `Bridge()`. It now means no data_dir.
+- **Non-dict args crashed research_note.** They're treated as `{}`, which gives the "text is required" error.
+- **A ctx with no core crashed.** `for_core(None)` raised AttributeError. It now returns `ERROR: no agent core on this context (nothing posted)`.
+- **Bridge open errors were uncaught.** An OSError when creating the bridge dir (data_dir is a file, read-only, full disk) is now reported by errno class only, with no path.
+- Tests: `tests/test_researchnote_r76_robust.py` (42).
+
+## Hardening round 77: blank directory settings (`config.py`, `plugins.py`, `agentkit.py`, `capgate.py`, `fusion_blackboard.py`, `fusion_peer.py`, `tools_secrets.py`)
+
+Round 76 fixed a blank data_dir in the bridge. This round follows the same bug back to where the settings come from.
+- **`AVRONE_DATA_DIR=` and `AVRONE_WORKSPACE=` resolved to the process cwd.** A blank value (for example an `.env` line with no value) went through `Path("").resolve()`. Data, and the agent workspace, then landed in whatever directory the server started from, which for the workspace is usually the repo. Blank or whitespace now means the default. A leading `~` is expanded instead of creating a literal `~` folder.
+- **`AVRONE_PLUGINS_DIR=` resolved to the cwd.** Every `*.py` file there was offered as a plugin. Blank now means `./plugins`, and `~` is expanded.
+- **`AVRONE_SKILLS_DIR=` used the cwd as the skills dir.** Blank now means the bundled `skills/`.
+- **`capgate.data_dir_of` accepted whitespace.** It now returns None.
+- **Other blank-path readers.** `fusion_blackboard._data_dir`, `fusion_peer._data_dir` and `tools_secrets._roots` (data/runs and workspace) go through `bridge.usable_data_dir`, so blank or non-path values mean none. A blank runner workspace falls back to the settings workspace.
+- Tests: `tests/test_blankdirs_r77_robust.py` (74).
+
+## Hardening round 78: environment parsing (`config.py`)
+
+- **On/off values were read too literally.** `"TRUE "` (trailing space), `" 1"`, `'"true"'` and `'on'` with quotes were all False. A blank `AVRONE_GOVERNOR=` turned the default-on governor off. The new `config.parse_bool` trims, unquotes and lowercases the value, and also accepts y/enable/enabled and n/disable/disabled/none. Blank means the default. An unknown word stays off, as before, and is now reported on stderr (capped at 40 characters).
+- **Permission switches still fail closed.** A blank `AVRONE_ALLOW_NETWORK=` or `AVRONE_AGENTS_CAN_SHELL=` stays off (`blank=False`), exactly as before.
+- **Unicode digits were accepted as numbers.** `float()` took fullwidth `２` and Arabic-Indic digits. Numbers must now be ASCII. The bad-number warning is capped at 40 characters.
+- **A NUL in `.env` blocked startup.** `os.environ` raises ValueError on a NUL byte, and that happened at import time. Lines containing NUL are now skipped.
+- **`.env` split on more than newlines.** `splitlines()` also broke at U+2028, `\x0c`, `\x1c`–`\x1e`, `\x85` and `\x0b`, so `A=a<U+2028>B=evil` set B. Lines now end at `\n` only, and CRLF is still handled.
+- **A blank `AVRONE_ENV_FILE=` loaded no .env at all.** The new `config.env_file()` treats blank as `.env`, unquotes the value and expands `~`.
+- Tests: `tests/test_config_r78_robust.py` (84).
+
+## Hardening round 79: bounded numeric settings and retry delays (`config.py`, `gateway.py`, `llm.py`)
+
+- **No numeric setting had bounds.** `AVRONE_MAX_STEPS=0` gave every agent zero turns, so each run ended as out_of_turns. `AVRONE_LLM_TIMEOUT=0` or `-1` failed every model call immediately. The new `config.SETTING_BOUNDS` gives each numeric field a floor, a ceiling and the value to use below the floor, and `Settings.__post_init__` applies them through `bound_settings`. Below the floor, timeouts go back to their defaults (llm 180 s, command 120 s, thermal 85 °C), counts go up to 1, and delays go to 0. NaN and non-numbers take the same fallback. Values above the ceiling are capped. Defaults are unchanged.
+- **A retry could sleep effectively forever.** `AVRONE_LLM_BACKOFF=1e300` made `asyncio.sleep(base * 2**attempt)` never return. The new `gateway._bounded_delay` keeps the delay in [0, 60] s, and NaN and negative values give 0. Both `gateway._delay` and `llm._retry_delay` use it. In `llm._retry_delay`, a negative or NaN Retry-After header is now ignored.
+- **A breaker could stay open forever.** With a NaN cooldown, `now >= open_until` is never true, and 1e300 or inf had the same effect. `Gateway.__init__` now bounds the threshold and cooldown itself (default 3 and 30 s), so a settings object that isn't a Settings is covered too.
+- Tests: `tests/test_settings_bounds_r79_robust.py` (58).
+
+## Hardening round 80: governor parsing, lesson_forget and bridge_status edges (`governor.py`, `tools_lessonforget.py`)
+
+- **Governor**
+  - **Non-ASCII digits counted as numbers.** `_as_int` and the env readers took fullwidth `\uff12` and Arabic-Indic digits, which `config._num` has refused since round 78. Env values are now trimmed and unquoted, and only ASCII is accepted.
+  - **A thermal ceiling of 0 or below** made every node "hot", so every run was pinned to the floor. A ceiling above 150 °C turned the guard off. Both now fall back to 85 °C.
+  - **`ttl_s=1e300` froze the first reading forever.** The TTL is now bounded to 0–300 s, and a negative value means 0.
+  - **The on/off switch read words wrong.** `bool("false")` and `bool("off")` were True. `AVRONE_GOVERNOR=" off "` was not trimmed, so the governor stayed on. Text now goes through `config.parse_bool`.
+  - **`from_settings` mishandled `data_dir`.** A blank or non-path `data_dir` now means `.`.
+- **lesson_forget**
+  - **Bad args crashed it.** A list, string or None for args raised AttributeError. It now refuses them cleanly.
+  - **An invisible reason passed as "required".** The old check removed only five zero-width characters, so `\u2062`, `\ufe0f`, `\u180e`, U+3164 and Braille blanks got through. The new `_visible` check uses Unicode categories.
+  - **Zalgo text in the reason went through whole.** Combining-mark runs are now capped at 4 by `_calm`.
+  - **A blank `data_dir` wrote lessons to the cwd.** With `data_dir="   "`, a directory literally named three spaces appeared in the repo root. An int or bool `data_dir` raised TypeError. It now uses `bridge.usable_data_dir`.
+- **bridge_status:** a context with no core or run_id now returns a message instead of raising.
+- Tests: `tests/test_governor_lessonforget_r80_robust.py` (90).
+
+## Hardening round 81: one reading of AVRONE_HOST/AVRONE_PORT (`config.py`, `server.py`, `doctor.py`, `tools_hostview.py`)
+
+- **A blank host was exposed but reported as loopback.** `server.main` passed `AVRONE_HOST=""` straight to uvicorn. asyncio binds an empty host on every interface (both `0.0.0.0` and `::`). Meanwhile `doctor` and `exposure_check` read the same blank as 127.0.0.1 and called the node loopback-only. Now `config.bind_host(env)` gives all three the same answer. The value is trimmed and unquoted. A blank, non-ASCII, spaced or control-character value means 127.0.0.1, so it fails closed.
+- **Bad ports.** A blank `AVRONE_PORT=` raised ValueError out of `server.main`. `0` bound a random port. `int()` took fullwidth digits. `config.bind_port` now accepts only ASCII 1–65535, and anything else falls back to 8710 with a capped warning.
+- **proc_status:** `AVRONE_PROC_LONG_S` is unquoted and ASCII-only. Each child's cmdline is read up to 8 KB (`CMDLINE_READ`), not 2 MB+, before redaction and the 160-char cut.
+- Tests: `tests/test_bindhost_hostview_r81_robust.py` (56).
+
+## Hardening round 82: one reading of the fleet token and capgate key (`config.py`, `capgate.py`, `capgate_head_attest.py`, `fleet.py`, `doctor.py`, `tools_hostview.py`)
+
+- **A whitespace capgate key silently broke verification.** `AVRONE_CAPGATE_KEY="  "` is truthy, so the `or AVRONE_FLEET_TOKEN` default was never consulted, and after `.strip()` the key was empty. capgate then used its random per-process key, so no capability or receipt verified across nodes or restarts. `capgate_head_attest` copied the same expression. The new `config.shared_key_text()` cleans each value first, and both modules now use it.
+- **A quoted fleet token signed differently.** capgate only stripped, while fleet also unquoted (`clean_token`), so a compose `.env` with `"tok"` signed capabilities with a different key than the fleet used. The new `config.clean_secret` is now the single implementation, and `fleet.clean_token` delegates to it.
+- **The checks judged tokens differently from the node.** `exposure_check` counted `AVRONE_FLEET_TOKEN="   "` as fleet ON, while the fleet treats it as off. `doctor` called `'"changeme"'` "weak" rather than "placeholder", and `"   "` "weak" rather than unset. Its token-reuse check missed `tok` vs `"tok"`. Both now read tokens through `clean_secret` and `env_secret`.
+- **`AVRONE_CAPGATE_TTL`** is now ASCII-only and unquoted. Fullwidth digits used to parse, and a quoted `"600"` silently became 3600.
+- **Not changed, on purpose:** admin tokens stay exact and untrimmed. `test_previous_token_is_exact_and_untrimmed` pins that design.
+- Tests: `tests/test_secret_readers_r82_robust.py` (52).
+
+## Hardening round 83: capgate env and process ages (`capgate.py`, `capgate_head_attest.py`, `tools_hostview.py`)
+
+- **A quoted `AVRONE_CAPGATE` turned the gate off.** `AVRONE_CAPGATE="enforce"` from a compose `.env` keeps its quotes, so it read as `"enforce"` and fell back to OFF. The capability gate was open while the operator believed it was enforcing. The value is now cleaned like the other secrets (`config.clean_secret`). An unknown word still means off, as `test_capgate` pins, but it now prints a one-line, escaped warning per distinct value, capped at 32 values.
+- **A quoted `AVRONE_CAPGATE_POLICY`** (`'{"*":["echo"]}'`) failed to parse and granted nothing. Outer quotes are now removed, but only around JSON-looking text. Bad policies still fail closed, and a blank policy is still the default.
+- **`AVRONE_CAPGATE_ATTEST='"on"'`** read as off; it is cleaned now, with the same word set, so "enable" stays off. **`AVRONE_ATTESTED_HISTORY_LOG`** with quotes made a path containing the quote characters; it is now unquoted and `~` is expanded.
+- **proc_status ages came from the wall clock.** Ages were `time.time() - (btime + ticks)`, so a clock stepped back (an NTP step, a VM snapshot resume) showed negative ages and hid every long-running child. Ages now come from `/proc/uptime` minus start ticks, clamped at 0. When uptime is missing they fall back to the wall clock, clamped. Rows are sorted oldest first by age.
+- Tests: `tests/test_capgate_env_procage_r83_robust.py` (63).
+
+## Hardening round 84: policy switches read the same everywhere (`config.py`, `agentkit.py`, `evolve.py`, `recon.py`, `bridge.py`, `agentcontainer.py`, `doctor.py`, `tools_extra.py`)
+
+- **The lock switches failed open.** Both `AVRONE_SELF_CHANGES` and `AVRONE_SELF_EVOLVE` were read as `os.getenv(...).lower() == "deny"`. A trailing space, a newline, or compose quotes (`"deny"`) therefore let package installs and self-evolution run on a node the operator had locked. `config.self_changes_policy` (allow|log|deny) and `config.self_evolve_denied` now clean the value first, and an unrecognised word denies.
+- **doctor and capabilities_report repeated the raw lower-cased text**, so they showed `"deny"` in quotes while the node allowed. Both now report the effective policy from the same helpers.
+- **`AVRONE_ALLOW_ABS_READ`**: doctor said blank meant on, but agentkit had it off; also `" 1"` and `"1"` with quotes read as off. Both now use `config.abs_read_allowed`: unset or 1 means on, anything else is off.
+- **Quoted values** for `AVRONE_RECON`, `AVRONE_LESSONS`, `AVRONE_AGENT_CONTAINER` and `AVRONE_EVOLVE_LONG` are now cleaned via `config.switch_word`. For example, `'"off"'` had kept lessons ON.
+- Tests: `tests/test_policy_switches_r84_robust.py` (83).
+
+## Hardening round 85: one reading of numeric env settings (`config.py` and 16 readers)
+
+- **`AVRONE_MCP_TIMEOUT` crashed the import.** `mcp_client` parsed it with `float(os.getenv(...))` at import time, so `60s` or a blank line made `import avrone.mcp_client` raise, taking every MCP tool down. Also `nan` and `inf` reached `httpx.Timeout`, and `-1` meant no wait. It's now `_default_timeout()`: 1..3600, default 60.
+- **There was no shared reader.** 19 int/float readers across codex, fleet, mcp_server, memstore, telemetry, server, safeio, logsafe, mcp_client, checkpoint, jobqueue, ctxspawn and bridge did `int(os.environ.get(..).strip())` each. As a result, fullwidth digits (`\uff11\uff10\uff10`) counted as 100, compose quotes (`"100"`) silently became the default, and `1e3` was junk for an int but 1000 for a float. `config.env_num` / `parse_env_number` now give one reading: cleaned like a secret, `_` allowed, ASCII only, finite. A value that's set but unreadable warns once per (name, value), capped at 32 and escaped, so per-request readers never flood the log. Each caller keeps its own clamp.
+- **`AVRONE_SHELL_PIPE_GRACE=nan`** gave 10 s of grace (`min(10, nan)` returns 10). It's now the default, 0.5 s.
+- **`AVRONE_PRIV_SHELL_TIMEOUT`** with a space or quotes read as the default. **`AVRONE_RUNS_CACHE_S`** now uses the shared reader too.
+- Tests: `tests/test_env_numbers_r85_robust.py` (100).
+
+## Hardening round 86: access and fleet settings read the node's way (`config.py`, `server.py`, `doctor.py`, `fleet.py`, `fusion_deliver.py`, `agentcontainer.py`, `tools_extra.py`)
+
+- **`AVRONE_PUBLIC_ACCESS` failed open.** It was read as `.strip().lower()`, so `'"admin"'` from a compose `.env` was an unknown word and fell back to loopback. A node set to admin-token-only therefore let local callers in without the token. `config.access_policy` now cleans quotes for both `server` and `doctor`; a truly unknown word still means loopback, never all.
+- **Fleet words** go through `fleet._env`, which now uses `clean_secret`. Before, `AVRONE_FLEET_REQUIRE_ALLOW='"1"'` read as off, which dropped the allowlist requirement. `AVRONE_FLEET_ALLOW` and `AVRONE_PUBLIC_URL` with quotes kept the quote characters.
+- **`AVRONE_FLEET_MAX_HOPS` crashed fleet startup.** `"3x"` or `'"3"'` raised `ValueError` inside `FleetManager()`, so bootstrap booted the node with the fleet off. `-5` and `10**9` went through as-is. It's now `max_hops_env()`: 0..32, default 3.
+- **Fleet numbers:** `_env_int` and `PRIVILEGED_MAX_HOPS` use `env_num`. A migrate interval of `inf` meant agents never migrated. The offload timeout and heartbeat use the shared reader.
+- **doctor's fleet toggles** (privileged, offload, dispatch, migrate, container) now clean the value the same way the node does.
+- **Web search sent queries to the wrong engine.** A provider of `"brave "` or `'"brave"'` fell through to duckduckgo, sending the query to an engine the operator never chose. Quoted or padded API keys were sent verbatim. Now cleaned; an unknown provider still means duckduckgo.
+- **Fusion:** `server._fusion_timeout`, `_fusion_deadline` and `_fusion_breaker`, plus `fusion_deliver._float_env` and `_int_env`, now refuse fullwidth digits and clean quotes. The fusion token stays exact by design. The `agentcontainer._num` reader is shared as well.
+- Tests: `tests/test_access_fleet_env_r86_robust.py` (123).
+
+## Hardening round 87: the last raw env readers (`trinity`, `mcp_server`, `agentfs`, `agentfs_tools`, `recon`, `tools_extra`, `bootstrap`, `mcp_client`, `codex`, `tools_hostview`, `evolve`, `netdiag`, `config`)
+
+- **The MCP server crashed at startup** when `AVRONE_LOG_LEVEL` was set to `'"debug"'`, `verbose` or `warn ing`. The raw value went straight into `logging.basicConfig`, which raised `ValueError`. `mcp_server.log_level()` now cleans the value and maps WARN to WARNING and FATAL to CRITICAL; any unknown value means WARNING.
+- **Docker isolation turned itself off.** `AVRONE_AGENT_DOCKER_ISOLATE='"1"'` read as off, and a whitespace-only `AVRONE_AGENT_FS` turned the agent sandbox off. `agentfs._truthy` now uses `config.parse_bool`.
+- **Quoted lists lost entries.** `AVRONE_RECON_ALLOWLIST='"a.com,b.com"'` and `AVRONE_PRIV_SHELL_ALLOW='"ls,cat"'` kept the quote characters, so the first and last entries never matched, and `'"*"'` denied everything. A quoted `AVRONE_TOOLS_ONLY` named no tool, so every tool stayed registered. The new `config.env_list` unquotes the whole value and each entry. A lone `*` is still the only value that opens recon, so `*,` stays closed. The self-scan shows the same reading.
+- **Trinity limits:** `AVRONE_TOOL_OUTPUT_MAX`, `AVRONE_CONTEXT_CHARS`, `AVRONE_MAX_CALLS_PER_TURN` and `AVRONE_DEEP_ROUNDS` treated `'"40000"'`, `" 40000\n"` and `40_000` as junk and silently used the default. `_env_tool_value` now cleans the text and keeps `tool_int`'s meaning for the rest: `inf` is junk, `1e999` clamps to the top.
+- **Numbers:** `evolve._env_num`, `agentfs_tools._mb_env` and `tools_hostview._long_s` now go through `env_num`, which refuses fullwidth digits, quotes and NaN. In evolve, `inf` used to pass as a positive limit. For the fs quota, `inf`, quoted or not, still means the hard cap (test_cov7).
+- **Paths, URLs and switches:** a quoted or padded `AVRONE_MCP_CONFIG` silently meant no MCP servers. `AVRONE_DOH_URL` and `AVRONE_GEOIP_URL` were sent with their quotes. `AVRONE_CODEX_REDACT='"off"'` is now a deliberate off, and any unknown word keeps redaction on.
+- Tests: `tests/test_env_readers_r87_robust.py`.
+
+## Hardening round 88: word and text settings, the evolve gate command, fusion URLs (`config`, `gateway`, `evolve`, `fusion_deliver`, `server`)
+
+- **The evolve gate passed every proposal untested.** A whitespace-only `test_cmd` argument or `AVRONE_EVOLVE_TEST_CMD=" "` was truthy, so the gate ran `PYTHONPATH=... <blank> 2>&1`. That is a bare assignment, which exits 0, so every proposal "passed" and was committed. `evolve.gate_command` now treats blank (including `'""'`) as the next source: the argument, then the env var, then the default. A non-text argument is ignored instead of being passed through `str()`. A quote pair that wraps the whole command is removed only when no other quote of that kind is inside.
+- **A quoted docker runner booted the local runner.** `AVRONE_RUNNER='"docker"'`, `Docker`, `docker ` and a blank value were neither `docker` nor `auto`, so `sovereign.establish` silently used the unsandboxed local runner. `AVRONE_LLM_MODE='"mock"'` called a live model. `config.clean_text_settings` (called from `Settings.__post_init__`) now cleans the word settings `runner` (blank means auto) and `llm_mode` (blank means live), and the text settings `docker_image` (blank means the default), `lead_model`, `llm_model` and `llm_fallbacks`. An unknown runner word is kept, lower-cased, so doctor still reports it.
+- **A quoted provider crashed the import.** `AVRONE_PROVIDER='"xai"'` raised `ValueError` at `settings = Settings()`. `resolve_provider` now reads the value with `switch_word`; a non-text value means openclaw. An unknown provider still raises.
+- **Fallbacks:** `AVRONE_LLM_FALLBACKS='"openrouter:x,ollama:y"'` dropped the first spec and kept a stray quote on the last model id. `parse_upstreams` now uses `env_list`.
+- **Evolve repo dir:** `AVRONE_REPO_DIR="  "` resolved to `<cwd>/"  "`. It is now cleaned and `~` is expanded; blank means the package repo.
+- **Fusion:** a quoted `CK_BASE` became the URL `"http://..."`, and every delivery failed. A padded `CK_EVENTS_PATH` was posted to as written, and a path with no leading `/` was glued onto the host. The state path and the `/api/fusion/watch` board, events and health URLs and watch path are now cleaned. Fusion tokens stay verbatim by design.
+- Tests: `tests/test_text_settings_r88_robust.py` (109).
+
+## Hardening round 89
+
+Scope: path settings, governor platform parsers, node id.
+
+- `config.env_path_text` / `config.env_path`: one reading for directory and file settings (cleaned like a secret, quoted blank = default, `~` expanded). Used by `config._path` (AVRONE_DATA_DIR, AVRONE_WORKSPACE), `config.env_file` (AVRONE_ENV_FILE), `agentkit._skills_dir` (AVRONE_SKILLS_DIR) and `plugins.plugins_dir` (AVRONE_PLUGINS_DIR). Before: `AVRONE_DATA_DIR='"/srv/avrone"'` made a folder named `"` under the cwd, padded values made relative folders with spaces, and `AVRONE_ENV_FILE='""'` resolved to the cwd so no .env loaded.
+- `governor.MAX_THERMAL_LIMIT_HOT = 99`: `AVRONE_THERMAL_LIMIT_HOT_PCT=100` made a full-speed Mac (CPU_Speed_Limit = 100) permanently hot, so thermal migration kept moving agents off a cool node. `test_governor_platform_robust` now expects 99 for "500".
+- `governor.parse_vm_stat`: page size must be a power of two in [1024, 1 MiB] else 4096 (a 0 header read as 100% used and pinned the node at its floor); non-int/NaN/bool total = no reading; ASCII digits; split on `\n` only; a count must fill its value (`\Z`).
+- `governor.parse_pmset_therm`: ASCII digits on the same line only; non-text input = None.
+- `governor.cgroup_mem_pct`: `inactive_file` value must be on the same line, ASCII digits.
+- `agentcontainer.local_node_id`: NFKC before sanitizing, so fullwidth names keep their letters.
+- Tests: `tests/test_paths_governor_r89_robust.py`.
+
+## Hardening round 90
+
+Scope: thin-coverage modules tools_researchnote, tools_hostview, agentpack import.
+
+- `tools_researchnote._INVISIBLE_RE` now covers every invisible format character (U+2061..206F, LRM/RLM, bidi embeddings and isolates, variation selectors, CGJ, Mongolian FVS, Hangul fillers, tag characters). A token split by any of them was stored raw as a lesson. `redact_text` also redacts on a fullwidth-folded copy (U+FF01..FF5E) and keeps the writer's original text when folding finds nothing.
+- `tools_hostview._token_strength` compares on NFKC with format characters dropped, and strips quotes/brackets/punctuation when testing for placeholder-only tokens: '"changemechangeme"', fullwidth placeholders and zero-width-split placeholders read "ok" before.
+- `tools_hostview._boot_time`: a bare "btime" line raised IndexError out of proc_status; nan/inf/negative/non-ASCII btime now = None; split on \n only. `_children` only takes ASCII-digit pid dirs ("\u00b2".isdigit() is True and int() raised).
+- `agentpack.content_stamp(now=)`: every file mtime and memory ts is clamped to now. One memory record with ts 1e308 or a file dated 2200 pinned the stamp so every later pack was refused as "not newer" (with a 309-digit number in the message).
+- `agentpack.import_pack`: a memory merge or home-record failure after the files are swapped in no longer raises a raw OSError (path in the message, a 500 on fleet migrate); the result carries `incomplete: {memory|home_record: "<Type> (<ERRNO>)"}` and `agent_pack_import` says INCOMPLETE instead of "your home is unchanged", with an `agentpack.incomplete` audit.
+- `tools_introspect._credential_in` compares against the value with the same invisible chars dropped, so an emoji with a variation selector is not reported as a credential.
+- Tests: `tests/test_hostview_note_pack_r90_robust.py`.
+
+## Hardening round 91
+
+Scope: logsafe, fsunify, search_files.
+
+- `logsafe._redact_template`: a template that carried a secret ("peer used password=hunter2 for %s", "Authorization: Bearer x %d") was escaped but never redacted when args were present, though a record without args was. A template the redactor changes is now formatted with the cleaned args and the whole line redacted (args cleared), because redacting the template alone can eat a "%s". A broken template keeps its redacted form with args dropped.
+- `logsafe._clean`: bytes, bytearray and memoryview args go through `_Shown`, so their repr is redacted too ("stderr: %s", b"token ghp_..." was logged verbatim).
+- `fsunify._fold`: drops the code points HFS+ ignores in name comparison (U+200C/D, U+200E/F, U+202A..E, U+206A..F, U+FEFF, plus U+200B and U+2060) and NFC-folds, so "shared/agen\u200cts/<other>" is refused like "shared/Agents".
+- `t_search_files`: the child's last stderr line is escaped before it is returned.
+- Tests: `tests/test_logsafe_fsunify_r91_robust.py`.
+
+## Hardening round 92
+
+Scope: greatscale, diff_files, searchproc.
+
+- `greatscale.evidence_snapshot`: counts go through `operator.index`. `int()` used to truncate 2.5 failures to 2 and 10.9 runs to 10, and it parsed "3".
+- `greatscale.runs_to_detect`: only real, non-bool numbers are accepted (float("0.5") let strings through). A subnormal p (5e-324) made N infinite and `math.ceil` raised a raw OverflowError. It now raises a ValueError.
+- `t_diff_files` summary: only the two file-header lines are skipped. An added "++x" (diff line "+++x") and a removed YAML "---" or SQL "-- c" were left out of the added/removed counts.
+- `searchproc._snippet`: a hit's text used to be the first 300 characters of the line, so a match at column 5000 of a minified file came back without the match. It now shows a window just before the match, prefixed with "...". It reads only the leading whitespace run and a slice of the line, never the whole line.
+- Tests: `tests/test_greatscale_diff_search_r92_robust.py`.

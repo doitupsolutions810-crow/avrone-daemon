@@ -23,10 +23,23 @@ from typing import Any
 from .bootstrap import build_core, run_cleanups
 from .codex import Event
 from .config import Settings
+from .textsafe import UNSAFE_RUN as _UNSAFE_RUN
+from .textsafe import escape as _escape
 from .trinity import clamp_deep_rounds
 
 
+def _one(s: Any) -> str:
+    """Round 149: text from models, tools, MCP servers and HTTP clients shown on one terminal line.
+    Only "\n" was replaced, so ESC sequences (clear screen, set the window title, OSC 52 clipboard
+    writes), "\r" overwrites and U+202E in a tool's output reached the operator's terminal."""
+    return _UNSAFE_RUN.sub(" ", str(s))
+
+
 def _event_line(ev: Event) -> str:
+    return _one(_event_line_raw(ev))
+
+
+def _event_line_raw(ev: Event) -> str:
     d = ev.data
     k = ev.kind
     if k == "run.start":
@@ -96,13 +109,13 @@ async def _run(args: argparse.Namespace) -> int:
             items = core.tools.list()
             _write_json(args.json, items)
             for t in items:
-                print(f"{t['name']:<28} [{t['source']}] {t['args']}\n    {t['description']}")
+                print(_one(f"{t['name']:<28} [{t['source']}] {t['args']}") + "\n    " + _one(t["description"]))
             return 0
         if args.cmd == "runs":
             items = core.codex.runs(args.limit)
             _write_json(args.json, items)
             for r in items:
-                print(f"{r['run_id']}  {str(r.get('prompt', ''))[:90]}")
+                print(_one(f"{r['run_id']}  {str(r.get('prompt', ''))[:90]}"))
             return 0
 
         if args.cmd in ("telemetry", "map"):
@@ -122,7 +135,7 @@ async def _run(args: argparse.Namespace) -> int:
             from .evolve import list_accepted
             rows = list_accepted(core.settings)
             _write_json(args.json, rows)  # --json PATH was treated as a flag: rows printed, PATH never written
-            print(("\n".join(f"{r['pid']} {r['branch']}  {r['goal']}  ({', '.join(r['files'])})" for r in rows)
+            print(("\n".join(_one(f"{r['pid']} {r['branch']}  {r['goal']}  ({', '.join(r['files'])})") for r in rows)
                    or "no accepted proposals"))
             return 0
 
@@ -155,7 +168,8 @@ async def _run(args: argparse.Namespace) -> int:
             text = result["report"]
         await asyncio.sleep(0)  # let the pump print the last events
         _write_json(args.json, result)
-        print(text)
+        # a terminal gets controls and bidi escaped (line breaks and tabs kept); a pipe gets the text
+        print(_escape(text, keep="\n\t") if sys.stdout.isatty() else text)
         return 0
     finally:
         if pump:

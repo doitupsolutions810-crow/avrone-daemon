@@ -35,7 +35,12 @@ from .tools import Tool, _safe_path, off_loop
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?$")
+PKG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+\-]{0,80}(==[A-Za-z0-9.*+\-]{1,40})?\Z")
+
+
+def _abs_read_ok() -> bool:
+    from .config import abs_read_allowed  # round 84: one reading shared with doctor
+    return abs_read_allowed()
 
 
 def _ws(ctx: "AgentContext") -> Path:
@@ -57,7 +62,7 @@ def _emit(ctx: "AgentContext", kind: str, **data: Any) -> None:
 
 def _img_path(ctx: "AgentContext", p: str) -> Path:
     path = Path(p)
-    if path.is_absolute() and path.exists() and os.getenv("AVRONE_ALLOW_ABS_READ", "1") == "1":
+    if path.is_absolute() and path.exists() and _abs_read_ok():
         return path
     return _safe_path(_ws(ctx), p)
 
@@ -200,14 +205,20 @@ async def t_image_decode(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------- skills
-SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}$")
+SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,63}\Z")
 SKILL_MAX_BYTES = 256_000
 SKILL_LOAD_CHARS = 12000
 MAX_SKILLS = 500
 
 
 def _skills_dir(ctx: "AgentContext") -> Path:
-    return Path(os.getenv("AVRONE_SKILLS_DIR", str(Path(__file__).resolve().parent.parent / "skills")))
+    # round 77: AVRONE_SKILLS_DIR= (blank) was Path("") - the cwd - as the skills dir
+    # round 89: quoted/padded values cleaned (config.env_path_text); a quoted blank is the default too
+    from .config import env_path_text
+    raw = env_path_text(os.getenv("AVRONE_SKILLS_DIR"), "")
+    if not raw:
+        return Path(__file__).resolve().parent.parent / "skills"
+    return Path(raw).expanduser()
 
 
 def _valid_skill_name(name: str) -> bool:
@@ -411,8 +422,14 @@ def record_change(ctx: "AgentContext", action: str, target: str, ok: bool, detai
     _emit(ctx, "env.change", **{k: v for k, v in entry.items() if k not in ("run_id", "agent")})
 
 
+def switch_is_deny() -> bool:
+    from .config import switch_word
+    return switch_word(os.environ.get("AVRONE_SELF_CHANGES"), "allow") == "deny"
+
+
 async def t_env_install(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    policy = os.getenv("AVRONE_SELF_CHANGES", "allow").lower()
+    from .config import self_changes_policy  # round 84: "deny " / '"deny"' allowed installs
+    policy = self_changes_policy()
     pkg, mgr = str(args.get("package") or "").strip(), str(args.get("manager", "pip")).lower()
     if not PKG_RE.match(pkg):
         return "ERROR: invalid package name"
@@ -422,7 +439,8 @@ async def t_env_install(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: manager must be pip or apt"
     if policy == "deny":
         await asyncio.to_thread(record_change, ctx, f"{mgr} install (denied)", pkg, False, "AVRONE_SELF_CHANGES=deny")
-        return "ERROR: self-changes are disabled on this node (AVRONE_SELF_CHANGES=deny)"
+        return ("ERROR: self-changes are disabled on this node (AVRONE_SELF_CHANGES=deny"
+                + ("" if switch_is_deny() else "; unrecognised values deny") + ")")
     # round 101: the ledger scan (up to 16 MB parsed) and the lock open ran on the event loop
     prior = await asyncio.to_thread(_installed_before, ctx, mgr, pkg)
     if prior:
@@ -513,11 +531,8 @@ async def t_resources(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if not p.exists():
         return "resource ledger empty"
     # limit: "abc" raised, 0 meant every line ([-0:]), negatives sliced from the front
-    try:
-        limit = int(args.get("limit", 30))
-    except (TypeError, ValueError, OverflowError):
-        limit = 30
-    limit = max(1, min(500, limit))
+    from .argnum import tool_int
+    limit = tool_int(args.get("limit"), 30, 1, 500)
     rows = []
     from .safeio import read_regular
     for line in (read_regular(p, LEDGER_READ_MAX) or b"").decode("utf-8", "replace").splitlines():
@@ -601,16 +616,20 @@ async def t_task_board(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> str:
     bad = False
+    from .safeio import FileTooBig, read_capped
     try:
-        from .safeio import read_capped
         raw = read_capped(p, BOARD_READ_MAX)
         board: Any = json.loads(raw) if raw else []
     except FileNotFoundError:
         board = []
-    except (OSError, ValueError, RecursionError):
+    except (FileTooBig, ValueError, RecursionError):
         # read_regular used to hand back the tail of a >8 MB board, which never parses; the next
         # write then silently replaced every task. The old file is now kept as *.corrupt-<ts>.
         board, bad = [], True
+    except OSError as e:
+        # round 144: a transient read error (EMFILE, EIO, EACCES) counted as corrupt: the board was
+        # moved aside and an add left agents a board holding only the new task
+        return f"ERROR: could not read the task board ({e.strerror or type(e).__name__}); nothing changed"
     if not isinstance(board, list):
         board, bad = [], True
     # round 133: entries without a plain int id (a hand-edited or older board: "id": "3", true,
@@ -645,8 +664,11 @@ def _task_board_locked(ctx: "AgentContext", args: dict[str, Any], p: Path) -> st
         if bad:
             try:
                 os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
-            except OSError:
+            except FileNotFoundError:
                 pass
+            except OSError as e:  # round 144: the write went ahead and replaced the unreadable board
+                return (f"ERROR: the task board is unreadable and could not be set aside "
+                        f"({e.strerror or type(e).__name__}); nothing changed")
         from .safeio import atomic_write  # random temp name: a planted .board.<pid>.tmp link is never followed
         atomic_write(p, json.dumps(board + keep, indent=1))  # atomic: a crash never leaves a half-written board
     if op != "list":

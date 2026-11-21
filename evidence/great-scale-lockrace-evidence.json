@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v143",
+  "finding": "The script treats an empty or non-live PID as stale, removes the lock, and re-acquires (or exits 2 if it loses the race). The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "empty": "stale",
+  "lostRace": "exit 2",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The lock-race check holds."
+}

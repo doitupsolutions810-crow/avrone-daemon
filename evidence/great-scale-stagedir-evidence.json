@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v136",
+  "finding": "The script moves a directory at the stage path aside and continues. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "directory": "move aside, preserve contents",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The stage-directory check holds."
+}

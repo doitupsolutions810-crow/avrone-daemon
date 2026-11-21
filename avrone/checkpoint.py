@@ -22,6 +22,7 @@ breaks the run (the checkpoint is best effort).
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import logging
 import math
 import hashlib
@@ -45,10 +46,10 @@ STALE_TMP_SECONDS = 3600
 def max_bytes() -> int:
     """AVRONE_CHECKPOINT_MAX_BYTES (default 64 MiB, clamped 64 KiB..1 GiB). A bigger file is not
     loaded into memory; it is set aside like a corrupt one."""
-    try:
-        v = int(str(os.getenv("AVRONE_CHECKPOINT_MAX_BYTES", "")).strip())
-    except ValueError:
+    v_raw = _env_num("AVRONE_CHECKPOINT_MAX_BYTES")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    if v_raw is None:
         return MAX_BYTES_DEFAULT
+    v = int(v_raw)
     return max(64 * 1024, min(v, 1024 * 1024 * 1024))
 
 
@@ -201,25 +202,48 @@ class _Store:
             return None
         return (st.st_ino, st.st_size, st.st_mtime_ns)
 
-    def _merge_disk(self) -> None:
+    def _merge_disk(self) -> bool:
+        """Fold the file's other keys in before a write. False = do not write (round 139).
+
+        Every failure used to return quietly, and the save then wrote only this store's keys. After
+        a load that also failed (EMFILE, EIO, EACCES), one transient read error erased every
+        finished step of the run, and a resume re-ran them. A file over the cap, or one that no
+        longer parses, was overwritten the same way. A read error now skips the write (the save
+        reports False). An unusable file is renamed aside, as load() does, before the write."""
         if not (self._dirty or self._dropped):
-            return
+            return True
         if self._sig is not None and self._stat_sig() == self._sig:
-            return  # unchanged since our own last write
+            return True  # unchanged since our own last write
+        import stat as _stat
+        from .safeio import FileTooBig, read_capped  # round 107: runs under the save lock; never a FIFO
         try:
             st = self.path.stat()
-            import stat as _stat
-            if not _stat.S_ISREG(st.st_mode) or st.st_size > max_bytes() or st.st_size == 0:
-                return
-            from .safeio import read_capped  # round 107: runs under the save lock; never a FIFO
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if not _stat.S_ISREG(st.st_mode) or st.st_size == 0:
+            return True
+        try:
+            if st.st_size > max_bytes():
+                raise FileTooBig(str(self.path))
             data = read_capped(self.path, max_bytes())
-            if data is None:
-                return
+        except FileNotFoundError:
+            return True
+        except FileTooBig:
+            self.set_aside = _set_aside(self.path, "toobig")
+            return self.set_aside is not None or not self.path.exists()
+        except OSError:
+            return False
+        if data is None:
+            return True
+        try:
             raw = json.loads(data.decode("utf-8"))
-        except (OSError, ValueError, RecursionError):
-            return
+        except (ValueError, RecursionError):
+            raw = None
         if not (isinstance(raw, dict) and isinstance(raw.get("steps"), dict) and raw.get("version") == VERSION):
-            return
+            self.set_aside = _set_aside(self.path, "corrupt")
+            return self.set_aside is not None or not self.path.exists()
         mine = self.data["steps"]
         steps = {k: v for k, v in raw["steps"].items() if k not in self._dropped}
         for k in self._dirty:
@@ -229,6 +253,7 @@ class _Store:
         for k, v in raw.items():  # e.g. an owner stamped by another process
             if k not in ("steps", "updated") and k not in self.data:
                 self.data[k] = v
+        return True
 
     def _save_locked(self) -> bool:
         fd = None
@@ -245,7 +270,11 @@ class _Store:
         except (OSError, ImportError):
             pass  # no data dir yet / no flock: the save below reports any real error
         try:
-            self._merge_disk()
+            if not self._merge_disk():
+                self.write_errors += 1
+                log.warning("checkpoint %s: could not re-read the file; save skipped so its steps are kept",
+                            self.path.name)
+                return False
             ok = self._write_locked()
             if ok:
                 self._dirty.clear()
@@ -381,8 +410,8 @@ class Checkpoint:
 # The file always lives at <data_dir>/checkpoints/<key>.json; a client never supplies a path.
 # Fleet jobs are keyed "fleet-<sender>-<digest>-<id>" and stamped with their owner, so one sender can
 # neither collide with nor resume (read) another sender's checkpoint.
-CKPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
+CKPT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,160}\Z")
 FLEET_PREFIX = "fleet-"
 CKPT_MODES = ("squad", "deep")
 _active: set[str] = set()  # resolved paths of checkpoints a run in this process is using
@@ -395,6 +424,12 @@ class CheckpointError(ValueError):
 
 class CheckpointConflict(ValueError):
     """The id holds a different task/mode/owner, or is in use by a running job (-> HTTP 409)."""
+
+
+class CheckpointUnreadable(CheckpointConflict):
+    """Round 142: the checkpoint file exists but could not be read right now. check_compatible
+    treated that as a free id, so another task or owner could resume its steps, and stamp_owner
+    rewrote the file as {"steps": {}}, erasing every finished step. Maps to 409 like a conflict."""
 
 
 def sanitize_id(raw: Any) -> str:
@@ -414,7 +449,7 @@ def sanitize_client_id(raw: Any) -> str:
 
 def fleet_key(sender: str, ckpt_id: Any) -> str:
     cid = sanitize_id(ckpt_id)
-    if not isinstance(sender, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}$", sender):
+    if not isinstance(sender, str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}\Z", sender):
         raise CheckpointError("fleet checkpoint needs a valid sender node id")
     # sender and id may both contain "-", so "a" + "b-c" and "a-b" + "c" would collide on
     # a bare join; a short digest of the (sender, id) pair keeps keys unique per pair.
@@ -433,15 +468,26 @@ def managed_path(data_dir: str | Path, key: str) -> Path:
     return managed_dir(data_dir) / f"{key}.json"
 
 
-def _read(path: Path) -> dict[str, Any] | None:
+def _read(path: Path, strict: bool = False) -> dict[str, Any] | None:
+    """The stored checkpoint dict, or None when it is missing or unusable (corrupt, wrong shape,
+    over the cap, not a regular file). With strict=True a read error (EMFILE, EIO, EACCES...)
+    raises CheckpointUnreadable instead of reading as "no checkpoint" (round 142)."""
+    from .safeio import FileTooBig, read_capped  # round 107: no is_file()/read_bytes() swap window
     try:
         p = Path(path)
-        from .safeio import read_capped  # round 107: no is_file()/read_bytes() swap window
         data = read_capped(p, max_bytes())
         if data is None:
             return None
         raw = json.loads(data.decode("utf-8"))
-    except (OSError, ValueError, RecursionError):
+    except FileTooBig:
+        return None  # _Store.load sets it aside as .toobig-<ts>
+    except OSError as e:
+        if strict:
+            raise CheckpointUnreadable(
+                f"checkpoint {Path(path).stem!r} could not be read ({e.strerror or type(e).__name__}); "
+                "nothing was changed, retry") from None
+        return None
+    except (ValueError, RecursionError):
         return None
     return raw if isinstance(raw, dict) and isinstance(raw.get("steps"), dict) else None
 
@@ -454,7 +500,7 @@ def check_compatible(path: str | Path, task: str, mode: str, owner: str | None =
     key = path.stem
     if is_busy(path):
         raise CheckpointConflict(f"checkpoint {key!r} is in use by a running job; wait for it or use another id")
-    data = _read(path)
+    data = _read(path, strict=True)
     if data is None:
         return None
     if data.get("owner") != owner:
@@ -474,7 +520,7 @@ def stamp_owner(path: str | Path, owner: str) -> None:
     """Record who owns a fleet checkpoint before its run starts writing it."""
     path = Path(path)
     with _file_lock(path):  # read-modify-write of the file: never interleave with a put()/save()
-        data = _read(path) or {"version": VERSION, "steps": {}}
+        data = _read(path, strict=True) or {"version": VERSION, "steps": {}}
         if data.get("owner") == owner:
             return
         store = _Store(path)
@@ -530,7 +576,11 @@ def claimed(path: str | Path):
 
 
 def _preview(task: Any, n: int = 120) -> str:
-    t = " ".join(str(task or "").split())
+    # round 167: /api/checkpoints and the checkpoint list showed the task and answer raw, so a key in
+    # the task text was served back verbatim. Redact first, then cut, so a cut cannot split a secret
+    # into a prefix the patterns no longer recognise.
+    from .ctxspawn import redact
+    t = " ".join(redact(str(task or "")).split())
     return t if len(t) <= n else t[: n - 1] + "…"
 
 

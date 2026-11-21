@@ -34,6 +34,7 @@ Resume: every loop checkpoints its progress to its loop file after each iteratio
 """
 from __future__ import annotations
 
+from .textsafe import escape as _tsesc  # round 148: echoed loop ids shown escaped
 import asyncio
 import json
 import uuid
@@ -58,11 +59,36 @@ SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]")
 
 
 def _repo_root(ctx: "AgentContext") -> Path:
-    env = os.getenv("AVRONE_REPO_DIR")
+    # round 88: "  " was truthy and resolved to <cwd>/"  "; a quoted path kept its quotes
+    from .config import clean_secret
+    env = clean_secret(os.getenv("AVRONE_REPO_DIR"))
     if env:
-        return Path(env).resolve()
+        return Path(env).expanduser().resolve()
     # package lives at <repo>/avrone/evolve.py
     return Path(__file__).resolve().parent.parent
+
+
+DEFAULT_TEST_CMD = 'python -m pytest -q -m "not integration"'
+
+
+def _cmd_text(raw: Any) -> str:
+    """A shell command as given, trimmed; one pair of quotes wrapping the whole value is removed only
+    when no other quote of that kind is inside (so '"pytest -q"' unwraps but '"a" b "c"' stays)."""
+    if not isinstance(raw, str):
+        return ""
+    t = raw.strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"" and t[0] not in t[1:-1]:
+        t = t[1:-1].strip()
+    return t
+
+
+def gate_command(test_cmd: Any = None) -> str:
+    """The evolve gate's test command: the argument, else AVRONE_EVOLVE_TEST_CMD, else the default.
+    Round 88: a whitespace-only value (test_cmd="  " or AVRONE_EVOLVE_TEST_CMD=" ") was truthy, so
+    the gate ran "PYTHONPATH=... <blank> 2>&1" - a bare assignment that exits 0 - and EVERY proposal
+    passed and was committed untested. Blank now means the next source; a non-text argument (a
+    number, a list) is ignored rather than str()-ed into a command."""
+    return _cmd_text(test_cmd) or _cmd_text(os.getenv("AVRONE_EVOLVE_TEST_CMD")) or DEFAULT_TEST_CMD
 
 
 STATE_JSON_MAX_BYTES = 16 * 1024 * 1024
@@ -278,7 +304,8 @@ def _in_repo(wt: Path, rel: str) -> Path:
 
 
 def _denied() -> bool:
-    return os.getenv("AVRONE_SELF_EVOLVE", "allow").lower() == "deny"
+    from .config import self_evolve_denied  # round 84: "deny " / '"deny"' left evolution ON
+    return self_evolve_denied()
 
 
 DENIED_MSG = "ERROR: self-evolution is disabled on this node (AVRONE_SELF_EVOLVE=deny)"
@@ -395,8 +422,7 @@ async def _propose_once(ctx: "AgentContext", goal: str, edits: list, test_cmd: s
                 "duration_s": round(_now() - t0, 3)}
     # The gate runs the deterministic suite by default: the real-uvicorn integration tests flake
     # under the parallel-clone load of a squad and would reject good unit-level proposals.
-    test_cmd = str(test_cmd or os.getenv("AVRONE_EVOLVE_TEST_CMD")
-                   or 'python -m pytest -q -m "not integration"')
+    test_cmd = gate_command(test_cmd)
     timeout = max(1, int(timeout))
     # Test the clone's code via PYTHONPATH (beats the installed package) without re-pointing the
     # node's own install, so parallel proposals can't hijack each other or the live system.
@@ -463,7 +489,8 @@ LONG_TIME_BUDGET_CAP_S = 7200
 
 def long_loops_allowed() -> bool:
     """Exactly "allow" (case-insensitive) opts in; anything else, including unset, keeps the normal caps."""
-    return os.getenv("AVRONE_EVOLVE_LONG", "").strip().lower() == "allow"
+    from .config import switch_word
+    return switch_word(os.environ.get("AVRONE_EVOLVE_LONG"), "") == "allow"
 
 
 def hard_caps() -> tuple[int, int]:
@@ -474,14 +501,9 @@ def hard_caps() -> tuple[int, int]:
 
 
 def _env_num(name: str) -> float | None:
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return None
-    try:
-        x = float(raw)
-    except ValueError:
-        return None
-    return x if x == x and x > 0 else None
+    from .config import env_num  # round 87: one reading; '"5"' was junk, "\uff15" counted, "inf" passed
+    x = env_num(name)
+    return x if x is not None and x > 0 else None
 
 
 def loop_limits(max_iters: Any = None, time_budget_s: Any = None) -> tuple[int, float]:
@@ -875,7 +897,7 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
     """
     lp = evolve_status(ctx, loop_id) if loop_id else None
     if lp is None:
-        return {"error": f"ERROR: no loop {loop_id[:80]}. evolve_list to see them.", "loop_id": None}
+        return {"error": f"ERROR: no loop {_tsesc(loop_id[:80])}. evolve_list to see them.", "loop_id": None}
     status = lp.get("status")
     if status != "interrupted" or loop_id in _bg_running():
         return {"error": f"ERROR: loop {loop_id} is {status}; only an interrupted loop can be resumed",
@@ -941,17 +963,33 @@ def _resume_start(ctx: "AgentContext", loop_id: str, candidates: list | None, ed
 
 def _finish_abnormally(ctx: "AgentContext", loop_id: str, status: str, stopped: str) -> None:
     p = _loop_path(ctx, loop_id)
+    # round 141: any read failure used to replace the loop file with {"loop_id", "iterations": []},
+    # dropping every iteration and the resume checkpoint. A read error (EMFILE, EIO, EACCES) now
+    # leaves the file alone: it still says "running", so reconcile_interrupted marks it at the
+    # next listing or boot. A file that exists but no longer parses is kept as .corrupt-<ts> first.
+    write, unusable = True, False
     try:
         m = _load_json(p)
-    except (OSError, ValueError, RecursionError):
-        m = {"loop_id": loop_id, "iterations": []}
+        unusable = not isinstance(m, dict)  # valid JSON of the wrong shape: kept too
+    except FileNotFoundError:
+        m = None
+    except (ValueError, RecursionError):
+        m, unusable = None, True
+    except OSError:
+        m, write = None, False
+    if unusable:
+        try:
+            os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+        except OSError:
+            write = False
     if not isinstance(m, dict):
         m = {"loop_id": loop_id, "iterations": []}
     m.update(status=status, stopped=stopped)
-    try:
-        atomic_write(p, json.dumps(m))  # atomic: a crash here never leaves the loop file torn
-    except OSError:
-        pass
+    if write:
+        try:
+            atomic_write(p, json.dumps(m))  # atomic: a crash here never leaves the loop file torn
+        except OSError:
+            pass
     _cancel_path(ctx, loop_id).unlink(missing_ok=True)
     record_history(ctx, m)
 
@@ -1077,7 +1115,7 @@ def evolve_cancel(ctx: "AgentContext", loop_id: str) -> dict[str, Any]:
     the next one never starts, and the loop ends with status "cancelled"."""
     st = evolve_status(ctx, loop_id) if loop_id else None
     if st is None:
-        return {"error": f"ERROR: no loop {loop_id}. evolve_list to see them."}
+        return {"error": f"ERROR: no loop {_tsesc(loop_id[:80])}. evolve_list to see them."}
     if st["status"] != "running":
         return {"loop_id": loop_id, "status": st["status"], "note": "not running; nothing to cancel"}
     _cancel_path(ctx, loop_id).write_text(str(time.time()))
@@ -1150,7 +1188,7 @@ async def t_evolve_loop(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 # ---- bounded skill self-authoring ------------------------------------------------------------
 SKILL_MAX_BYTES_CAP = 16384
-SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\Z")
 SKILLS_DIR = "skills"
 
 
@@ -1325,7 +1363,7 @@ async def t_evolve_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if lid:
         loops = [lp for lp in loops if lp.get("loop_id") == lid]
         if not loops:
-            return f"ERROR: no loop {lid}. evolve_list to see them."
+            return f"ERROR: no loop {_tsesc(str(lid)[:80])}. evolve_list to see them."
     if not loops:
         n, b = loop_limits()
         return f"no evolve loops yet (limits: max_iters={n}, time_budget_s={b:.0f})"

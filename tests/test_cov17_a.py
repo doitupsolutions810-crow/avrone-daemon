@@ -46,7 +46,7 @@ def test_pack_list_stat_error(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "scandir", lambda path=".": _It(path))
     ctx = S(core=S(settings=S(data_dir=tmp_path / "data")))
     out = asyncio.run(tp.t_pack_list(ctx, {}))
-    assert "a-1.tar.gz (-1 bytes): REFUSED" in out
+    assert "a-1.tar.gz (size unknown): REFUSED"  # round 52 wording in out
 
 
 def test_memory_empty_key_refused(tmp_path):

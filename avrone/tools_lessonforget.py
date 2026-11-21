@@ -14,6 +14,7 @@ the run's conclude bridge.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 from . import textsafe as _textsafe
 from typing import TYPE_CHECKING, Any
@@ -25,20 +26,48 @@ from .tools_researchnote import redact_text
 if TYPE_CHECKING:
     from .trinity import AgentContext
 
-KEY_RE = re.compile(r"^l-[0-9a-f]{16}$")
+KEY_RE = re.compile(r"^l-[0-9a-f]{16}\Z")
 REASON_MAX = 300
 STATUS_MAX_AGENTS = 20
 STATUS_MAX_CHARS = 4000
 
 
 def _data_dir(ctx: "AgentContext") -> Any:
-    return getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)
+    # round 80: "" / "   " stored lessons under the cwd (a directory literally named "   " appeared
+    # in the repo root) and an int or bool data_dir raised TypeError; usable_data_dir says none
+    return bridgemod.usable_data_dir(
+        getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None))
+
+
+_BLANK_CATS = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zs", "Zl", "Zp", "Mn", "Me"})
+
+
+def _visible(text: str) -> bool:
+    """True when ``text`` has at least one character a reader can see. Round 80: the old check only
+    stripped five zero-width code points, so "\u2062\u2063" (invisible operators), "\ufe0f" (a
+    variation selector) or "\u180e" passed as the required reason."""
+    return any(unicodedata.category(ch) not in _BLANK_CATS and ch not in "\u3164\u115f\u1160\uffa0\u2800"
+               for ch in text)
 
 
 @off_loop
 async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    key = str(args.get("key") or "").strip()
-    reason = _textsafe.UNSAFE_ONE.sub(" ", str(args.get("reason") or "")).strip()
+    if not isinstance(args, dict):  # round 80: a list/str/None args raised AttributeError
+        args = {}
+    raw_key, raw_reason = args.get("key"), args.get("reason")
+    # round 49: a dict/list/number key or reason was str()-ed ("{'a': 1}" became the reason)
+    if not isinstance(raw_key, str):
+        return "ERROR: key must look like l-<16 hex> (see lesson_recall)"
+    if raw_reason is not None and not isinstance(raw_reason, str):
+        return "ERROR: reason must be text"
+    key = raw_key.strip()
+    # round 49: invisible-only reasons (zero-width, BOM, bidi) passed the "required" check
+    reason = " ".join(_textsafe.UNSAFE_RUN.sub(" ", raw_reason or "").split())
+    if not _visible(reason):
+        reason = ""
+    else:
+        from .tools_lessonrecall import _calm  # round 80: 300 U+0301 on one letter (zalgo)
+        reason = _calm(reason)
     if not KEY_RE.match(key):
         return "ERROR: key must look like l-<16 hex> (see lesson_recall)"
     if not reason:
@@ -60,7 +89,10 @@ async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
             store.delete(bridgemod.LESSONS_NS, key)
     except OSError as e:
         return f"ERROR: could not update lessons ({type(e).__name__})"
-    text = redact_text(str(old.get("value", "")))[:200]
+    # round 49: a corrupt entry (a string or list, not a dict) raised AttributeError here, AFTER
+    # the delete, so the agent was told the forget failed when it had happened
+    value = old.get("value", "") if isinstance(old, dict) else old
+    text = _flat(redact_text(value if isinstance(value, str) else type(value).__name__))[:200]
     note = f"retracted lesson {key}: {text} | reason: {reason}"
     posted = ""
     try:
@@ -78,31 +110,58 @@ async def t_lesson_forget(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return f"forgot lesson {key}{posted}"
 
 
+def _flat(s: Any) -> str:
+    """One display line: stored bridge text stays raw; display paths flatten it (round 44 rule)."""
+    return " ".join(_textsafe.UNSAFE_RUN.sub(" ", s if isinstance(s, str) else str(s)).split())
+
+
+def _name(s: Any) -> str:
+    """An agent name, kind or id shown in a listing: escaped, so two names that differ only in a
+    control character stay apart and "a\nFORGED" can not print a row of its own."""
+    return _textsafe.escape(s if isinstance(s, str) else type(s).__name__)[:80]
+
+
 def bridge_status(ctx: "AgentContext") -> dict[str, Any]:
-    b = bridgemod.for_core(ctx.core, ctx.run_id)
+    b = bridgemod.for_core(getattr(ctx, "core", None), ctx.run_id)
     posts = b.posts()
     kinds: dict[str, int] = {}
     agents: dict[str, int] = {}
     remote = 0
     replied: set[str] = set()
+    # round 49: posts are read defensively. A post with a missing kind/agent raised KeyError, a
+    # refs string "q1" marked "q" and "1" as answered, and an unhashable ref raised TypeError
+    posts = [p for p in posts if isinstance(p, dict)]
     for p in posts:
-        kinds[p["kind"]] = kinds.get(p["kind"], 0) + 1
-        agents[p["agent"]] = agents.get(p["agent"], 0) + 1
+        k, a = _name(p.get("kind", "?")), _name(p.get("agent", "?"))
+        kinds[k] = kinds.get(k, 0) + 1
+        agents[a] = agents.get(a, 0) + 1
         if p.get("origin_node") not in (None, "", b.node_id):
             remote += 1
-        replied.update(p.get("refs") or [])
-    open_q = [p for p in posts if p["kind"] == "question" and p["id"] not in replied]
-    return {"run_id": b.run_id, "posts": len(posts), "limit": b.limit, "kinds": kinds,
+        refs = p.get("refs")
+        if isinstance(refs, (list, tuple)):
+            replied.update(r for r in refs if isinstance(r, str))
+    # round 62: an unhashable question id (a list from a relayed post) raised TypeError in the set
+    # lookup and the whole status failed; a non-str id can never be answered by a str ref
+    open_q = [p for p in posts if p.get("kind") == "question"
+              and not (isinstance(p.get("id"), str) and p.get("id") in replied)]
+    # round 62: the run id and ring bound were printed raw in the header ("r1\n- FORGED")
+    return {"run_id": _name(b.run_id), "posts": len(posts), "limit": _name(b.limit) if not isinstance(b.limit, int)
+            else b.limit, "kinds": kinds,
             "agents": dict(sorted(agents.items(), key=lambda x: -x[1])[:STATUS_MAX_AGENTS]),
             "more_agents": max(0, len(agents) - STATUS_MAX_AGENTS), "remote": remote,
-            "open_questions": [{"id": p["id"], "agent": p["agent"], "text": redact_text(p["text"])[:120]}
+            "open_questions": [{"id": _name(p.get("id", "?")), "agent": _name(p.get("agent", "?")),
+                                "text": _flat(redact_text(p.get("text") if isinstance(p.get("text"), str)
+                                                          else ""))[:120]}
                                for p in open_q[-5:]],
             "open_question_count": len(open_q),
-            "conclusions": sum(1 for p in posts if p["kind"] == "conclusion")}
+            "conclusions": sum(1 for p in posts if p.get("kind") == "conclusion")}
 
 
 async def t_bridge_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    st = bridge_status(ctx)
+    try:
+        st = bridge_status(ctx)
+    except AttributeError:  # round 80: a ctx without core / run_id raised out of the tool
+        return "bridge_status: no run bridge in this context"
     if not st["posts"]:
         return f"bridge_status run {st['run_id']}: no posts yet (ring holds {st['limit']})"
     lines = [f"bridge_status run {st['run_id']}: {st['posts']}/{st['limit']} posts, "

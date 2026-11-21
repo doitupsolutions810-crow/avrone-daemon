@@ -102,9 +102,9 @@ def test_export_with_case_twins_fails_import_clearly(tmp_path):
     d = home(tmp_path / "ws")
     (d / "Plan.md").write_text("one")
     (d / "plan.md").write_text("two")
-    bundle, _ = agentpack.export_pack(tmp_path / "ws", tmp_path / "data", "builder", "edge")
+    # round 72: every importer refuses this pack, so export refuses it up front, before a transfer
     with pytest.raises(PackError, match="rename one on the sending node"):
-        imp(tmp_path, bundle)
+        agentpack.export_pack(tmp_path / "ws", tmp_path / "data", "builder", "edge")
 
 
 # ------------------------------------------------------------------ control chars / length

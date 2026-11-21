@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v111",
+  "finding": "The script refuses immediately when the pull log contains no-space-left patterns. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "noSpace": "refuse immediately",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The disk-space-during-pull check holds."
+}

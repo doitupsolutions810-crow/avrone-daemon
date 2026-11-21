@@ -28,6 +28,7 @@ from . import textsafe as _textsafe
 from typing import TYPE_CHECKING, Any
 
 from . import bridge as bridgemod
+from . import secretshapes as _shapes
 from .tools import Tool
 
 if TYPE_CHECKING:
@@ -46,15 +47,40 @@ _TOKEN_RES = (
     re.compile(r"(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}(?:\.[A-Za-z0-9_\-]+)?"),
-    re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s]+@"),
+    # round 50 (51): userinfo up to the LAST @ before the host; "u:p@ss@host" leaked "ss"
+    re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/\s]+@"),
+    _shapes.TOKEN_PREFIX_RE,  # round 152
 )
 _BLOB_RE = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
 REDACTED = "***redacted***"
 
 
+# zero-width / word-joiner / soft hyphen / BOM: invisible, so a token split by one ("sk-\u200b...")
+# slipped past every pattern while reading the same to a human (round 51)
+# round 90: the set missed the rest of the invisible format characters. A GitHub token split by
+# U+2062 (invisible times), U+200E (LRM), U+202C (PDF), U+2066 (LRI), a variation selector (U+FE0F),
+# U+034F (CGJ), a Mongolian FVS (U+180B) or a Hangul filler (U+3164) was stored raw as a lesson.
+_INVISIBLE_RE = re.compile(
+    "[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e"
+    "\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\U000e0000-\U000e0fff]")
+# fullwidth ASCII (U+FF01..U+FF5E) -> ASCII, length-preserving
+_FULLWIDTH = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+
+
 def redact_text(text: str) -> str:
-    """Mask credential-shaped tokens inside free text; the rest of the text is kept."""
-    out = str(text)
+    """Mask credential-shaped tokens inside free text; the rest of the text is kept.
+    Round 51: invisible joiners are dropped first so they cannot split a token."""
+    out = _INVISIBLE_RE.sub("", str(text))
+    # round 90: "ｇｈｐ_aB3d..." (fullwidth prefix) matched no pattern. Redact the folded form; keep the
+    # writer's original characters when folding finds nothing to mask.
+    folded = out.translate(_FULLWIDTH)
+    if folded != out:
+        masked = _redact_core(folded)
+        return masked if masked != folded else _redact_core(out)
+    return _redact_core(out)
+
+
+def _redact_core(out: str) -> str:
     for rx in _TOKEN_RES:
         if rx.groups:
             out = rx.sub(lambda m: m.group(1) + "***@", out)
@@ -66,7 +92,18 @@ def redact_text(text: str) -> str:
         if any(c.isdigit() for c in b) and any(c.islower() for c in b) and any(c.isupper() for c in b):
             return REDACTED
         return b
-    return _BLOB_RE.sub(blob, out)
+    out = _BLOB_RE.sub(blob, out)
+    # round 63: the token shapes above miss secret ASSIGNMENTS and auth headers - "password=hunter2",
+    # "DB_PASSWORD: s3cr3t", "Authorization: Basic dXNl...", "x-api-key: 0123..." - so research_note
+    # stored them raw as lessons in memory.jsonl (the bridge copy was masked by the bridge itself),
+    # and every later run on a related task was primed with the credential. The codex redactor
+    # (the one run logs get on write) now runs too; its rule gates keep plain prose untouched.
+    from . import ctxspawn
+    try:
+        out = ctxspawn.redact(out)
+    except Exception:  # noqa: BLE001 - masking must never fail the note; the shapes above still ran
+        pass
+    return out
 
 
 def lesson_text(text: str) -> str:
@@ -91,7 +128,9 @@ def learn(data_dir: Any, text: str, run_id: str, topic: str = "", kind: str = "f
             store.trim(bridgemod.LESSONS_NS, bridgemod.lessons_max())
     except MemoryRefused as e:
         return f"refused: {e}", key
-    except OSError as e:
+    except (OSError, ValueError, TypeError, AttributeError) as e:
+        # round 51: a corrupt store (ValueError/AttributeError) raised AFTER the note was posted,
+        # so the agent was told the whole tool failed and posted it again
         return f"refused: {type(e).__name__}", key
     return "learned", key
 
@@ -102,34 +141,58 @@ def _no_surrogates(s: str) -> str:
 
 
 async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    if not isinstance(args, dict):  # round 76: null/list/str args raised AttributeError
+        args = {}
     raw = args.get("text")
     if isinstance(raw, str):
         raw = _no_surrogates(raw)
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str) or not _INVISIBLE_RE.sub("", raw).strip():
+        # round 51: zero-width-only text passed and posted an empty-looking note
         return "ERROR: text is required (a non-empty string)"
     if len(raw) > RESEARCH_NOTE_MAX_TEXT:
         return f"ERROR: text is {len(raw)} chars; the cap is {RESEARCH_NOTE_MAX_TEXT}"
     kind = args.get("kind")
-    kind = "finding" if kind in (None, "") else str(kind).strip().lower()
+    if kind is not None and not isinstance(kind, str):
+        return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
+    kind = "finding" if not kind else kind.strip().lower()
     if kind not in RESEARCH_NOTE_KINDS:
         return "ERROR: kind must be one of " + ", ".join(RESEARCH_NOTE_KINDS)
     topic = args.get("topic")
-    topic = "" if topic is None else _textsafe.UNSAFE_ONE.sub(" ", _no_surrogates(str(topic))).strip()
+    if topic is not None and not isinstance(topic, str):
+        return "ERROR: topic must be text"  # round 51: {"a": 1} was str()-ed into the label
+    topic = "" if topic is None else " ".join(
+        _textsafe.UNSAFE_ONE.sub(" ", _INVISIBLE_RE.sub("", _no_surrogates(topic))).split())
     if len(topic) > RESEARCH_NOTE_MAX_TOPIC:
         return f"ERROR: topic is longer than {RESEARCH_NOTE_MAX_TOPIC} chars"
-    text = redact_text(raw.strip())
-    masked = text != raw.strip()
-    topic = redact_text(topic)
+    text = redact_text(raw.strip()).strip()
+    # round 68: redact_text also drops invisible joiners, so a note with a zero-width space (pasted
+    # from a web page) was reported as "secret-shaped tokens masked" when nothing was masked
+    masked = text != _INVISIBLE_RE.sub("", raw.strip()).strip()
+    t2 = redact_text(topic)
+    masked = masked or t2 != topic
+    topic = t2
+    if len(text) > RESEARCH_NOTE_MAX_TEXT:
+        # round 51: masking can lengthen ("a@" -> "***@", "bearer x" -> "***redacted***"), and the
+        # bridge silently cut the result at 4000; the note must never be cut without saying so
+        return (f"ERROR: after masking secret-shaped tokens the note is {len(text)} chars; "
+                f"the cap is {RESEARCH_NOTE_MAX_TEXT}")
     body = f"[{topic}] {text}" if topic else text
     if len(body) > RESEARCH_NOTE_MAX_TEXT:
         body = text  # the topic still travels with the lesson; never cut the note itself
     core = getattr(ctx, "core", None)
-    b = bridgemod.for_core(core, getattr(ctx, "run_id", "run"))
+    if core is None:  # round 76: for_core(None) raised AttributeError out of the tool
+        return "ERROR: no agent core on this context (nothing posted)"
+    try:
+        b = bridgemod.for_core(core, getattr(ctx, "run_id", "run"))
+    except OSError as e:  # the bridge dir could not be created (read-only / full disk)
+        return f"ERROR: could not open the run bridge ({type(e).__name__})"
     name, role = bridgemod._who(ctx)
     try:
         p = b.post(name, kind, body, role=role)
     except bridgemod.BridgeError as e:
         return f"ERROR: {e}"
+    except OSError as e:  # round 51: a full disk / read-only bridge file raised out of the tool
+        return f"ERROR: could not write the run bridge ({type(e).__name__})"
     lines = [f"posted {p['kind']} [{p['id']}] to the run bridge ({len(b)} posts)"
              + (" (secret-shaped tokens masked)" if masked else "")]
     if kind not in LEARNABLE_KINDS:
@@ -137,7 +200,8 @@ async def t_research_note(ctx: "AgentContext", args: dict[str, Any]) -> str:
     elif not bridgemod.lessons_enabled():
         lines.append("lessons: off (AVRONE_LESSONS) - posted to the bridge only, nothing learned")
     else:
-        data_dir = getattr(getattr(core, "settings", None), "data_dir", None)
+        # round 76: "" meant Path(".") - lessons written to the server's cwd
+        data_dir = bridgemod.usable_data_dir(getattr(getattr(core, "settings", None), "data_dir", None))
         if data_dir is None:
             lines.append("lessons: no data_dir on this node - posted to the bridge only")
         else:

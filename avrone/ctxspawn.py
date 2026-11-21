@@ -26,12 +26,15 @@ Every pack is passed through :func:`redact` (token shapes, keys, Authorization h
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import os
 import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from . import secretshapes as _shapes
 
 if TYPE_CHECKING:
     from .trinity import AgentContext
@@ -52,10 +55,8 @@ TRUNC = "...[truncated]"
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        n = int(str(os.environ.get(name, "")).strip() or default)
-    except (TypeError, ValueError):
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(lo, min(hi, n))
 
 
@@ -77,18 +78,19 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", re.S),
      REDACTED),
     (re.compile(r"(?i)\b(authorization|proxy-authorization|x-api-key|x-admin-token)(\"?\s*[:=]\s*\"?)"
-                r"(?:(bearer|basic|token)\s+)?[^\s,;\"']+"),
+                r"(?:(bearer|basic|token)\s+)?[^\s,;\"'\\]+"),  # round 57: stop at "\" (a JSON escape: \" or \n)
      lambda m: f"{m.group(1)}{m.group(2)}{(m.group(3) + ' ') if m.group(3) else ''}{REDACTED}"),  # type: ignore[list-item]
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), f"Bearer {REDACTED}"),
     (None, None),  # key = value with a secret-ish key: _KVRule, filled in below (linear, no regex)
-    (re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"), REDACTED),
+    (re.compile(r"\b(?:sk|pk|rk|xai)-[A-Za-z0-9_-]{16,}"), REDACTED),  # round 151: + xAI keys
     (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}"), REDACTED),
     (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"), REDACTED),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), REDACTED),
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}"), REDACTED),
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), REDACTED),
-    (re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s:]+:[^/@\s]+@"), r"\1***@"),
-]
+    (re.compile(r"(?i)([a-z][a-z0-9+.\-]{0,31}://)[^/@\s:]*:[^/@\s]+@"), r"\1***@"),  # round 153: redis://:pw@
+    (_shapes.TOKEN_PREFIX_RE, REDACTED),  # round 152: vendor tokens (secretshapes)
+] + [(rx, rep) for rx, rep, _g, _n in _shapes.CONTEXT_RULES]  # round 153: -u user:pass, --password x, ...
 
 
 # Scheme regexes above are bounded ({0,31}) and unanchored: `\b[a-z][a-z0-9+.\-]*://` rescanned the
@@ -97,7 +99,39 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
 
 _IDENT_RE = re.compile(r"[\w.-]+")
 _SECRET_RE = re.compile(_SECRET_WORD, re.I)
-_KV_TAIL_RE = re.compile(r"[\"']?\s*[:=]\s*(?!\[REDACTED\])(\"[^\"]*\"|'[^']*'|[^\s,;}\]]+)")
+# round 153: "=>" and ":=" are separators too ("password => 'x'" masked only the ">")
+# round 160: an unquoted value may not open a container: {"credentials": {"secret": "x"}} masked the
+# "{" and the nested secret went out raw
+# round 57: redact() also runs on raw JSON lines (secret_scan fix rewrites run logs), and the
+# value ran to the next space or comma, quotes included. {"cmd": "x token=abc", "n": 1} lost its
+# closing quote, "token=abc\\nnext" swallowed the escape and the next line's text, and in
+# {"a": "token=", "b": "c"} the "value" was `", "`, so the line stopped being JSON and the next key
+# was masked. An unquoted value now stops at a double quote and at a JSON escape (a lone backslash
+# stays part of it), a quoted value skips escaped quotes and must end at a non-word character (a
+# single-quoted one never spans a double quote, which in a JSON line is a string boundary), a
+# JSON-escaped \"...\" value is taken whole, and a value cut short after its opening quote keeps
+# that quote.
+_KV_TAIL_RE = re.compile(r"[\"']?\s*(?:=>|:=|[:=])\s*(?!\[REDACTED\])"
+                         r"(\"(?:[^\"\\]|\\.)*\"(?!\w)|'[^'\"]*'(?!\w)|\\\"(?:[^\"\\]|\\\\|\\[^\"\\])*\\\""
+                         r"|(?!\{)(?:\[[ \t]*)?[\"']?(?:[^\s,;}\]\"\\]|\\(?![nrt\"\\/bfu]))+)")
+
+
+_NUM_RE = re.compile(r"[+-]?\d{1,9}(?:\.\d+)?")
+_LITERALS = frozenset({"true", "false", "null", "none", "nil", "undefined", "[]"})
+_COUNT_KEY_RE = re.compile(r"(?i)tokens?(?![a-z])|tokens?_|_tokens?")
+
+
+def _kv_not_secret(key: str, val: str) -> bool:
+    """Round 161: values that can't be a secret. `max_tokens=4096`, `"prompt_tokens": 12` and
+    `"token_count": 3` were masked in every usage line, and so were `password: null` and
+    `secret=""`. A number is only spared under a token-COUNT key: `password=123456` stays masked."""
+    v = val.strip("\"'") if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'" else val
+    if v == "" or v.lower() in _LITERALS:
+        return True
+    if _NUM_RE.fullmatch(v) and _COUNT_KEY_RE.search(key) and not re.search(
+            r"(?i)secret|passw|api|private|access|auth|credential|bearer", key):
+        return True
+    return False
 
 
 def _redact_kv(s: str) -> str:
@@ -115,8 +149,18 @@ def _redact_kv(s: str) -> str:
         tail = _KV_TAIL_RE.match(s, m.end())
         if tail is None:
             continue
+        val = tail.group(1)
+        if _kv_not_secret(m.group(), val):
+            continue
         out.append(s[last:tail.start(1)])
-        out.append(REDACTED)
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            out.append(val[0] + REDACTED + val[0])  # round 161: keep the quotes (JSON stayed invalid)
+        elif val[:1] in ("\"", "'", "["):
+            # round 57: an unclosed value keeps its opening quote (and a list's "[")
+            head = len(val) - len(val.lstrip("[ \t\"'"))
+            out.append(val[:head] + REDACTED)
+        else:
+            out.append(REDACTED)
         last = tail.end(1)
     if not out:
         return s
@@ -173,8 +217,14 @@ def redact(text: Any) -> str:
     low: str | None = None
     for i, (pat, rep) in enumerate(_PATTERNS):
         anyof = _ANY_GATES.get(i)
-        if anyof is not None and not any(w in s for w in anyof):
-            continue
+        if anyof is not None:
+            if i in _FOLDED_ANY:  # round 57: a (?i) rule's gate words are checked case-folded
+                if low is None:
+                    low = _fold(s)
+                if not any(w in low for w in anyof):
+                    continue
+            elif not any(w in s for w in anyof):
+                continue
         gate = _GATES[i] if i < len(_GATES) else None
         if gate is not None:
             need, words = gate
@@ -208,16 +258,21 @@ def _fold(s: str) -> str:
 
 
 _ANY_GATES: dict[int, tuple[str, ...]] = {
-    4: ("sk-", "pk-", "rk-"),
+    4: ("sk-", "pk-", "rk-", "xai-"),
     5: ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"),
+    11: _shapes.PREFIX_GATE,
+    **{12 + i: g for i, (_r, _p, g, _n) in enumerate(_shapes.CONTEXT_RULES)},
 }
+# round 57: CONTEXT_RULES compiled with (?i) keep lower-case gate words; test them on _fold(s)
+_FOLDED_ANY: frozenset[int] = frozenset(12 + i for i, (r, _p, _g, _n) in enumerate(_shapes.CONTEXT_RULES)
+                                        if _shapes.folded_gate(r))
 _KV_WORDS = ("token", "secret", "passw", "api", "private", "access", "_key", "credential")
 _GATES: list[tuple[tuple[str, ...], tuple[str, ...]] | None] = [
     (("PRIVATE KEY-----",), ()),
     ((), ("authorization", "x-api-key", "x-admin-token")),
     ((), ("bearer",)),
     ((), _KV_WORDS),  # _redact_kv: the key must hold a secret word (and is followed by : or =)
-    None,  # sk-/pk-/rk-: any-of, case-sensitive: checked in _any_gate
+    None,  # sk-/pk-/rk-/xai-: any-of, case-sensitive: checked in _any_gate
     None,  # gh?_ / github_pat_: same
     (("xox",), ()),
     (("AKIA",), ()),

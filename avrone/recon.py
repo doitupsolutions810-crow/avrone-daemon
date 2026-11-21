@@ -84,7 +84,8 @@ _ALLOW_WORDS = {"", "allow", "on", "true", "yes", "1", "enabled", "enable"}
 
 
 def _denied() -> str | None:
-    mode = os.getenv("AVRONE_RECON", "allow").strip().lower()
+    from .config import switch_word  # round 84: '"allow"' from compose was "unrecognised"
+    mode = switch_word(os.environ.get("AVRONE_RECON"), "allow")
     if mode in _DENY_WORDS:
         return "ERROR: reconnaissance is disabled on this node (AVRONE_RECON=deny)"
     if mode not in _ALLOW_WORDS:  # unknown value: fail closed, never open
@@ -95,13 +96,15 @@ def _denied() -> str | None:
 def _allowlist() -> list[str] | None:
     """Default-deny (v0.21). None = explicit "*" (any public host). [] = unset/blank or
     unparseable -> deny all. Otherwise the exact hosts / true-subdomain suffixes listed."""
+    # round 87: '"*"' and '"a.com,b.com"' from a compose .env kept their quotes: "*" denied all,
+    # and the list's first and last hosts never matched. Whole value and each entry are unquoted.
+    from .config import clean_secret, env_list
     raw = os.getenv("AVRONE_RECON_ALLOWLIST", "")
-    if raw.strip() == "*":
+    if clean_secret(raw).strip("'\"").strip() == "*":  # only a lone "*" opens it ("*," stays closed)
         return None
-    if not raw.strip():
-        return []
+    items = env_list(raw)
     out = []
-    for h in raw.split(","):
+    for h in items:
         a = _norm_allow_entry(h)
         if a and "*" not in a:
             out.append(a)
@@ -112,7 +115,8 @@ def _norm_allow_entry(h: str) -> str:
     """One AVRONE_RECON_ALLOWLIST entry as the bare IDNA host it means. "https://MySite.com/",
     "mysite.com:443", "user@mysite.com" and "bücher.de" used to be kept verbatim and never matched
     anything (silently allowing nothing). Normalisation only narrows to the host the operator wrote."""
-    a = h.strip().lower()
+    from .config import clean_secret
+    a = clean_secret(h).lower()
     a = re.sub(r"^[a-z][a-z0-9+.-]*://", "", a)
     a = re.split(r"[/?#]", a, maxsplit=1)[0]
     a = a.rsplit("@", 1)[-1]
@@ -157,8 +161,8 @@ _IP_IN_NAME_SERVICES = ("nip.io", "sslip.io", "xip.io", "traefik.me", "nip.direc
 # a dotted quad glued to other text inside the name: customer-10.0.0.1.nip.io, make-127.0.0.1-rr.1u.ms
 _GLUED_QUAD = re.compile(r"(?:^|[.-])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?=$|[.-])")
 _DASH_QUAD = re.compile(r"(?<![0-9])(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})(?![0-9])")
-_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
-_TLD = re.compile(r"^(?:[a-z][a-z0-9-]*[a-z0-9]|[a-z]|xn--[a-z0-9-]+)$")
+_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)\Z")
+_TLD = re.compile(r"^(?:[a-z][a-z0-9-]*[a-z0-9]|[a-z]|xn--[a-z0-9-]+)\Z")
 
 
 def _non_public_ip(ip: "ipaddress.IPv4Address | ipaddress.IPv6Address") -> bool:

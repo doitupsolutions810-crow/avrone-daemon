@@ -61,9 +61,48 @@ def agent_root(ctx: "AgentContext") -> Path | None:
     d = getattr(ctx, "agent_dir", None)
     if d is None:
         return None
-    root = Path(d).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    root = agentfs.resolve(d)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # read-only disk, a FILE where the dir should be, permissions: used to escape the tool as a raw
+        # OSError naming the host's absolute path instead of a plain refusal
+        raise AgentFSError(f"your agent dir is not usable ({type(e).__name__})") from None
+    if not root.is_dir():
+        raise AgentFSError("your agent dir is not a directory")
     return root
+
+
+# Round 91: HFS+ ignores these code points when it compares names (the list git's
+# is_hfs_dotgit strips, CVE-2014-9390), so "agen\u200cts" IS the agents dir there; U+200B and
+# U+2060 are added because they render the same and refusing too much is the safe side here.
+_HFS_IGNORABLE = dict.fromkeys(
+    [0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0x2060, 0xFEFF, *range(0x202A, 0x202F), *range(0x206A, 0x2070)])
+
+
+def _fold(name: str) -> str:
+    """How a case-insensitive filesystem compares a name: macOS APFS/HFS+ and Windows NTFS treat
+    'Agents', 'AGENTS', 'agents.' and 'agents::$INDEX_ALLOCATION' (NTFS stream syntax) as 'agents'.
+    Round 91: HFS+ also ignores zero-width and bidi code points, and both Apple filesystems compare
+    names normalization-insensitively, so those are dropped and the name is NFC-folded first."""
+    import unicodedata
+    n = unicodedata.normalize("NFC", name.translate(_HFS_IGNORABLE))
+    return n.split(":", 1)[0].rstrip(" .").casefold()
+
+
+def _touches_agents(ws: Path, p: Path) -> bool:
+    """True when `p` is the agents root or under it, by exact path OR by a case/trailing-dot variant
+    of its first component. On a Mac 'shared/Agents/<other>/secret' resolved to a path that
+    is_relative_to(ws/agents) called outside, though it named the same directory on disk, so one
+    agent could read and overwrite another's dir and dodge its own quota."""
+    agents = agentfs.agents_root(ws)
+    if p == agents or p.is_relative_to(agents):
+        return True
+    try:
+        rel = p.relative_to(ws)
+    except ValueError:
+        return False
+    return bool(rel.parts) and _fold(rel.parts[0]) == _fold(agents.name)
 
 
 def _audit_denied(ctx: "AgentContext", tool: str, raw: str, reason: str) -> None:
@@ -98,8 +137,12 @@ def resolve(ctx: "AgentContext", raw: Any, tool: str) -> Resolved:
     from .tools import _safe_path, check_path_text
 
     ws = workspace(ctx)
-    root = agent_root(ctx)
     s = check_path_text(str(raw if raw is not None else "").strip())
+    try:
+        root = agent_root(ctx)
+    except AgentFSError as e:
+        _audit_denied(ctx, tool, s, str(e))
+        raise
     if root is None:
         return Resolved(_safe_path(ws, s), ws, False, False)
     try:
@@ -113,8 +156,7 @@ def resolve(ctx: "AgentContext", raw: Any, tool: str) -> Resolved:
         if rest is None:
             return Resolved(agentfs.confine(root, s), root, True, True)
         p = agentfs.confine(ws, rest)
-        agents = agentfs.agents_root(ws)
-        if p == agents or p.is_relative_to(agents):
+        if _touches_agents(ws, p):
             raise AgentFSError("shared/agents is off limits; your own dir is addressed without the shared/ prefix")
         return Resolved(p, ws, False, True)
     except AgentFSError as e:
@@ -125,8 +167,11 @@ def resolve(ctx: "AgentContext", raw: Any, tool: str) -> Resolved:
 def display(ctx: "AgentContext", p: Path) -> str:
     """How a path is shown back to the agent, in the same form it can pass in again."""
     ws = workspace(ctx)
-    root = agent_root(ctx)
-    rp = p.resolve()
+    try:
+        root = agent_root(ctx)
+        rp = agentfs.resolve(p)
+    except AgentFSError:
+        return Path(p).name or "."  # never echo a host absolute path from a display helper
     if root is not None:
         if rp.is_relative_to(root):
             return str(rp.relative_to(root)) or "."

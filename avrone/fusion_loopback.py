@@ -16,10 +16,35 @@ import ipaddress
 from urllib.parse import urlsplit
 
 
+_HOST_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.:-_")
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+
+
 def host_text(host: str | None) -> str:
-    name = str(host or "").strip().strip("[]").lower()
+    """Normalise a host for comparison; "" for anything that is not a plain host spelling.
+
+    Round 48: ``.strip("[]")`` removed any number of brackets from either end, so
+    ``]127.0.0.1[`` and ``[[::1]]`` counted as loopback; ``%`` cut a zone from any name, so
+    ``127.0.0.1%evil`` and ``localhost%x`` did too; and control characters, NUL and
+    non-ASCII passed through to the comparison. Now only one matched ``[...]`` pair is
+    removed, a zone is allowed only on an IPv6 literal, and any other character refuses."""
+    if isinstance(host, (bytes, bytearray)):
+        try:
+            host = bytes(host).decode("ascii")
+        except UnicodeDecodeError:
+            return ""
+    if not isinstance(host, str):
+        return ""
+    name = host.strip(" \t").lower()
+    if name.startswith("[") and name.endswith("]") and len(name) >= 2:
+        name = name[1:-1]
     if "%" in name:
-        name = name.split("%", 1)[0]
+        addr, _, zone = name.partition("%")
+        if ":" not in addr or not zone or "%" in zone or not all(c in _HOST_CHARS for c in zone):
+            return ""
+        name = addr
+    if not name or not all(c in _HOST_CHARS for c in name):
+        return ""
     return name
 
 
@@ -49,7 +74,10 @@ def is_access_loopback(host: str | None) -> bool:
 def is_any_loopback(host: str | None) -> bool:
     """True for localhost, any 127.0.0.0/8 address, ::1, and their mapped forms."""
     name = host_text(host)
-    if name == "localhost" or name.endswith(".localhost"):
+    if name.endswith(".") and not name.endswith(".."):
+        name = name[:-1]  # one trailing root dot: "localhost." is localhost
+    if name == "localhost" or (name.endswith(".localhost") and ".." not in name
+                               and not name.startswith(".")):
         return True
     ip = unwrap_ip(name)
     return bool(ip is not None and ip.is_loopback)
@@ -62,12 +90,22 @@ def origin_key(base: str) -> str:
     the access policy would treat both hosts as loopback. Other hosts keep
     their own key, so 10.0.0.1 is not folded into loopback.
     """
+    # round 48: ``parts.port`` raised ValueError outside the try (":99999", ":abc"), and the
+    # default port was None, so http://localhost and https://localhost shared one bucket while
+    # http://localhost and http://localhost:80 did not
+    if not isinstance(base, str):
+        return "invalid:"
     try:
-        parts = urlsplit(base or "")
+        parts = urlsplit(base)
+        port = parts.port
     except ValueError:
         return "invalid:"
     host = parts.hostname or ""
-    port = parts.port
+    if port is None:
+        port = _DEFAULT_PORTS.get(parts.scheme.lower())
     if is_access_loopback(host):
         return f"loopback:{port}"
-    return f"{host_text(host)}:{port}"
+    name = host_text(host) or host
+    if ":" in name:
+        name = f"[{name}]"  # "fe80::1:8090" read as host fe80::1 port 8090 or host fe80::1:8090
+    return f"{name}:{port}"

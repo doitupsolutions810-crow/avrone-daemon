@@ -48,7 +48,10 @@ SOURCES = ("avrone", "cyclekernal", "greatscale")
 KINDS = ("finding", "question", "answer", "correction", "conclusion", "mood", "evidence", "health")
 RESEND_ON_CK_BOOT = frozenset({"avrone", "greatscale"})
 MIRROR_ID_PREFIXES = ("ck-health-", "ck-mood-", "ck-evidence-")
-STATE_MAX_BYTES = 2 * 1024 * 1024
+# Round 138: this was 2 MiB. save() writes any size, and pending rows carry the event (up to
+# about 2 KB each), so about 1,300 pending events passed it. On restart, load() saw FileTooBig and
+# cleared the ledger, and the next offer overwrote the file. Every undelivered event was lost.
+STATE_MAX_BYTES = 64 * 1024 * 1024
 # A configured backoff of 0 must not tight-loop. 50 ms is the same floor the
 # relay uses before it will start another call inside a cycle.
 MIN_RETRY_DELAY = 0.05
@@ -88,33 +91,36 @@ def _raw_env(name: str) -> str | None:
 
 
 def _float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name, "")
-    if raw.strip() == "":
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        return default
-    if value != value or value in (float("inf"), float("-inf")):
-        return default
-    return value
+    """Round 86: through config.env_num, so '"5"' is 5 (was the default) and fullwidth digits are
+    refused (float() took them)."""
+    from .config import env_num
+    v = env_num(name)
+    return default if v is None else v
 
 
 def _int_env(name: str, default: int) -> int:
-    raw = os.environ.get(name, "")
-    if raw.strip() == "":
+    """Round 86: "1.0" and '"3"' used to be the default; int() also took fullwidth digits."""
+    from .config import env_num
+    v = env_num(name)
+    if v is None or abs(v) > 1 << 62:
         return default
-    try:
-        return int(raw)
-    except ValueError:
+    return int(v)
+
+
+def _url_path(raw: Any, default: str) -> str:
+    from .config import clean_secret
+    p = clean_secret(raw)
+    if not p:
         return default
+    return p if p.startswith("/") else "/" + p
 
 
 def default_state_path(data_dir: Path | None = None) -> Path | None:
     """``AVRONE_FUSION_STATE_PATH`` when set, else ``<data_dir>/fusion/delivery-state.json``."""
-    raw = os.environ.get("AVRONE_FUSION_STATE_PATH", "").strip()
+    from .config import clean_secret
+    raw = clean_secret(os.environ.get("AVRONE_FUSION_STATE_PATH"))  # round 88: quotes kept, "~" literal
     if raw:
-        return Path(raw)
+        return Path(raw).expanduser()
     if data_dir is None:
         return None
     return Path(data_dir) / "fusion" / "delivery-state.json"
@@ -131,11 +137,14 @@ def config_from_env() -> DeliverConfig:
         token = _raw_env("FUSION_TOKEN")
     if token is None:
         token = _raw_env("AVRONE_ADMIN_TOKEN") or ""
-    base = os.environ.get("CK_BASE", "http://127.0.0.1:8090").strip() or "http://127.0.0.1:8090"
+    from .config import clean_secret
+    # round 88: a quoted CK_BASE became the URL '"http://..."' (every delivery failed), and a padded
+    # or quoted CK_EVENTS_PATH was posted to as written; a path without "/" glued onto the host
+    base = clean_secret(os.environ.get("CK_BASE")) or "http://127.0.0.1:8090"
     return DeliverConfig(
-        base=base.rstrip("/"),
-        events_path=os.environ.get("CK_EVENTS_PATH", "/v1/events") or "/v1/events",
-        health_path=os.environ.get("CK_HEALTH_PATH", "/health") or "/health",
+        base=base.rstrip("/") or "http://127.0.0.1:8090",
+        events_path=_url_path(os.environ.get("CK_EVENTS_PATH"), "/v1/events"),
+        health_path=_url_path(os.environ.get("CK_HEALTH_PATH"), "/health"),
         token=token,
         timeout=max(MIN_RETRY_DELAY, _float_env("FUSION_TIMEOUT", 5.0)),
         deadline=max(0.0, _float_env("FUSION_CYCLE_DEADLINE", 10.0)),
@@ -188,7 +197,9 @@ def retry_delay(kind: str, streak: int, config: DeliverConfig) -> float:
         base = config.backoff_base
         maximum = config.backoff_max if config.backoff_max >= base else base
         if base > 0:
-            delay = min(maximum, base * (2 ** max(0, streak - 1)))
+            # round 57: the exponent is capped. attempts keeps counting through a long outage, and
+            # 2 ** 1024 cannot become a float: the 1,025th retry raised OverflowError mid-cycle.
+            delay = min(maximum, base * (2 ** min(60, max(0, streak - 1))))
         else:
             delay = maximum
     if delay <= 0:
@@ -312,11 +323,48 @@ def _payload_too_big(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _wire_bytes(event: dict[str, Any]) -> bytes | None:
-    """UTF-8 JSON, or None when the document cannot be encoded.
+def _json_problem(value: Any) -> str | None:
+    """Round 57: what keeps `value` from being strict, UTF-8 JSON, or None.
 
-    A lone surrogate is valid in a Python str and in JSON ``\\u`` escapes, and
-    it is not valid UTF-8. The peer would never see those bytes.
+    NaN and Infinity inside the payload went out as the bare words NaN / Infinity (not JSON, so the
+    peer rejects the body), a lone surrogate made prepare_event raise UnicodeEncodeError instead of
+    returning its (None, detail), and a non-string key either collided with a string one
+    ({1: "a", "1": "b"} sent "1" twice) or made sort_keys raise TypeError."""
+    stack: list[Any] = [value]
+    seen = 0
+    while stack:
+        item = stack.pop()
+        seen += 1
+        if seen > 100_000:
+            return "payload: too many values"
+        if isinstance(item, dict):
+            for key, sub in item.items():
+                if not isinstance(key, str):
+                    return "payload: object keys must be strings"
+                stack.append(key)
+                stack.append(sub)
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+        elif isinstance(item, float):
+            if not math.isfinite(item):
+                return "payload: non-finite number (NaN or Infinity is not JSON)"
+        elif isinstance(item, str):
+            try:
+                item.encode("utf-8")
+            except UnicodeEncodeError:
+                return "payload: lone surrogate (not valid UTF-8)"
+        elif item is None or isinstance(item, (bool, int)):
+            pass
+        else:
+            return f"payload: {type(item).__name__} is not a JSON value"
+    return None
+
+
+def _wire_bytes(event: dict[str, Any]) -> bytes | None:
+    """UTF-8 JSON, or None when the document still cannot be encoded.
+
+    ``_json_problem`` names the usual causes. This is the last net, including a
+    recursion error, so a leftover document is a refusal and not a crash.
     """
     try:
         return json.dumps(event, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -346,6 +394,13 @@ def prepare_event(data: Any, *, max_body: int = MAX_BODY) -> tuple[dict[str, Any
     field_err = _check_known_fields(payload)
     if field_err:
         return None, field_err
+    json_err = _json_problem(payload)
+    if json_err:
+        return None, json_err
+    try:
+        run_id.encode("utf-8")
+    except UnicodeEncodeError:
+        return None, "run_id: lone surrogate (not valid UTF-8)"
     if _payload_too_big(payload):
         return None, "request body too large (max 4096 bytes)"
     ts = data.get("ts", 0)
@@ -465,6 +520,7 @@ class Ledger:
         self.suppressed = 0
         self._breakers: dict[str, Breaker] = {}
         self._lock = threading.RLock()
+        self._writable = True
         self.load()
 
     def accounts(self) -> dict[str, int]:
@@ -585,6 +641,8 @@ class Ledger:
         try:
             raw = read_capped(self.path, STATE_MAX_BYTES)
         except FileTooBig:
+            # Keep the file. Saving over it would erase every pending event it holds.
+            self._writable = False
             self._discard()
             return
         if raw is None:
@@ -670,7 +728,7 @@ class Ledger:
         self.state_errors += 1
 
     def save(self) -> None:
-        if self.path is None:
+        if self.path is None or not getattr(self, "_writable", True):
             return
         payload = {
             "version": 2,

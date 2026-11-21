@@ -6,6 +6,7 @@ Contract:
 """
 from __future__ import annotations
 
+from .textsafe import escape as _tsesc  # round 148: echoed paths shown escaped
 import asyncio
 import logging
 import difflib
@@ -551,6 +552,7 @@ def _offset(raw: Any) -> int:
 DIR_LISTING_SCAN_MAX = 20_000
 
 def _dir_listing(p: Path, limit: int = 30) -> str:
+    from .textsafe import escape as _textsafe_escape
     import os as _os
     names, extra = [], False
     try:  # round 89: bounded scandir (iterdir + is_dir stat'ed every entry of a 1M-entry dir)
@@ -563,7 +565,7 @@ def _dir_listing(p: Path, limit: int = 30) -> str:
                     d = de.is_dir()
                 except OSError:
                     d = False
-                names.append(de.name + ("/" if d else ""))
+                names.append(_textsafe_escape(de.name) + ("/" if d else ""))  # round 146
     except OSError:
         return ""
     names.sort()
@@ -606,9 +608,8 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
             raise OSError("symlink: use the default mode")
         mode = _stat.S_IMODE(st.st_mode) & ~(_stat.S_ISUID | _stat.S_ISGID)
     except OSError:
-        um = _os.umask(0)
-        _os.umask(um)
-        mode = 0o666 & ~um
+        from .safeio import current_umask as _cu  # round 58: no umask(0) window for other threads
+        mode = 0o666 & ~_cu()
     from .safeio import mkstemp_beside as _mkstemp_beside
     fd, tmp = _mkstemp_beside(p)
     try:
@@ -622,7 +623,7 @@ def atomic_write_bytes(p: Path, data: bytes) -> None:
         except OSError:
             pass
         from .safeio import with_target as _with_target
-        t = _with_target(e, p)
+        t = _with_target(e, p, tmp)  # round 58: never name the random temp file
         if t is e:
             raise
         raise t from e
@@ -638,23 +639,23 @@ async def t_read(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: read_file needs a file path (use list_files to see what is there)"
     p = fsunify.resolve(ctx, raw_path, "read_file").path
     if not p.exists():
-        return f"ERROR: {raw_path} not found"
+        return f"ERROR: {_tsesc(raw_path)} not found"
     if p.is_dir():
-        return f"ERROR: {raw_path} is a directory, not a file. Entries: {_dir_listing(p)}"
+        return f"ERROR: {_tsesc(raw_path)} is a directory, not a file. Entries: {_dir_listing(p)}"
     if not p.is_file():
-        return f"ERROR: {raw_path} is not a regular file"
+        return f"ERROR: {_tsesc(raw_path)} is not a regular file"
     off = _offset(args.get("offset"))
     from .safeio import NotRegularFile, open_read
     try:  # round 87: a FIFO swapped in after is_file() parked a pool thread forever in open()
         fh = open_read(p, follow=True)
     except NotRegularFile:
-        return f"ERROR: {raw_path} is not a regular file"
+        return f"ERROR: {_tsesc(raw_path)} is not a regular file"
     import os as _os
     size = _os.fstat(fh.fileno()).st_size
     with fh:
         head = fh.read(8192)
         if b"\x00" in head:
-            return (f"ERROR: {raw_path} is a binary file ({size} bytes); inspect it with shell "
+            return (f"ERROR: {_tsesc(raw_path)} is a binary file ({size} bytes); inspect it with shell "
                     f"(e.g. `file {raw_path}` or `xxd {raw_path} | head`)")
         fh.seek(0)
         data = fh.read((off + READ_MAX_CHARS) * 4 + 4)
@@ -683,7 +684,7 @@ async def t_write(ctx: "AgentContext", args: dict[str, Any]) -> str:
     p = r.path
     content = write_content(args.get("content"))
     if not r.in_agent and p.is_dir():  # (agent dirs: quota_write refuses and audits it)
-        return f"ERROR: {raw_path} is a directory; give a file path inside it"
+        return f"ERROR: {_tsesc(raw_path)} is a directory; give a file path inside it"
     if r.in_agent:
         from .agentfs_tools import quota_write
         # quota_write walks the whole agent dir under a thread lock: never on the event loop

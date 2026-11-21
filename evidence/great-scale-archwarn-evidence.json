@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v94",
+  "finding": "The script warns when the machine is Darwin but not arm64. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "warning": "soft — Darwin-only, warn and continue",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The architecture-warn check holds."
+}

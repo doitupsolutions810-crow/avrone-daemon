@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 def _unquote(value: str) -> str:
@@ -24,6 +25,10 @@ def parse_dotenv_line(line: str) -> tuple[str, str] | None:
     KEY="a #1" lost everything after the '#'."""
     line = line.lstrip("\ufeff").strip()
     if not line or line.startswith("#") or "=" not in line:
+        return None
+    if "\x00" in line:
+        # round 78: os.environ refuses a NUL ("embedded null byte"), and the ValueError was raised
+        # at import time by _load_dotenv - one bad .env line kept the whole server from starting
         return None
     key, _, value = line.partition("=")
     key = key.strip()
@@ -57,13 +62,191 @@ def _load_dotenv(path: Path) -> None:
         text = raw.decode("utf-8", errors="replace")
     except OSError:
         return
-    for line in text.splitlines():
-        kv = parse_dotenv_line(line)
+    # round 78: splitlines() also broke at U+2028, \x0c, \x1c-\x1e, \x85 ..., so a value holding
+    # one was cut and its tail parsed as a line of its own; lines end at \n only (CRLF handled)
+    for line in text.split("\n"):
+        kv = parse_dotenv_line(line.rstrip("\r"))
         if kv:
             os.environ.setdefault(*kv)
 
 
-_load_dotenv(Path(os.getenv("AVRONE_ENV_FILE", ".env")))
+def clean_secret(raw: Any) -> str:
+    """A token as every reader should see it: text only, whitespace trimmed, one pair of matching
+    surrounding quotes removed (a .env read by docker compose keeps quotes a shell export drops).
+    fleet.clean_token has done this for the fleet token since round 30-something; round 82 makes
+    the admin token, capgate key, doctor and exposure_check read tokens the same way."""
+    if not isinstance(raw, str):
+        return ""
+    t = raw.strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
+        t = t[1:-1].strip()
+    return t
+
+
+def env_secret(name: str, env: Any = None) -> str:
+    return clean_secret((os.environ if env is None else env).get(name))
+
+
+def shared_key_text(env: Any = None) -> str:
+    """The capgate HMAC key text: AVRONE_CAPGATE_KEY, else AVRONE_FLEET_TOKEN, each cleaned first.
+    Round 82: a whitespace-only AVRONE_CAPGATE_KEY ("  ") was truthy, so the fleet token was never
+    consulted, and after .strip() the key was empty: every node fell back to a random per-process
+    key and no capability or receipt verified across nodes or restarts."""
+    return env_secret("AVRONE_CAPGATE_KEY", env) or env_secret("AVRONE_FLEET_TOKEN", env)
+
+
+_NUM_WARNED: set[str] = set()
+NUM_WARN_CAP = 32
+
+
+def parse_env_number(raw: Any) -> float | None:
+    """A numeric env value as text -> a finite float, or None for unset/blank/junk. Round 85: the
+    module readers (codex, fleet, mcp, memstore, telemetry, server, safeio, logsafe, checkpoint,
+    jobqueue, ctxspawn, bridge) each did int(os.environ.get(..).strip()), so "\uff11\uff10\uff10"
+    (fullwidth digits) was accepted as 100, '"100"' from a compose .env silently became the
+    default, and "1e3" was junk for ints but 1000 for floats. One reading now: cleaned like a
+    secret, "_" separators allowed, ASCII only, finite."""
+    if not isinstance(raw, str):
+        return None
+    v = clean_secret(raw).replace("_", "")
+    if not v or not v.isascii() or len(v) > 64:
+        return None
+    try:
+        f = float(v)
+    except ValueError:
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def env_num(name: str, env: Any = None) -> float | None:
+    """parse_env_number for one variable; a value set but unreadable is reported once per
+    (name, value), capped, so a per-request reader never floods the log."""
+    raw = (os.environ if env is None else env).get(name)
+    f = parse_env_number(raw)
+    if f is None and isinstance(raw, str) and clean_secret(raw):
+        key = f"{name}={raw[:40]}"
+        if key not in _NUM_WARNED and len(_NUM_WARNED) < NUM_WARN_CAP:
+            _NUM_WARNED.add(key)
+            import sys
+            from .textsafe import escape
+            print(f"AVRONE: ignoring bad number for {name} ('{escape(raw[:40])}'); using the default",
+                  file=sys.stderr)
+    return f
+
+
+def env_list(raw: Any) -> list[str]:
+    """A comma-separated env list as every reader should see it. Round 87: '"a,b"' (the whole value
+    quoted, as a compose .env keeps it) and "'a', 'b'" (each entry quoted) left quote characters on
+    the entries, so recon/priv-shell allowlists and AVRONE_TOOLS_ONLY silently lost names. Entries
+    are trimmed and unquoted at both ends; blanks are dropped; order kept."""
+    out = []
+    for part in clean_secret(raw).split(","):
+        e = part.strip().strip("'\"").strip()
+        if e:
+            out.append(e)
+    return out
+
+
+def switch_word(raw: Any, default: str) -> str:
+    """A policy word as every reader should see it: cleaned like a secret, lower-cased, blank = default."""
+    return clean_secret(raw).lower() or default
+
+
+ACCESS_WORDS = ("loopback", "admin", "all")
+
+
+def access_policy(env: Any = None) -> str:
+    """AVRONE_PUBLIC_ACCESS for server.require_local and doctor. Round 86: both read
+    (raw or "loopback").strip().lower(), so '"admin"' from a compose .env was unknown and fell back
+    to loopback: a node set to admin-token-only let any local caller in without the token.
+    Quotes and padding are cleaned now; a truly unknown word still means loopback, never all."""
+    w = switch_word((os.environ if env is None else env).get("AVRONE_PUBLIC_ACCESS"), "loopback")
+    return w if w in ACCESS_WORDS else "loopback"
+
+
+SELF_CHANGE_WORDS = ("allow", "log", "deny")
+
+
+def self_changes_policy(env: Any = None) -> str:
+    """AVRONE_SELF_CHANGES: allow (default) | log | deny. Round 84: the reader was
+    os.getenv(...).lower() == "deny", so "deny " (trailing space), "deny\n" or '"deny"' from a
+    compose .env ALLOWED package installs on a node the operator had locked. Unknown words now deny."""
+    w = switch_word((os.environ if env is None else env).get("AVRONE_SELF_CHANGES"), "allow")
+    return w if w in SELF_CHANGE_WORDS else "deny"
+
+
+def self_evolve_denied(env: Any = None) -> bool:
+    """AVRONE_SELF_EVOLVE: allow (default) | deny; round 84: cleaned, and an unknown word denies."""
+    return switch_word((os.environ if env is None else env).get("AVRONE_SELF_EVOLVE"), "allow") != "allow"
+
+
+def abs_read_allowed(env: Any = None) -> bool:
+    """AVRONE_ALLOW_ABS_READ: unset = on, "1" = on, anything else (blank included) = off, as
+    agentkit always read it. Round 84: doctor read blank as on while the reader had it off, and
+    " 1" / '"1"' were off in the reader."""
+    raw = (os.environ if env is None else env).get("AVRONE_ALLOW_ABS_READ")
+    return raw is None or clean_secret(raw) == "1"
+
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8710
+
+
+def _env_value(name: str, env: Any = None) -> str:
+    raw = (os.environ if env is None else env).get(name)
+    return raw.strip().strip("'\"").strip() if isinstance(raw, str) else ""
+
+
+def bind_host(env: Any = None) -> str:
+    """The address the HTTP server binds, as server.main, doctor and exposure_check all read it.
+
+    Round 81: server.main passed AVRONE_HOST="" straight to uvicorn, and asyncio binds an empty
+    host on EVERY interface (0.0.0.0 and ::), while doctor and exposure_check read the same blank
+    value as 127.0.0.1 and reported the node as loopback-only. Blank, quoted-blank, non-ASCII or a
+    value with spaces/control characters now means 127.0.0.1 for all three (fail closed)."""
+    v = _env_value("AVRONE_HOST", env)
+    if not v:
+        return DEFAULT_HOST
+    if not v.isascii() or not v.isprintable() or any(c.isspace() for c in v):
+        import sys
+        print(f"AVRONE: ignoring unusable AVRONE_HOST {v[:40]!r}; binding {DEFAULT_HOST}", file=sys.stderr)
+        return DEFAULT_HOST
+    return v
+
+
+def bind_port(env: Any = None) -> int:
+    """AVRONE_PORT as 1..65535. Round 81: "" raised ValueError out of server.main, "0" bound a
+    random port nobody could find, and int() took fullwidth digits ("\uff18\uff17\uff11\uff10")."""
+    v = _env_value("AVRONE_PORT", env)
+    if not v:
+        return DEFAULT_PORT
+    if v.isascii() and v.isdigit() and 1 <= int(v) <= 65535:
+        return int(v)
+    import sys
+    print(f"AVRONE: ignoring bad AVRONE_PORT {v[:40]!r}; using {DEFAULT_PORT}", file=sys.stderr)
+    return DEFAULT_PORT
+
+
+def env_path_text(raw: Any, default: str) -> str:
+    """A path setting's text: cleaned like a secret (whitespace trimmed, one pair of matching quotes
+    removed), blank means ``default``. Round 89: AVRONE_DATA_DIR='"/srv/avrone"' (a compose .env or
+    a launchd plist keeps the quotes) made a directory literally named '"' under the cwd, a padded
+    "  /srv/x  " became a relative folder named with spaces, and AVRONE_ENV_FILE='""' (quoted blank)
+    resolved to the cwd itself, so no .env loaded. Same reading for skills and plugins dirs."""
+    return clean_secret(raw) or default
+
+
+def env_path(raw: Any, default: str) -> Path:
+    return Path(env_path_text(raw, default)).expanduser()
+
+
+def env_file() -> Path:
+    """AVRONE_ENV_FILE, or .env. Round 78: a blank value was Path("") (the cwd itself, never a
+    file), so AVRONE_ENV_FILE= silently loaded no .env at all. Round 89: quoted blank too."""
+    return env_path(os.getenv("AVRONE_ENV_FILE"), ".env")
+
+
+_load_dotenv(env_file())
 
 
 # ------------------------------------------------------------ provider presets
@@ -85,7 +268,8 @@ def resolve_provider(provider: str | None, base_url: str | None = None, model: s
     An empty api key is allowed (a proxy may inject auth, or the backend needs none).
     """
     env = os.environ if env is None else env
-    name = (provider or "openclaw").strip().lower()
+    # round 88: '"xai"' (a compose .env keeps the quotes) raised at import, so the server never started
+    name = switch_word(provider, "openclaw") if isinstance(provider, str) else "openclaw"
     if name not in PROVIDERS:
         raise ValueError(f"Unknown AVRONE_PROVIDER {provider!r}. Choose one of: {', '.join(PROVIDERS)}")
     p_url, p_model, key_env = PROVIDERS[name]
@@ -146,10 +330,13 @@ def _num(raw: str | None, default: float, cast: type) -> float:
     if not v:
         return default
     try:
+        if not v.isascii():  # round 78: float() took "\uff12" and Arabic-Indic digits
+            raise ValueError
         f = float(v)
     except ValueError:
         import sys
-        print(f"AVRONE: ignoring bad number {raw!r}; using {default}", file=sys.stderr)
+        shown = repr(raw[:40] + ("..." if len(raw) > 40 else "")) if isinstance(raw, str) else repr(raw)
+        print(f"AVRONE: ignoring bad number {shown}; using {default}", file=sys.stderr)
         return default
     if f != f or f in (float("inf"), float("-inf")):
         return default
@@ -166,12 +353,42 @@ def _float(name: str, default: float):
     return lambda: float(_num(os.getenv(name), default, float))
 
 
-def _bool(name: str, default: bool):
-    return lambda: os.getenv(name, str(default)).lower() in {"1", "true", "yes", "on"}
+TRUE_WORDS = frozenset({"1", "true", "yes", "on", "y", "enable", "enabled"})
+FALSE_WORDS = frozenset({"0", "false", "no", "off", "n", "disable", "disabled", "none"})
+
+
+def parse_bool(raw: str | None, default: bool, blank: bool | None = None) -> bool:
+    """An on/off env value. Round 78: "TRUE " (trailing space), " 1", '"true"' were False, and a
+    blank value (AVRONE_GOVERNOR=) turned a default-on setting off. Values are trimmed, unquoted
+    and case-folded; blank means the default; an unknown word stays False (as before) but is
+    reported, since an on/off switch must never be on by accident. ``blank`` overrides what a
+    blank value means: permission switches (network, shell) pass blank=False, so an empty line
+    keeps them off exactly as before round 78."""
+    if raw is None:
+        return default
+    v = _unquote(raw).strip().lower()
+    if not v:
+        return default if blank is None else blank
+    if v in TRUE_WORDS:
+        return True
+    if v not in FALSE_WORDS:
+        import sys
+        print(f"AVRONE: unknown on/off value {raw[:40]!r}; treating it as off", file=sys.stderr)
+    return False
+
+
+def _bool(name: str, default: bool, blank: bool | None = None):
+    return lambda: parse_bool(os.getenv(name), default, blank)
 
 
 def _path(name: str, default: str):
-    return lambda: Path(os.getenv(name, default)).resolve()
+    """A directory setting. Round 77: AVRONE_DATA_DIR= (blank, as an .env line with no value
+    leaves it) was Path("").resolve() - the process cwd - so data and the agent workspace landed in
+    whatever directory the server was started from (for the workspace: the repo itself). Blank or
+    whitespace now means the default, and a leading ~ is expanded instead of making a "~" folder."""
+    def make() -> Path:
+        return env_path(os.getenv(name), default).resolve()  # round 89: quotes/padding cleaned
+    return make
 
 
 @dataclass
@@ -214,21 +431,95 @@ class Settings:
     workspace: Path = field(default_factory=_path("AVRONE_WORKSPACE", "./workspace"))
     runner: str = field(default_factory=_env("AVRONE_RUNNER", "auto"))  # auto | docker | local
     docker_image: str = field(default_factory=_env("AVRONE_DOCKER_IMAGE", "python:3.12-slim"))
-    allow_network: bool = field(default_factory=_bool("AVRONE_ALLOW_NETWORK", True))
+    allow_network: bool = field(default_factory=_bool("AVRONE_ALLOW_NETWORK", True, blank=False))
     command_timeout: int = field(default_factory=_int("AVRONE_COMMAND_TIMEOUT", 120))
 
     # --- Access control ---
     admin_token: str = field(default_factory=_env("AVRONE_ADMIN_TOKEN"))
     # Rotation grace for /api/blackboard only. Kept verbatim: os.getenv does not strip.
     admin_token_previous: str = field(default_factory=_env("AVRONE_ADMIN_TOKEN_PREVIOUS"))
-    agents_can_shell: bool = field(default_factory=_bool("AVRONE_AGENTS_CAN_SHELL", True))
+    agents_can_shell: bool = field(default_factory=_bool("AVRONE_AGENTS_CAN_SHELL", True, blank=False))
 
     # --- Eternal CodeX (persistent logs and memory) ---
     data_dir: Path = field(default_factory=_path("AVRONE_DATA_DIR", "./data"))
 
     def __post_init__(self) -> None:
+        clean_text_settings(self)
         self.provider, self.llm_base_url, self.llm_model, self.llm_api_key = resolve_provider(
             self.provider, self.llm_base_url, self.llm_model, self.llm_api_key)
+        bound_settings(self)
+        # admin tokens stay exact and untrimmed on purpose (test_previous_token_is_exact_and_untrimmed)
+
+
+# round 88: field -> blank value. The word settings were read raw: AVRONE_RUNNER='"docker"', "Docker"
+# or "docker " was not "docker" or "auto", so sovereign.establish booted the LOCAL (unsandboxed)
+# runner; AVRONE_LLM_MODE='"mock"' or "Mock" called a live model; a blank AVRONE_RUNNER= did the
+# same local fallback; a quoted AVRONE_DOCKER_IMAGE failed check_image. Words are cleaned and
+# lower-cased, blank means the default; an unknown runner word stays as written so doctor still
+# reports it.
+WORD_SETTINGS: dict[str, str] = {"llm_mode": "live", "runner": "auto"}
+TEXT_SETTINGS: dict[str, str] = {"docker_image": "python:3.12-slim", "lead_model": "", "llm_model": "",
+                                 "llm_fallbacks": ""}
+
+
+def clean_text_settings(s: Any) -> None:
+    for name, blank in WORD_SETTINGS.items():
+        v = getattr(s, name, None)
+        if isinstance(v, str):
+            setattr(s, name, switch_word(v, blank))
+    for name, blank in TEXT_SETTINGS.items():
+        v = getattr(s, name, None)
+        if isinstance(v, str):
+            setattr(s, name, clean_secret(v) or blank)
+
+
+# round 78/79: field -> (lowest allowed, highest allowed, value used below the lowest).
+# Before round 79 nothing bounded these: AVRONE_MAX_STEPS=0 gave every agent zero turns,
+# AVRONE_LLM_TIMEOUT=0 or -1 failed every model call at once, AVRONE_LLM_BACKOFF=1e300 made the
+# first retry sleep forever, AVRONE_BREAKER_COOLDOWN=1e300 opened a breaker for good.
+SETTING_BOUNDS: dict[str, tuple[float, float, float]] = {
+    "llm_timeout": (1, 3600, 180),
+    "llm_retries": (1, 20, 1),
+    "llm_backoff": (0, 60, 0),
+    "breaker_threshold": (1, 1000, 1),
+    "breaker_cooldown": (0, 3600, 0),
+    "squad_size": (1, 64, 1),  # trinity still runs at most 8
+    "deep_squad_size": (0, 64, 0),
+    "max_parallel": (1, 4096, 1),
+    "max_steps": (1, 1000, 1),
+    "max_spawn_depth": (0, 16, 0),
+    "agent_timeout": (0, 86400, 0),
+    "min_parallel": (1, 4096, 1),
+    "thermal_max_c": (1, 150, 85),
+    "command_timeout": (1, 86400, 120),
+}
+
+
+def bound_setting(name: str, value: Any, default: Any = None) -> Any:
+    """``value`` inside SETTING_BOUNDS[name]; a non-number, NaN or bool becomes the low fallback
+    (or ``default`` when given), a value below the floor the fallback, above the ceiling the
+    ceiling. Float fields come back as float, the rest as int."""
+    lo, hi, below = SETTING_BOUNDS[name]
+    fallback = below if default is None else default
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        out = fallback
+    elif value < lo:
+        out = fallback
+    elif value > hi:
+        out = hi
+    else:
+        out = value
+    return float(out) if name in _FLOAT_FIELDS else int(out)
+
+
+_FLOAT_FIELDS = frozenset({"llm_timeout", "llm_backoff", "breaker_cooldown", "agent_timeout",
+                           "thermal_max_c"})
+
+
+def bound_settings(s: Any) -> None:
+    for name in SETTING_BOUNDS:
+        if hasattr(s, name):
+            setattr(s, name, bound_setting(name, getattr(s, name)))
 
 
 settings = Settings()

@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v137",
+  "finding": "The script moves an unreadable stage file aside and continues. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Note: root may bypass [ -r ]; non-root is the enforcement surface. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "unreadable": "move aside for non-root",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The stage-unreadable check holds for non-root."
+}

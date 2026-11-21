@@ -29,12 +29,21 @@ import asyncio
 import os
 import re
 import socket
+import unicodedata
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from . import agentfs
+from . import agentfs, textsafe
+
+
+def _text(v: Any) -> str:
+    """A docker result field as text. Round 73: bytes went through str(), so b"" became "b''" (not
+    empty) and container_gone never fired for a byte-returning exec_fn."""
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", "replace")
+    return "" if v is None else str(v)
 
 DEFAULT_MEM_MB, MIN_MEM_MB, MAX_MEM_MB = 512, 64, 65536
 DEFAULT_CPUS, MIN_CPUS, MAX_CPUS = 1.0, 0.1, 64.0
@@ -46,15 +55,15 @@ _NAME_BAD = re.compile(r"[^a-z0-9_.-]+")
 
 def container_mode() -> str:
     """'persistent' or 'off' (anything unrecognised is off: fails closed to v0.16 behaviour)."""
-    v = (os.environ.get("AVRONE_AGENT_CONTAINER") or "off").strip().lower()
+    from .config import switch_word
+    v = switch_word(os.environ.get("AVRONE_AGENT_CONTAINER"), "off")
     return "persistent" if v == "persistent" else "off"
 
 
 def _num(name: str, default: float, lo: float, hi: float) -> float:
-    try:
-        v = float((os.environ.get(name) or "").strip() or default)
-    except ValueError:
-        v = default
+    from .config import env_num  # round 86: '"2"' was the default, fullwidth digits counted
+    raw = env_num(name)
+    v = default if raw is None else raw
     if v != v or v <= 0:  # NaN / non-positive
         v = default
     return max(lo, min(hi, v))
@@ -63,6 +72,8 @@ def _num(name: str, default: float, lo: float, hi: float) -> float:
 def _clamp_num(v: Any, default: Any, lo: float, hi: float, cast: Callable[[float], Any]) -> Any:
     """An explicit mem/cpu value: NaN, 0, negative, junk or huge used to reach docker verbatim
     ("--cpus nan", "--memory 0m" = unlimited, OverflowError on inf)."""
+    if isinstance(v, bool):  # round 73: True read as 1.0 (the minimum), not "use the default"
+        return default
     try:
         f = float(v)
     except (TypeError, ValueError, OverflowError):
@@ -85,7 +96,9 @@ def idle_secs() -> float:
 
 
 def local_node_id() -> str:
+    # round 89: NFKC first, so a fullwidth "ＭＡＣ１" is "mac1" rather than collapsing to "node"
     raw = (os.environ.get("AVRONE_NODE_ID") or "").strip() or socket.gethostname()
+    raw = unicodedata.normalize("NFKC", raw)
     return _NAME_BAD.sub("-", raw.lower()).strip("-.")[:40] or "node"
 
 
@@ -107,9 +120,25 @@ def hardening_args(allow_network: bool, mem: int | None = None, cpu: float | Non
     return args
 
 
+_IMAGE_OK = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,511}\Z")
+
+
+def check_image(image: Any) -> str:
+    """The image reference, or ValueError. Round 60: the image is the first positional argument
+    of `docker run`, so AVRONE_DOCKER_IMAGE="--privileged" (or "-v=/:/host") was parsed as an
+    option: the home ran privileged with image "sleep". A reference starts with a letter or digit
+    and holds only name/tag/digest characters (no spaces, controls or leading '-')."""
+    s = image if isinstance(image, str) else ""
+    if not _IMAGE_OK.match(s):
+        raise ValueError(f"invalid docker image reference {str(image)[:80]!r}: it must start with a letter or "
+                         "digit and contain only letters, digits and ._/:@+-")
+    return s
+
+
 def persistent_run_argv(name: str, host_dir: Path, image: str, allow_network: bool,
                         mem: int | None = None, cpu: float | None = None, agent_id: str = "") -> list[str]:
     """`docker run -d` for a long-lived agent home: ONLY the agent dir is mounted, at /agent."""
+    image = check_image(image)
     mnt = agentfs.CONTAINER_AGENT_MOUNT
     labels = ["--label", "avrone.agent-home=1"]
     if agent_id:
@@ -153,8 +182,8 @@ def container_gone(res: Any, name: str) -> bool:
     """True when docker refused to run the command because the container is gone or stopped
     (daemon restart, OOM kill, someone ran `docker rm`). The command never started, so a retry
     after recreating the container cannot run it twice."""
-    err = str(getattr(res, "stderr", "") or "")
-    return (getattr(res, "exit_code", 0) in (1, 125, 126) and not str(getattr(res, "stdout", "") or "").strip()
+    err = _text(getattr(res, "stderr", ""))
+    return (getattr(res, "exit_code", 0) in (1, 125, 126) and not _text(getattr(res, "stdout", "")).strip()
             and bool(_DEAD_RE.search(err)))
 
 
@@ -174,7 +203,11 @@ def inspect_argv(name: str) -> list[str]:
 def parse_inspect(stdout: Any) -> tuple[bool, str]:
     """(running, mounted host dir or "") from inspect_argv's output. Older output (just "true")
     reports no mount, which is accepted as before."""
-    text = str(stdout or "").strip().splitlines()
+    if isinstance(stdout, (bytes, bytearray)):  # round 60: str(b"true|/x") was "b'true|/x'" = not running,
+        stdout = bytes(stdout).decode("utf-8", "replace")  # so a live home got rm -f'd and recreated
+    # split on \n only (round 73): splitlines() also broke a mount path at U+2028/U+0085/\x1c, so a
+    # live home whose dir name held one read as "mounts something else" and was refused as foreign
+    text = str(stdout or "").strip().split("\n")
     first = text[0] if text else ""
     state, _, src = first.partition("|")
     return state.strip().lower() == "true", src.strip()
@@ -205,6 +238,7 @@ class _Home:
     last_used: float
     created: float = 0.0
     uses: int = 0
+    active: int = 0  # commands running in it now (round 60): never reaped while > 0
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -249,6 +283,9 @@ class AgentContainerPool:
             now = self.clock()
             home = self.homes.get(name)
             if home is not None:
+                if home.agent_dir != d:  # round 60: never hand one agent's home to another dir
+                    raise ForeignContainer(f"container {name} is the home of {str(home.agent_dir)!r}, "
+                                           f"not {str(d)!r}")
                 home.last_used, home.uses = now, home.uses + 1
                 return name
             res = await self._exec(inspect_argv(name), 30)
@@ -263,11 +300,28 @@ class AgentContainerPool:
                 await self._exec(rm_argv(name), 30)  # a stopped leftover with that name; ignore errors
                 res = await self._exec(self.run_argv(d), 300)
                 if getattr(res, "exit_code", 1) != 0:
-                    raise RuntimeError(f"could not start agent container {name}: "
-                                       f"{str(getattr(res, 'stderr', ''))[:300]}")
+                    # round 73: raw stderr (bytes repr, ANSI, newlines) went straight into the message
+                    err = textsafe.escape(" ".join(_text(getattr(res, "stderr", "")).split()))[:300]
+                    raise RuntimeError(f"could not start agent container {name}: {err}")
                 self.created += 1
             self.homes[name] = _Home(name, d, now, created=now, uses=1)
             return name
+
+    def begin(self, name: str) -> None:
+        """A command starts in `name`. Round 60: idleness was measured from ensure(), so a command
+        running longer than AVRONE_AGENT_IDLE_SECS had its container rm -f'd under it as soon as
+        any other agent called ensure() (the reaper saw it as idle). Pair with end()."""
+        h = self.homes.get(name)
+        if h is not None:
+            h.active += 1
+            h.last_used = self.clock()
+
+    def end(self, name: str) -> None:
+        """The command started by begin() finished: idleness counts from now."""
+        h = self.homes.get(name)
+        if h is not None:
+            h.active = max(0, h.active - 1)
+            h.last_used = self.clock()
 
     async def forget(self, name: str) -> None:
         """Drop a home whose container died, so the next ensure() recreates it."""
@@ -283,7 +337,8 @@ class AgentContainerPool:
         # record, inspected the still-running container, re-registered and handed it out, and the
         # reaper's rm -f killed it under the agent (its next exec failed / its state was lost).
         async with self._lock:
-            stale = [h for n, h in self.homes.items() if n != skip and now - h.last_used >= limit]
+            stale = [h for n, h in self.homes.items()
+                     if n != skip and h.active <= 0 and now - h.last_used >= limit]
             for h in stale:
                 del self.homes[h.name]
             for h in stale:
@@ -308,5 +363,6 @@ class AgentContainerPool:
         now = self.clock()
         return {"mode": "persistent", "node": self.node, "idle_secs": self.idle_after,
                 "created": self.created, "reaped": self.reaped,
-                "homes": {n: {"agent": h.agent_dir.name, "uses": h.uses, "idle_s": round(now - h.last_used, 1)}
+                "homes": {n: {"agent": h.agent_dir.name, "uses": h.uses, "active": h.active,
+                              "idle_s": 0.0 if h.active else round(max(0.0, now - h.last_used), 1)}
                           for n, h in self.homes.items()}}

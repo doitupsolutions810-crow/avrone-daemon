@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v107",
+  "finding": "The script refuses when Ollama is restarted more than 3 times. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "limit": 3,
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The ollama-restart-limit check holds."
+}

@@ -44,16 +44,53 @@ FLAKE_PROBE_MAX_CHARS = 8000
 _TIMEOUT_MARK = "\x00flake_probe:timeout\x00"
 
 
+class _Timeout(str):
+    """A run that timed out. Round 47: a plain string mark meant a tool that returned those exact
+    characters counted as a timeout; identity (``is``) can not be forged by output."""
+
+
+_TIMEOUT = _Timeout(_TIMEOUT_MARK)
+
+
+def _is_timeout(o: Any) -> bool:
+    return o is _TIMEOUT
+
+
+def _is_error(o: str) -> bool:
+    # round 47: the registry's own refusals start "ARG ERROR" (wrong arg types) and were not counted
+    return o.startswith("ERROR") or o.startswith("ARG ERROR")
+
+
 def _digest(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8", errors="replace")).hexdigest()[:12]
+    # round 62: errors="replace" turned every lone surrogate into "?", so "a\ud800" and "a\ud801"
+    # had one digest: the report said 1 distinct output while counting 1 differing run
+    return hashlib.sha256(s.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+
+
+def _lines(s: str, keepends: bool = False) -> list[str]:
+    """Lines split on \\n only (round 62): splitlines() also broke at U+2028, \\x0c, \\x1c ... so a
+    tool output holding one named a line number that does not exist in the \\n-split text."""
+    parts = s.split("\n")
+    if keepends:
+        out = [x + "\n" for x in parts[:-1]]
+        return out + ([parts[-1]] if parts[-1] else [])
+    return parts[:-1] + ([parts[-1]] if parts[-1] else [])
 
 
 def _first_diff_line(a: str, b: str) -> int:
-    la, lb = a.splitlines(), b.splitlines()
+    """1-based line where a and b first differ, line endings included. Round 47: endings were
+    dropped, so "x\r\n" vs "x\n" and "x" vs "x\n" named a line one past the end of both."""
+    la, lb = _lines(a), _lines(b)
     for i, (x, y) in enumerate(zip(la, lb), 1):
         if x != y:
             return i
-    return min(len(la), len(lb)) + 1
+    if len(la) != len(lb):
+        return min(len(la), len(lb)) + 1  # the first extra line, which exists in the longer one
+    ka, kb = _lines(a, True), _lines(b, True)
+    for i, (x, y) in enumerate(zip(ka, kb), 1):
+        if x != y:  # same text, different line ending
+            return i
+    return max(1, len(la))  # cannot happen for a != b; never a line past the end
 
 
 async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args: dict[str, Any],
@@ -68,21 +105,36 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
             budget_hit = True
             break
         s = time.monotonic()
+        # round 47: a run started near the end of the budget could overrun it by a full
+        # run_timeout; later runs get only what is left of the budget
+        left = run_timeout if not i else max(0.001, min(run_timeout, budget - (s - t0)))
         try:
-            out = await asyncio.wait_for(reg.call(ctx, name, copy.deepcopy(args)), run_timeout)
+            out = await asyncio.wait_for(reg.call(ctx, name, copy.deepcopy(args)), left)
         except asyncio.TimeoutError:
-            out = _TIMEOUT_MARK
+            out = _TIMEOUT
+        except Exception as e:  # noqa: BLE001 - round 47: one raising run sank the whole probe
+            out = f"ERROR: {type(e).__name__} raised"
         times.append(time.monotonic() - s)
-        outs.append(out if isinstance(out, str) else str(out))
+        if out is not _TIMEOUT:
+            if isinstance(out, (bytes, bytearray)):
+                out = bytes(out).decode("utf-8", "replace")
+            elif not isinstance(out, str):
+                try:
+                    out = str(out)
+                except Exception as e:  # noqa: BLE001 - a hostile __str__
+                    out = f"ERROR: unprintable {type(out).__name__} output ({type(e).__name__})"
+            else:
+                out = str.__str__(out)  # a str subclass never passes for the timeout sentinel
+        outs.append(out)
     n = len(outs)
     first = outs[0]
-    differing = [i + 1 for i, o in enumerate(outs) if o != first]
+    differing = [i + 1 for i, o in enumerate(outs) if o != first or _is_timeout(o) != _is_timeout(first)]
     distinct: dict[str, dict[str, Any]] = {}
     for i, o in enumerate(outs, 1):
-        d = "timeout" if o == _TIMEOUT_MARK else _digest(o)
-        e = distinct.setdefault(d, {"digest": d, "chars": 0 if o == _TIMEOUT_MARK else len(o), "runs": 0, "first_run": i})
+        d = "timeout" if _is_timeout(o) else _digest(o)
+        e = distinct.setdefault(d, {"digest": d, "chars": 0 if _is_timeout(o) else len(o), "runs": 0, "first_run": i})
         e["runs"] += 1
-    diffs = [{"run": r, "first_diff_line": None if _TIMEOUT_MARK in (first, outs[r - 1])
+    diffs = [{"run": r, "first_diff_line": None if _is_timeout(first) or _is_timeout(outs[r - 1])
               else _first_diff_line(first, outs[r - 1])} for r in differing[:FLAKE_PROBE_MAX_LISTED]]
     return {
         "tool": name, "runs_requested": runs, "runs": n, "budget_hit": budget_hit,
@@ -90,8 +142,8 @@ async def flake_probe(ctx: "AgentContext", reg: Any, name: str, runs: int, args:
         "outputs": list(distinct.values())[:FLAKE_PROBE_MAX_LISTED],
         "outputs_hidden": max(0, len(distinct) - FLAKE_PROBE_MAX_LISTED),
         "diffs": diffs, "diffs_hidden": max(0, len(differing) - FLAKE_PROBE_MAX_LISTED),
-        "errors": sum(1 for o in outs if o.startswith("ERROR")),
-        "timeouts": sum(1 for o in outs if o == _TIMEOUT_MARK),
+        "errors": sum(1 for o in outs if not _is_timeout(o) and _is_error(o)),
+        "timeouts": sum(1 for o in outs if _is_timeout(o)),
         "ms": {"min": round(min(times) * 1000, 1), "max": round(max(times) * 1000, 1),
                "total": round(sum(times) * 1000, 1)},
         "great_scale": evidence_snapshot(failures=len(differing), runs=n),
@@ -103,7 +155,13 @@ def _cap(text: str) -> str:
 
 
 async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
-    name = str(args.get("tool") or "").strip()
+    if not isinstance(args, dict):  # round 75: null/list/str args raised AttributeError
+        args = {}
+    raw_name = args.get("tool")
+    if raw_name is not None and not isinstance(raw_name, str):
+        # round 75: ["env_report"] / {"a": 1} were str()-ed into the allow-list check
+        return "ERROR: tool must be text (one of: " + ", ".join(FLAKE_PROBE_ALLOWED) + ")"
+    name = (raw_name or "").strip()
     if not name:
         return "ERROR: give tool (one of: " + ", ".join(FLAKE_PROBE_ALLOWED) + ")"
     if name == FLAKE_PROBE_NAME:
@@ -114,27 +172,39 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     runs = args.get("runs", 5)
     if runs is None or runs == "":
         runs = 5
-    if isinstance(runs, bool):
+    # round 47: int(1e999) raised OverflowError, 2.7 ran twice, "1_0" ran ten times
+    from .argnum import tool_int
+    if isinstance(runs, float) and not (runs == runs and runs not in (float("inf"), float("-inf"))
+                                        and runs.is_integer()):
         return "ERROR: runs must be an integer 1..50"
-    try:
-        runs = int(runs)
-    except (TypeError, ValueError):
+    runs = tool_int(runs, 5, bad=None)
+    if runs is None:
         return "ERROR: runs must be an integer 1..50"
     if not 1 <= runs <= FLAKE_PROBE_MAX_RUNS:
         return f"ERROR: runs must be 1..{FLAKE_PROBE_MAX_RUNS}"
+    fmt = args.get("format", "text")
+    fmt = "text" if fmt is None else fmt
+    if not isinstance(fmt, str) or fmt.strip().lower() not in ("text", "json", ""):
+        # round 75: ["json"] or "xml" silently fell back to text
+        return 'ERROR: format must be "text" or "json"'
+    want_json = fmt.strip().lower() == "json"
     targs = args.get("args")
     if targs is None:
         targs = {}
     if not isinstance(targs, dict):
         return "ERROR: args must be an object (the args passed to every run)"
     try:
-        encoded = json.dumps(targs, sort_keys=True)
+        # round 47: allow_nan=False (NaN/Infinity args are not JSON); non-str keys were
+        # silently turned into strings by dumps, so {1: "a"} and {"1": "a"} probed the same
+        encoded = json.dumps(targs, sort_keys=True, allow_nan=False)
+        if json.loads(encoded) != targs:  # a non-str key at any depth, a tuple, a str subclass key...
+            raise TypeError("args do not survive a JSON round trip")
     except (TypeError, ValueError, RecursionError):
         return "ERROR: args must be plain JSON"
     if len(encoded) > FLAKE_PROBE_MAX_ARGS_CHARS:
         return f"ERROR: args are longer than {FLAKE_PROBE_MAX_ARGS_CHARS} chars of JSON"
     targs = json.loads(encoded)  # plain data only: no shared objects between runs
-    reg = getattr(ctx.core, "tools", None)
+    reg = getattr(getattr(ctx, "core", None), "tools", None)  # round 75: a ctx with no core raised
     if reg is None or not callable(getattr(reg, "get", None)) or not callable(getattr(reg, "call", None)):
         return "ERROR: the tool registry is not available"
     tool = reg.get(name)
@@ -145,9 +215,14 @@ async def t_flake_probe(ctx: "AgentContext", args: dict[str, Any]) -> str:
     if callable(getattr(reg, "check", None)):
         bad = reg.check(name, targs)
         if bad:
-            return f"ERROR: args rejected by {name}'s schema: {bad[1]}"
+            # round 75: bad[1] on a str showed one character, a 1-tuple or True raised; the
+            # reason is also flattened so a newline in it cannot add a forged report line
+            from .tools import one_line
+            why = bad[1] if isinstance(bad, (tuple, list)) and len(bad) > 1 else bad
+            why = one_line(why if isinstance(why, str) else "invalid args")[:300]
+            return f"ERROR: args rejected by {name}'s schema: {why}"
     rep = await flake_probe(ctx, reg, name, runs, targs)
-    if str(args.get("format", "text")).lower() == "json":
+    if want_json:
         return _cap(json.dumps(rep, indent=1, sort_keys=True))
     g = rep["great_scale"]
     verdict = ("deterministic" if rep["differing_runs"] == 0 else

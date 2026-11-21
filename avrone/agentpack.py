@@ -46,7 +46,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from . import agentfs, memstore
+from . import agentfs, memstore, textsafe
 from .agentfs_tools import dir_usage, quota_bytes
 
 FORMAT = "avrone-agentpack/1"
@@ -105,17 +105,59 @@ def load_index(data_dir: Path) -> dict[str, dict[str, Any]]:
         return {}
 
 
+def _load_index_for_write(data_dir: Path) -> dict[str, dict[str, Any]]:
+    """The index record() will rewrite. Round 139: record() used load_index, which returns {} on
+    any failure. One EMFILE, EIO or EACCES while reading, or a file over INDEX_MAX_BYTES, then
+    rewrote index.json with only the agent being recorded. Every other agent's home record was
+    erased, and their imports were refused later with "belongs to another agent".
+    A read error is now a PackError and nothing is written. Unparsable content is kept as
+    index.json.corrupt-<ts> before a fresh index starts, the same way the task board keeps it."""
+    from .safeio import FileTooBig, read_capped
+    p = _index_path(data_dir)
+    try:
+        raw = read_capped(p, INDEX_MAX_BYTES)
+    except FileNotFoundError:
+        return {}
+    except FileTooBig:
+        raw = b"\x00"  # unusable: kept aside below, never overwritten in place
+    except OSError as e:
+        raise PackError(f"agent index unreadable, not rewritten: {type(e).__name__}: {e.strerror or e}"[:300]) from None
+    if raw is None:
+        if not os.path.lexists(p):
+            return {}
+        raw = b"\x00"  # a symlink, FIFO or directory where index.json belongs
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        d = None
+    if isinstance(d, dict):
+        return d
+    try:
+        os.replace(p, p.with_name(f"{p.name}.corrupt-{int(time.time())}-{secrets.token_hex(3)}"))
+    except OSError as e:
+        raise PackError(f"agent index unusable and could not be set aside: {type(e).__name__}"[:300]) from None
+    return {}
+
+
 def _save_index(data_dir: Path, idx: dict[str, Any]) -> None:
     p = _index_path(data_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f".index.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp")
-    tmp.write_text(json.dumps(idx, indent=2, sort_keys=True))
-    os.replace(tmp, p)
+    try:
+        tmp.write_text(json.dumps(idx, indent=2, sort_keys=True))
+        os.replace(tmp, p)
+    except BaseException:
+        # round 139: a full disk left a partial .index.*.tmp behind on every failed record()
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def record(data_dir: Path, agent_id: str, **kw: Any) -> None:
     with _INDEX_LOCK:
-        idx = load_index(data_dir)
+        idx = _load_index_for_write(data_dir)
         idx.setdefault(agent_id, {}).update(kw)
         _save_index(data_dir, idx)
 
@@ -154,24 +196,33 @@ def _memory_records(data_dir: Path, agent_id: str) -> list[dict[str, Any]]:
         return []
     space = memstore.MemoryStore(mp).load(agent_id)
     recs = [{"ns": agent_id, "key": str(r["key"]), "value": str(r.get("value", "")),
-             "ts": float(r.get("ts", 0)), "agent": str(r.get("agent", ""))[:100]} for r in space.values()]
+             "ts": memstore._ts(r.get("ts", 0)), "agent": str(r.get("agent", ""))[:100]} for r in space.values()]
     recs.sort(key=lambda r: (r["key"], r["ts"]))
     return recs
 
 
-def content_stamp(workspace: Path, data_dir: Path, agent_id: str) -> int:
-    """Newest content timestamp (int seconds) of an agent's home: file mtimes + memory ts."""
+def content_stamp(workspace: Path, data_dir: Path, agent_id: str, now: float | None = None) -> int:
+    """Newest content timestamp (int seconds) of an agent's home: file mtimes + memory ts.
+
+    Round 89/90: each reading is clamped to ``now``. One memory record with ts 1e308 (memstore keeps
+    any finite float) or one file touched to 2200 (an install clamps pack mtimes only to 2**33)
+    pinned the stamp in the future, so every later pack for this agent was refused as "not newer"
+    for good, and the refusal printed a 309-digit number. Future content now counts as "now":
+    a pack created after this moment still wins, an older one is still refused."""
+    cap = int(time.time() if now is None else now)
     d = agentfs.agents_root(workspace) / agentfs.sanitize_agent_id(agent_id)
     stamp = 0
     if d.is_dir() and not d.is_symlink():
         for cur, _dirs, files in os.walk(d, followlinks=False):
             for f in files:
                 try:
-                    stamp = max(stamp, int(os.lstat(os.path.join(cur, f)).st_mtime))
+                    mt = os.lstat(os.path.join(cur, f)).st_mtime
                 except OSError:
                     continue
+                if mt == mt:
+                    stamp = max(stamp, min(cap, int(max(0.0, min(float(cap), mt)))))
     for r in _memory_records(data_dir, agentfs.sanitize_agent_id(agent_id)):
-        stamp = max(stamp, int(r["ts"]))
+        stamp = max(stamp, int(max(0.0, min(float(cap), r["ts"]))))
     return stamp
 
 
@@ -194,6 +245,17 @@ def export_pack(workspace: Path, data_dir: Path, agent_id: str, origin: str, hom
     if d.is_symlink():
         raise PackError("agent dir must not be a symlink")
     files = _walk(d) if d.is_dir() else []
+    for rel, _, _ in files:
+        # round 72: names the receiving node refuses (invalid UTF-8, a backslash, control or bidi
+        # characters, Notes.md beside notes.md) exported fine and failed only after the transfer
+        try:
+            _check_rel(rel)
+        except PackError as e:
+            raise PackError(f"agent home has a file name another node cannot take: {e}") from None
+    try:
+        _check_names([rel for rel, _, _ in files])
+    except PackError as e:
+        raise PackError(f"agent home cannot be packed: {e}") from None
     total = sum(st.st_size for _, _, st in files)
     quota = quota_bytes()
     if total > quota:
@@ -250,8 +312,10 @@ def _check_rel(rel: str) -> str:
     parts = rel.split("/")
     if any(p in ("", ".", "..") for p in parts) or "\\" in rel:
         raise PackError(f"path traversal in pack: {rel!r}")
-    if any(ord(c) < 32 or ord(c) == 127 for c in rel):
-        # newline/escape bytes in a file name break every log line and terminal listing that shows it
+    if textsafe.UNSAFE_ONE.search(rel):
+        # newline/escape bytes in a file name break every log line and terminal listing that shows it;
+        # round 72: C1 controls (U+0085 is a newline to many tools), U+2028/2029 and bidi overrides
+        # ("invoice\u202etxt.exe" displays as "invoiceexe.txt") passed the old C0/DEL-only check
         raise PackError(f"control character in pack path: {rel!r}")
     try:
         raw = rel.encode("utf-8")
@@ -266,6 +330,25 @@ def fold_path(rel: str) -> str:
     """How a case-insensitive, normalization-insensitive filesystem (macOS APFS/HFS+ default,
     exFAT) sees a path: NFC + casefold."""
     return unicodedata.normalize("NFC", rel).casefold()
+
+
+def _check_names(rels: Any) -> None:
+    """Refuse names that collide on a case-insensitive filesystem or put a file under a file."""
+    rels = list(rels)
+    folded: dict[str, str] = {}
+    for rel in rels:
+        f = fold_path(rel)
+        if f in folded:
+            # on a Mac (case-insensitive APFS) "Notes.md" and "notes.md" are ONE file: the second
+            # write silently replaced the first, so the import "succeeded" with a file missing
+            raise PackError(f"path conflict in pack: {folded[f]!r} and {rel!r} are the same file on a "
+                            "case-insensitive filesystem (macOS); rename one on the sending node")
+        folded[f] = rel
+    for rel in rels:  # a file may not also be a directory ("a" and "a/b"), in any case
+        parts = rel.split("/")
+        for i in range(1, len(parts)):
+            if fold_path("/".join(parts[:i])) in folded:
+                raise PackError(f"path conflict in pack: {rel!r} is under a file")
 
 
 def zlib_error() -> type[Exception]:
@@ -313,6 +396,8 @@ def read_pack_file(p: Path) -> bytes:
 
 def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, bytes]]:
     """Parse and fully verify a bundle in memory. Returns (manifest, memory records, {rel: bytes})."""
+    if not isinstance(bundle, (bytes, bytearray, memoryview)):
+        raise PackError(f"bundle must be bytes, not {type(bundle).__name__}")
     quota = quota_bytes()
     if len(bundle) > quota + 1024 * 1024:
         raise PackError(f"bundle is {len(bundle)} bytes; over the quota")
@@ -377,7 +462,7 @@ def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict
     if not isinstance(aid, str) or agentfs.sanitize_agent_id(aid) != aid:
         raise PackError("bad agent_id in manifest")
     for k in ("origin", "home"):
-        if not isinstance(manifest.get(k), str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}$", manifest[k]):
+        if not isinstance(manifest.get(k), str) or not re.match(r"^[a-z0-9][a-z0-9_-]{0,62}\Z", manifest[k]):
             raise PackError(f"bad {k} in manifest")
     if not isinstance(manifest.get("created"), int) or isinstance(manifest.get("created"), bool):
         raise PackError("bad created in manifest")
@@ -410,23 +495,19 @@ def read_pack(bundle: bytes) -> tuple[dict[str, Any], list[dict[str, Any]], dict
         total += len(data)
     if total > quota:
         raise PackError(f"pack holds {total} bytes; over the agent-fs quota of {quota} bytes")
-    folded: dict[str, str] = {}
-    for rel in blobs:
-        f = fold_path(rel)
-        if f in folded:
-            # on a Mac (case-insensitive APFS) "Notes.md" and "notes.md" are ONE file: the second
-            # write silently replaced the first, so the import "succeeded" with a file missing
-            raise PackError(f"path conflict in pack: {folded[f]!r} and {rel!r} are the same file on a "
-                            "case-insensitive filesystem (macOS); rename one on the sending node")
-        folded[f] = rel
-    for rel in blobs:  # a file may not also be a directory ("a" and "a/b"), in any case
-        parts = rel.split("/")
-        for i in range(1, len(parts)):
-            if fold_path("/".join(parts[:i])) in folded:
-                raise PackError(f"path conflict in pack: {rel!r} is under a file")
+    _check_names(blobs)
     if not 0 <= manifest["created"] < 2**40:
         raise PackError("bad created in manifest")
-    if _sha(mem) != (manifest.get("memory") or {}).get("sha256"):
+    mm = manifest.get("memory")
+    if not isinstance(mm, dict):  # round 72: a list/str here was an AttributeError (a 500), not a refusal
+        raise PackError("bad memory in manifest")
+    tb = manifest.get("total_bytes")
+    if tb is not None and (isinstance(tb, bool) or not isinstance(tb, int) or tb < 0):
+        # round 72: import_pack reported whatever the sender wrote here ("bytes": "x") and a pack
+        # without it was a KeyError after the files were already installed. The result now reports
+        # the verified byte count; this field is informational, so only its type is enforced.
+        raise PackError("bad total_bytes in manifest")
+    if _sha(mem) != mm.get("sha256"):
         raise PackError("memory hash mismatch (tampered pack)")
     if not isinstance(memory, list):
         raise PackError("memory must be a list")
@@ -451,19 +532,44 @@ def import_pack(workspace: Path, data_dir: Path, bundle: bytes, local_node: str,
         try:
             _install(root, workspace, data_dir, manifest, blobs, aid, local_node)
         except OSError as e:  # e.g. a name too long for this filesystem: a refusal, not a 500
-            raise PackError(f"could not install agent pack: {type(e).__name__}: {e}"[:300]) from None
-        stats = {"merged": 0, "skipped": 0, "rejected": 0}
+            # round 72: str(e) carried the host's absolute workspace path to the sending peer
+            import errno as _errno
+            code = _errno.errorcode.get(e.errno or 0, "")
+            raise PackError(f"could not install agent pack: {type(e).__name__}"
+                            + (f" ({code})" if code else "")) from None
+        stats: dict[str, Any] = {"merged": 0, "skipped": 0, "rejected": 0}
         good = [r for r in memory if isinstance(r, dict)]
         stats["rejected"] += len(memory) - len(good)
+        # round 90: the files are already swapped in here. A full disk or a store that refused the
+        # merge raised a raw OSError (its message carrying the host path) out of import_pack: the
+        # fleet answered 500 to the sender, and agent_pack_import said "your home is unchanged"
+        # though it had been replaced. The result now says what did not land.
+        problems: dict[str, str] = {}
         if good:
-            stats = {k: stats[k] + v for k, v in
-                     memstore.MemoryStore(_memory_path(data_dir)).merge(aid, good, source=manifest["origin"]).items()}
+            try:
+                merged = memstore.MemoryStore(_memory_path(data_dir)).merge(aid, good, source=manifest["origin"])
+                stats = {k: stats[k] + v for k, v in merged.items()}
+            except (OSError, ValueError) as e:
+                problems["memory"] = _why(e)
         if manifest["home"] != local_node:
-            record(data_dir, aid, home=manifest["home"], origin=manifest["origin"], created=manifest["created"],
-                   imported=int(time.time()))
-    return {"agent_id": aid, "origin": manifest["origin"], "home": manifest["home"],
-            "created": manifest["created"], "files": len(blobs), "bytes": manifest["total_bytes"],
-            "memory": stats}
+            try:
+                record(data_dir, aid, home=manifest["home"], origin=manifest["origin"],
+                       created=manifest["created"], imported=int(time.time()))
+            except (OSError, ValueError) as e:
+                problems["home_record"] = _why(e)
+    out = {"agent_id": aid, "origin": manifest["origin"], "home": manifest["home"],
+           "created": manifest["created"], "files": len(blobs), "bytes": sum(map(len, blobs.values())),
+           "memory": stats}
+    if problems:
+        out["incomplete"] = problems
+    return out
+
+
+def _why(e: BaseException) -> str:
+    """An error as its type and errno name only: never a host path or a message from the store."""
+    import errno as _errno
+    code = _errno.errorcode.get(getattr(e, "errno", None) or 0, "") if isinstance(e, OSError) else ""
+    return type(e).__name__ + (f" ({code})" if code else "")
 
 
 def _install(root: Path, workspace: Path, data_dir: Path, manifest: dict[str, Any],
@@ -474,6 +580,10 @@ def _install(root: Path, workspace: Path, data_dir: Path, manifest: dict[str, An
     target = root / aid
     if target.is_symlink():
         raise PackError("agent dir must not be a symlink")
+    if os.path.lexists(target) and not target.is_dir():
+        # round 72: a regular file or FIFO at agents/<id> was swapped aside and then left behind as a
+        # stray .old-<id>-* entry (rmtree cannot remove a file), silently replacing whatever it was
+        raise PackError(f"agents/{aid} exists and is not a directory; refusing to replace it")
     existing = target.is_dir() and any(target.iterdir())
     have_mem = bool(_memory_records(data_dir, aid))
     if existing or have_mem:

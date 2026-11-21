@@ -19,6 +19,7 @@ Every remote tool is registered into AVRONE's ToolRegistry as
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import asyncio
 import contextlib
 import json
@@ -40,7 +41,17 @@ log = logging.getLogger("avrone.mcp")
 PROTOCOL_VERSION = "2025-06-18"
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 CLIENT_INFO = {"name": "avrone", "version": "0.2.0"}
-DEFAULT_TIMEOUT = float(os.getenv("AVRONE_MCP_TIMEOUT", "60"))
+def _default_timeout() -> float:
+    """AVRONE_MCP_TIMEOUT (default 60 s, 1..3600). Round 85: this was float(os.getenv(...)) at import
+    time, so AVRONE_MCP_TIMEOUT=60s or a blank line made `import avrone.mcp_client` raise and took
+    every MCP tool down with it; "nan" or "inf" reached httpx.Timeout and "-1" meant no wait."""
+    v = _env_num("AVRONE_MCP_TIMEOUT")
+    if v is None or v <= 0:
+        return 60.0
+    return max(1.0, min(3600.0, v))
+
+
+DEFAULT_TIMEOUT = _default_timeout()
 
 
 class MCPError(RuntimeError):
@@ -70,10 +81,8 @@ DEFAULT_MAX_RESPONSE, MIN_MAX_RESPONSE, HARD_MAX_RESPONSE = 32 * 1024 * 1024, 64
 def max_response_bytes() -> int:
     """Largest MCP reply accepted, in bytes (AVRONE_MCP_MAX_RESPONSE_BYTES): one HTTP body, one SSE
     event, or one stdio line. A server streaming without end used to grow memory without limit."""
-    try:
-        n = int(os.environ.get("AVRONE_MCP_MAX_RESPONSE_BYTES", "").strip() or DEFAULT_MAX_RESPONSE)
-    except ValueError:
-        n = DEFAULT_MAX_RESPONSE
+    n_raw = _env_num("AVRONE_MCP_MAX_RESPONSE_BYTES")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MAX_RESPONSE
     return max(MIN_MAX_RESPONSE, min(HARD_MAX_RESPONSE, n))
 
 
@@ -756,7 +765,8 @@ def args_doc_from_schema(schema: dict[str, Any] | None, limit: int = 300) -> str
 
 def load_config(path: str | os.PathLike | None = None) -> dict[str, dict[str, Any]]:
     """Read the mcpServers map. Missing file -> {}."""
-    p = Path(path or os.getenv("AVRONE_MCP_CONFIG", "./mcp.json"))
+    from .config import clean_secret  # round 87: a quoted or padded path silently meant "no servers"
+    p = Path(path or clean_secret(os.getenv("AVRONE_MCP_CONFIG")) or "./mcp.json")
     if not p.exists():
         return {}
     if not p.is_file():  # a FIFO here blocked server startup forever in read_text()

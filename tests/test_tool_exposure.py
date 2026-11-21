@@ -43,7 +43,7 @@ def test_exposed_open_is_at_risk(monkeypatch):
 
 def test_exposed_guarded(monkeypatch):
     monkeypatch.setenv("AVRONE_HOST", "[::]")
-    monkeypatch.setattr(server.settings, "admin_token", "x" * 32)
+    monkeypatch.setattr(server.settings, "admin_token", "Xk9mP2vL8qR4wZ7nB3cD5fG6hJ1tY0uE")
     e = hv.exposure()
     assert e["exposed"] and e["verdict"] == "GUARDED" and e["admin_token"] == "ok"
 

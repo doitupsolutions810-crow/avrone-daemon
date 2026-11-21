@@ -1,0 +1,13 @@
+{
+  "schema": "great-scale-evidence/v59",
+  "finding": "The script prunes the oldest run directories when there are more than KEEP_RUNS and leaves them alone when fewer. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "more": "prune oldest",
+  "fewer": "leave alone",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The prune-runs check holds."
+}

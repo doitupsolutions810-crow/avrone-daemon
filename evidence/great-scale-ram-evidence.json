@@ -1,0 +1,14 @@
+{
+  "schema": "great-scale-evidence/v60",
+  "finding": "The script warns when the model wants more RAM than the machine has. A big model on a small machine warns. A small model does not. Both continue. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "bigModel": "warn",
+  "smallModel": "no warning",
+  "soft": true,
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The RAM-warn check holds. It is soft."
+}

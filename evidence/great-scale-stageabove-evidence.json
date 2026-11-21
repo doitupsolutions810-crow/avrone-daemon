@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v138",
+  "finding": "The script clamps a stage number above the batch count and continues. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "above": "clamp to NB",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The stage-above-batches check holds."
+}

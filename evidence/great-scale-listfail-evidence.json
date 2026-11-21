@@ -1,0 +1,12 @@
+{
+  "schema": "great-scale-evidence/v115",
+  "finding": "The script refuses when ollama list fails three times with a non-timeout exit. The check is present. Probed as uid 0 with ALLOW_ROOT=1 and every earlier check passing. Pure. Heat is zero.",
+  "cone": 0.3819660112501052,
+  "fails": "refuse after 3",
+  "orientation": "pass",
+  "S": 0.0,
+  "psi": 0.3819660112501052,
+  "effectiveRuns": 1,
+  "docker": false,
+  "mitigation": "None needed. The list-models-fail check holds."
+}

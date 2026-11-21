@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .textsafe import escape as _escape
 from .tools import Tool, off_loop
 
 if TYPE_CHECKING:
@@ -32,13 +33,36 @@ MAX_PROBLEMS_SHOWN = 15
 MAX_JSONL_BYTES = 8 * 1024 * 1024
 AREA_SCAN_MAX = 50_000        # directory entries read per area (round 94)
 CORRUPT_SCAN_MAX = 200_000    # entries the *.corrupt-* sweep reads over the whole data_dir
+# round 71: 7 areas x 2000 files x 8 MiB each could read ~100 GiB in one call; past this many bytes
+# in total, the rest of the files are counted "unchecked" instead of read.
+MAX_TOTAL_BYTES = 256 * 1024 * 1024
+LINK_DIR = "directory is or sits under a symlink (not followed)"
+
+
+def _cap_text(n: int) -> str:
+    return f"{n // (1024 * 1024)} MiB" if n >= 1024 * 1024 else f"{n} bytes"
 # tools that change something outside the agent's own reply (files, processes, network, other nodes)
 ACTING = {"run_logs", "fleet_forget", "secret_scan", "shell", "python", "git", "write_file", "edit_file", "fs_write", "fs_delete", "env_install", "docker_run",
           "spawn", "spawn_agent", "spawn_squad", "remote_spawn", "remote_spawn_many", "priv_shell", "priv_admin",
           "evolve_propose", "evolve_skill_propose", "evolve_start", "evolve_loop", "evolve_reset", "evolve_cancel",
           "memory_save", "memory_sync", "agent_migrate", "agent_pack_export", "agent_pack_import", "artifact_save",
           "task_board", "bridge_post", "bridge_reply", "research_note", "lesson_forget", "http_request",
-          "fleet_message", "queue_submit", "port_scan"}
+          "fleet_message", "queue_submit", "port_scan",
+          # round 65: tools that send traffic to a third-party host count as acting (the definition
+          # above: network). port_scan and http_request were here, but tcp_ping, traceroute, fetch
+          # and the recon lookups were counted read-only, so the "map of the agent's reach"
+          # hid its outbound reach.
+          "fetch", "web_search", "dns_lookup", "http_fingerprint", "ip_geo", "osint_domain", "rdap_whois",
+          "tcp_ping", "tls_inspect", "traceroute"}
+
+
+def is_acting(name: str, tool: Any = None) -> bool:
+    """In ACTING, or a tool that says so itself (description "acting: ..."), so a newly added
+    acting tool is not silently counted read-only until someone edits the set (round 65)."""
+    if name in ACTING:
+        return True
+    d = getattr(tool, "description", None)
+    return isinstance(d, str) and d.lstrip().lower().startswith("acting")
 
 
 def _check_json(p: Path) -> str | None:
@@ -49,7 +73,7 @@ def _check_json(p: Path) -> str | None:
             return "not a regular file"
         _jloads(raw.decode("utf-8"))
     except FileTooBig:
-        return None  # too big to check here; not a problem in itself
+        return None  # too big to check here; state_health counts it as unchecked (round 71)
     except UnicodeDecodeError:
         return "not utf-8"
     except (ValueError, RecursionError):
@@ -66,7 +90,7 @@ def _check_jsonl(p: Path) -> str | None:
     try:
         data = read_capped(p, MAX_JSONL_BYTES)
     except FileTooBig:
-        return None  # too big to scan here; not a problem in itself
+        return None  # too big to scan here; state_health counts it as unchecked (round 71)
     except OSError as e:
         return f"unreadable ({type(e).__name__})"
     if data is None:
@@ -74,14 +98,30 @@ def _check_jsonl(p: Path) -> str | None:
     if data and not data.endswith(b"\n"):
         return "torn last line"
     bad = 0
-    for line in data.splitlines():
+    nonobj = 0
+    # round 54: bytes.splitlines() also split on a bare "\r" (JSON whitespace), so one valid record
+    # was counted as two undecodable halves; every JSONL reader here splits on "\n" only
+    for line in data.split(b"\n"):
         if not line.strip():
             continue
         try:
-            _jloads(line)
-        except (ValueError, UnicodeDecodeError):
+            rec = _jloads(line)
+        except (ValueError, UnicodeDecodeError, RecursionError):
             bad += 1
-    return f"{bad} undecodable line(s)" if bad else None
+            continue
+        if not isinstance(rec, dict):  # round 71: `1`, `"x"`, `[]` decode but are no record
+            nonobj += 1
+    parts = ([f"{bad} undecodable line(s)"] if bad else []) + ([f"{nonobj} non-object line(s)"] if nonobj else [])
+    return ", ".join(parts) or None
+
+
+def _between(root: Path, d: Path) -> list[Path]:
+    """The directories strictly between root and d (evolve for evolve/loops)."""
+    try:
+        parts = d.relative_to(root).parts
+    except ValueError:
+        return []
+    return [root.joinpath(*parts[:i]) for i in range(1, len(parts))]
 
 
 def _areas(data_dir: Path) -> list[tuple[str, list[Path], Any]]:
@@ -91,6 +131,12 @@ def _areas(data_dir: Path) -> list[tuple[str, list[Path], Any]]:
         # round 94: one bounded level (was sorted(glob) of the whole dir before the cap). Symlinks
         # and special files are listed so the check reports them, never followed or opened.
         out: list[Path] = []
+        # round 71: a symlinked area dir (evolve -> /etc) was listed and its files read and named,
+        # though everything else here never follows a link out of data_dir. Report it instead.
+        if any(os.path.islink(a) for a in _between(data_dir, d)):
+            return []  # the symlinked parent area (evolve for evolve/loops) already reports it
+        if os.path.islink(d):
+            return [d]
         for _rel, de in TreeWalk(d, AREA_SCAN_MAX, recurse=False):
             if len(out) >= MAX_FILES_PER_AREA:
                 break
@@ -104,7 +150,8 @@ def _areas(data_dir: Path) -> list[tuple[str, list[Path], Any]]:
         return out
 
     def one(p: Path) -> list[Path]:
-        return [p] if os.path.lexists(p) and not p.is_dir() else []
+        # round 71: a fleet.json symlinked to a directory followed the link in is_dir() and vanished
+        return [p] if os.path.lexists(p) and (os.path.islink(p) or not p.is_dir()) else []
     fleet = one(data_dir / "fleet.json")
     mem = one(data_dir / "memory.jsonl")
     return [("fleet", fleet, _check_json),
@@ -116,18 +163,60 @@ def _areas(data_dir: Path) -> list[tuple[str, list[Path], Any]]:
             ("bridges", g(data_dir / "bridge", "*.jsonl"), _check_jsonl)]
 
 
+_AREA_DIRS = ("evolve", "evolve/loops", "checkpoints", "agentpacks", "bridge")
+
+
+def _is_area_dir(root: Path, p: Path) -> bool:
+    try:
+        return p.relative_to(root).as_posix() in _AREA_DIRS
+    except ValueError:
+        return False
+
+
 def state_health(data_dir: Any) -> dict[str, Any]:
-    root = Path(data_dir)
+    empty = {"data_dir_exists": False, "areas": {}, "problems": [], "set_aside": [],
+             "set_aside_count": 0, "set_aside_truncated": False, "unchecked": []}
+    # round 71: "" became Path(".") and scanned the process cwd as if it were data_dir
+    if isinstance(data_dir, str) and not data_dir.strip():
+        return empty
+    try:
+        root = Path(data_dir)
+    except TypeError:  # round 54: a non-path data_dir setting raised out of the tool
+        return empty
     areas: dict[str, dict[str, int]] = {}
     problems: list[dict[str, str]] = []
+    unchecked: list[dict[str, str]] = []
+    spent = 0
     for name, files, check in _areas(root):
-        bad = 0
+        bad = skipped = 0
         for f in files:
+            try:
+                rel = str(f.relative_to(root))
+            except ValueError:
+                rel = f.name
+            if _is_area_dir(root, f):  # _areas hands back a symlinked area dir itself
+                bad += 1
+                problems.append({"area": name, "path": rel, "problem": LINK_DIR})
+                continue
+            try:
+                size = os.lstat(f).st_size
+            except OSError:
+                size = 0
+            if size > MAX_JSONL_BYTES:
+                # round 71: was silently healthy; a 9 MiB torn fleet.json read HEALTHY
+                skipped += 1
+                unchecked.append({"area": name, "path": rel, "why": f"too big to check (over {_cap_text(MAX_JSONL_BYTES)})"})
+                continue
+            if spent + size > MAX_TOTAL_BYTES:
+                skipped += 1
+                unchecked.append({"area": name, "path": rel, "why": "scan budget spent"})
+                continue
+            spent += size
             why = check(f)
             if why:
                 bad += 1
-                problems.append({"area": name, "path": str(f.relative_to(root)), "problem": why})
-        areas[name] = {"files": len(files), "bad": bad}
+                problems.append({"area": name, "path": rel, "problem": why})
+        areas[name] = {"files": len(files), "bad": bad, "unchecked": skipped}
     # round 94: rglob walked the whole data_dir (every run log, every evolve worktree) unbounded
     from .safeio import TreeWalk
     # runs/ holds only codex logs (never set aside as *.corrupt-*) and can hold 100k+ files
@@ -135,48 +224,73 @@ def state_health(data_dir: Any) -> dict[str, Any]:
     corrupt = [rel for rel, de in walk if fnmatch.fnmatchcase(de.name, "*.corrupt-*")] if root.is_dir() else []
     return {"data_dir_exists": root.is_dir(), "areas": areas, "problems": problems,
             "set_aside": corrupt[:MAX_PROBLEMS_SHOWN], "set_aside_count": len(corrupt),
-            "set_aside_truncated": walk.truncated}
+            "set_aside_truncated": walk.truncated, "unchecked": unchecked}
 
 
 @off_loop  # round 94: up to 7 x 2000 file reads plus a data_dir walk ran on the event loop
 async def t_state_health(ctx: "AgentContext", args: dict[str, Any]) -> str:
     data_dir = getattr(getattr(getattr(ctx, "core", None), "settings", None), "data_dir", None)
-    if data_dir is None:
+    if not isinstance(args, dict):  # round 71: a direct call with null/list args raised AttributeError
+        args = {}
+    if data_dir is None or not isinstance(data_dir, (str, os.PathLike)) or not str(data_dir).strip():
         return "state_health: no data_dir configured on this node"
     st = state_health(data_dir)
     if not st["data_dir_exists"]:
         return "state_health: data_dir does not exist yet (nothing persisted)"
-    verbose = args.get("verbose") is True
+    from .argnum import tool_bool  # round 65: "true" as a string was ignored
+    verbose = tool_bool(args.get("verbose"), False) is True
     total_bad = sum(a["bad"] for a in st["areas"].values())
-    head = "HEALTHY" if not total_bad and not st["set_aside_count"] else "ATTENTION"
+    unchecked = st.get("unchecked") or []
+    # round 71: a file too big to read (or past the byte budget) was silently HEALTHY
+    head = ("ATTENTION" if total_bad or st["set_aside_count"]
+            else "UNVERIFIED" if unchecked else "HEALTHY")
     more = "+" if st.get("set_aside_truncated") else ""
-    lines = [f"state_health: {head} ({total_bad} bad file(s), {st['set_aside_count']}{more} set aside as *.corrupt-*)"]
+    tail = f", {len(unchecked)} unchecked" if unchecked else ""
+    lines = [f"state_health: {head} ({total_bad} bad file(s), {st['set_aside_count']}{more} set aside as "
+             f"*.corrupt-*{tail})"]
     for name, a in st["areas"].items():
         if a["files"] or verbose:
-            lines.append(f"- {name}: {a['files']} file(s), {a['bad']} bad")
+            u = f", {a['unchecked']} unchecked" if a.get("unchecked") else ""
+            lines.append(f"- {name}: {a['files']} file(s), {a['bad']} bad{u}")
     for p in st["problems"][:MAX_PROBLEMS_SHOWN]:
-        lines.append(f"  ! {p['path']}: {p['problem']}")
+        # round 54: file names are chosen by whoever wrote them; "x\nstate_health: HEALTHY" printed
+        # a forged line of its own, and U+202E reversed the row
+        lines.append(f"  ! {_escape(p['path'])}: {p['problem']}")
     if len(st["problems"]) > MAX_PROBLEMS_SHOWN:
         lines.append(f"  ... {len(st['problems']) - MAX_PROBLEMS_SHOWN} more")
     for p in st["set_aside"]:
-        lines.append(f"  set aside: {p}")
+        lines.append(f"  set aside: {_escape(p)}")
+    for u in unchecked[:MAX_PROBLEMS_SHOWN]:
+        lines.append(f"  ? {_escape(u['path'])}: {u['why']}")
+    if len(unchecked) > MAX_PROBLEMS_SHOWN:
+        lines.append(f"  ... {len(unchecked) - MAX_PROBLEMS_SHOWN} more unchecked")
     return "\n".join(lines)
 
 
 def registry_audit(registry: Any, source: str | None = None) -> dict[str, Any]:
-    names = sorted(registry.names())
+    try:
+        # round 71: a name listed twice was counted (and shown under "no arg schema") twice;
+        names = sorted({str(n) for n in registry.names()})
+    except Exception:  # noqa: BLE001 - round 54: a broken registry listing fails soft
+        names = []
     by_source: dict[str, int] = {}
     no_schema: list[str] = []
     acting = 0
     for n in names:
-        t = registry.get(n)
+        try:
+            t = registry.get(n)
+        except Exception:  # noqa: BLE001
+            t = None
+        if t is None:  # round 54: a name with no tool behind it was counted as source "unknown"
+            continue
         src = str(getattr(t, "source", "") or "unknown")
         if source and src != source:
             continue
         by_source[src] = by_source.get(src, 0) + 1
-        if getattr(t, "schema", None) is None:
+        # round 71: validate_args treats a non-dict schema ("str", a list) as no check at all
+        if not isinstance(getattr(t, "schema", None), dict):
             no_schema.append(n)
-        acting += n in ACTING
+        acting += is_acting(n, t)
     shown = sum(by_source.values())
     return {"tools": shown, "by_source": by_source, "no_schema": no_schema, "acting": acting,
             "read_only": shown - acting}
@@ -186,15 +300,23 @@ async def t_registry_audit(ctx: "AgentContext", args: dict[str, Any]) -> str:
     reg = getattr(getattr(ctx, "core", None), "tools", None)
     if reg is None or not hasattr(reg, "names"):
         return "registry_audit: no tool registry on this core"
+    if not isinstance(args, dict):
+        args = {}
     src = args.get("source")
-    src = str(src).strip() if isinstance(src, str) and src.strip() else None
+    if src is not None and not isinstance(src, str):
+        # round 71: {"source": 3} or a list silently audited every tool as if no filter was given
+        return "registry_audit: ERROR: source must be text (a tool source such as builtin, mcp, plugin)"
+    src = src.strip() if isinstance(src, str) and src.strip() else None
     a = registry_audit(reg, src)
     if not a["tools"]:
-        return f"registry_audit: no tools from source {src!r}"
-    lines = [f"registry_audit: {a['tools']} tool(s){' from ' + src if src else ''}; "
+        return f"registry_audit: no tools from source {_escape(src)!r}"
+    # round 54: plugin sources and tool names are a plugin author's choice; escape them on display
+    lines = [f"registry_audit: {a['tools']} tool(s){' from ' + _escape(src) if src else ''}; "
              f"{a['acting']} acting, {a['read_only']} read-only",
-             "by source: " + ", ".join(f"{k}={v}" for k, v in sorted(a["by_source"].items())),
-             f"no arg schema ({len(a['no_schema'])}): " + (", ".join(a["no_schema"][:60]) or "none")]
+             "by source: " + ", ".join(f"{_escape(k)}={v}" for k, v in sorted(a["by_source"].items())),
+             f"no arg schema ({len(a['no_schema'])}): "
+             + (", ".join(_escape(n) for n in a["no_schema"][:60]) or "none")
+             + (f" ... {len(a['no_schema']) - 60} more" if len(a["no_schema"]) > 60 else "")]
     return "\n".join(lines)
 
 

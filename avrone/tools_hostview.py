@@ -27,49 +27,113 @@ if TYPE_CHECKING:
 PROC = Path("/proc")
 MAX_PROCS = 50
 CMD_MAX = 160
+CMDLINE_READ = 8192
 
 
 def _long_s() -> float:
-    try:
-        v = float(os.getenv("AVRONE_PROC_LONG_S", "600") or 600)
-    except ValueError:
-        return 600.0
-    return v if v > 0 else 600.0
+    import math
+    from .config import env_num  # round 87: the node's one numeric reading ("1_0", mismatched quotes)
+    f = env_num("AVRONE_PROC_LONG_S")
+    v = 600.0 if f is None else f
+    # round 54: "inf" disabled the runaway flag silently and printed "running >= infs"
+    return v if v > 0 and math.isfinite(v) else 600.0
 
 
 def _boot_time() -> float | None:
+    """btime from /proc/stat. Round 90: a bare "btime" line (no value) raised IndexError out of
+    proc_status, and "btime nan"/"inf" gave every child a NaN start time; ASCII digits only."""
     try:
-        for line in (PROC / "stat").read_text().splitlines():
+        for line in (PROC / "stat").read_text().split("\n"):
             if line.startswith("btime "):
-                return float(line.split()[1])
-    except (OSError, ValueError):
+                parts = line.split()
+                if len(parts) < 2 or not parts[1].isascii() or not parts[1].isdigit():
+                    return None
+                v = float(parts[1])
+                return v if 0.0 <= v < 1e10 else None
+    except (OSError, ValueError, UnicodeDecodeError):
         return None
     return None
+
+
+def _uptime() -> float | None:
+    """Seconds since boot from /proc/uptime. Round 83: ages were time.time() - (btime + ticks), so a
+    wall clock stepped back (NTP correction, a VM resumed from a snapshot, a manual date) showed
+    negative ages and hid every long-running child; uptime is the clock the start ticks count on."""
+    try:
+        first = (PROC / "uptime").read_text()[:64].split()[0]
+        v = float(first)
+    except (OSError, ValueError, IndexError):
+        return None
+    return v if v == v and 0.0 <= v < 1e10 else None
+
+
+def _age(r: dict[str, Any], now: float) -> float | None:
+    a = r.get("age")
+    if isinstance(a, (int, float)) and not isinstance(a, bool) and a == a:
+        return max(0.0, float(a))
+    s = r.get("started")
+    if isinstance(s, (int, float)) and not isinstance(s, bool) and s == s:
+        return max(0.0, now - float(s))
+    return None
+
+
+from .textsafe import escape as _escape  # noqa: E402
+import re  # noqa: E402
+
+# round 65: a credential passed on a command line ("--password=x", "--token x", "-H 'Authorization:
+# Bearer x'", "postgres://u:pw@db") was printed in the child's argv: proc_status hid env vars but
+# not argv. Flag values whose NAME says secret are masked; the shapes go through redact_text.
+_ARGV_SECRET_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(--?[A-Za-z0-9_.\-]*(?:passw(?:or)?d|passwd|pwd|secret|token|api[-_]?key|"
+    r"access[-_]?key|private[-_]?key|credential|auth)[A-Za-z0-9_.\-]*)(=|\s+)(?!-)(\S+)")
+
+
+def _redact_cmd(cmd: str) -> str:
+    """argv with credentials masked; never raises (a read-only view must not fail on one process)."""
+    try:
+        out = _ARGV_SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "***", cmd)
+        from .tools_researchnote import redact_text
+        return redact_text(out)
+    except Exception:  # noqa: BLE001 - mask everything rather than show an unchecked argv
+        return cmd.split(" ", 1)[0] + " ***"
 
 
 def _children(root_pid: int) -> dict[int, dict[str, Any]]:
     """pid -> info for every descendant of root_pid (bounded scan of /proc)."""
     info: dict[int, dict[str, Any]] = {}
     try:
-        pids = [int(p.name) for p in PROC.iterdir() if p.name.isdigit()]
+        # round 90: str.isdigit() is true for "\u00b2" and other non-ASCII digits, and int("\u00b2")
+        # raised ValueError out of proc_status; a pid directory name is ASCII digits only
+        pids = [int(p.name) for p in PROC.iterdir() if p.name.isascii() and p.name.isdigit()]
     except OSError:
         return {}
-    tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
-    btime = _boot_time()
+    try:  # round 54: sysconf can raise (ValueError/OSError) or report 0 -> ZeroDivisionError
+        tck = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+        page_kb = os.sysconf("SC_PAGE_SIZE") // 1024 if hasattr(os, "sysconf") else 4
+    except (ValueError, OSError):
+        tck, page_kb = 100, 4
+    tck = tck if isinstance(tck, int) and tck > 0 else 100
+    page_kb = page_kb if isinstance(page_kb, int) and page_kb > 0 else 4
+    btime, up = _boot_time(), _uptime()
     for pid in pids:
         try:
             stat = (PROC / str(pid) / "stat").read_text()
             rparen = stat.rindex(")")
             fields = stat[rparen + 2:].split()
             state, ppid, start_ticks, rss_pages = fields[0], int(fields[1]), int(fields[19]), int(fields[21])
-            raw = (PROC / str(pid) / "cmdline").read_bytes()
+            with open(PROC / str(pid) / "cmdline", "rb") as fh:
+                # round 81: a 2 MB argv was read and regex-scanned whole for every child, though
+                # only CMD_MAX chars are shown; CMDLINE_READ bytes leave room to mask a secret flag
+                raw = fh.read(CMDLINE_READ)
         except (OSError, ValueError, IndexError):
             continue  # raced with exit, or not ours to read
         cmd = raw.replace(b"\x00", b" ").decode(errors="replace").strip() or stat[stat.index("(") + 1:rparen]
         started = btime + start_ticks / tck if btime is not None else None
-        info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started,
-                     "rss_kb": rss_pages * (os.sysconf("SC_PAGE_SIZE") // 1024 if hasattr(os, "sysconf") else 4),
-                     "cmd": cmd[:CMD_MAX]}
+        age = max(0.0, up - start_ticks / tck) if up is not None else None
+        info[pid] = {"pid": pid, "ppid": ppid, "state": state, "started": started, "age": age,
+                     "rss_kb": max(0, rss_pages) * page_kb,
+                     # round 65: redact the FULL argv before the cut, so a cut never shows half a secret
+                     "cmd": _escape(_redact_cmd(cmd)[:CMD_MAX])}  # round 146: argv/comm are the process's own choice
     out: dict[int, dict[str, Any]] = {}
     frontier = {root_pid}
     while frontier:
@@ -86,14 +150,17 @@ async def t_proc_status(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "proc_status: /proc is not available on this host (Linux only)"
     kids = _children(os.getpid())
     now, long_s = time.time(), _long_s()
-    rows = sorted(kids.values(), key=lambda i: i["started"] or 0)
-    long_ = [r for r in rows if r["started"] is not None and now - r["started"] >= long_s]
+    # oldest first, by age (round 83: clock steps no longer reorder or hide children)
+    rows = sorted(kids.values(), key=lambda i: -(_age(i, now) or 0.0))
+    long_ = [r for r in rows if (_age(r, now) or 0.0) >= long_s and _age(r, now) is not None]
     zombies = [r for r in rows if r["state"] == "Z"]
-    show = rows if args.get("all") is True else (long_ + [z for z in zombies if z not in long_] or rows)
+    from .argnum import tool_bool  # round 65: "true" (a string, as many models send it) was ignored
+    show = rows if tool_bool(args.get("all"), False) is True else (long_ + [z for z in zombies if z not in long_] or rows)
     lines = [f"proc_status: {len(rows)} child process(es) of pid {os.getpid()}; "
              f"{len(long_)} running >= {long_s:.0f}s, {len(zombies)} zombie(s)"]
     for r in show[:MAX_PROCS]:
-        age = f"{now - r['started']:.0f}s" if r["started"] is not None else "?"
+        a = _age(r, now)
+        age = f"{a:.0f}s" if a is not None else "?"
         lines.append(f"- {r['pid']} [{r['state']}] age {age} rss {r['rss_kb']}KB: {r['cmd']}")
     if len(show) > MAX_PROCS:
         lines.append(f"... {len(show) - MAX_PROCS} more")
@@ -127,7 +194,8 @@ def api_surface() -> dict[str, Any]:
     return {"routes": sorted(routes, key=lambda x: x["path"]),
             "admin_enabled": bool(getattr(server.settings, "admin_token", None)),
             "access_policy": server.access_policy(),
-            "fleet_enabled": bool(os.getenv("AVRONE_FLEET_TOKEN"))}
+            # round 82: "  " counted as fleet ON, though fleet.clean_token makes it "" (fleet off)
+            "fleet_enabled": bool(_fleet_token())}
 
 
 async def t_api_surface(ctx: "AgentContext", args: dict[str, Any]) -> str:
@@ -147,17 +215,61 @@ async def t_api_surface(ctx: "AgentContext", args: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _token_strength(v: str | None) -> str:
-    if not v:
+_PLACEHOLDERS = ("changeme", "secret", "password", "token", "admin", "test", "default", "example",
+                 "your-token", "yourtoken")
+
+
+def _fleet_token() -> str:
+    from .config import env_secret
+    return env_secret("AVRONE_FLEET_TOKEN")
+
+
+def _token_strength(v: Any) -> str:
+    if v is None:
         return "unset"
-    if v.lower() in ("changeme", "secret", "password", "token", "admin", "test"):
+    if hasattr(v, "get_secret_value"):  # a pydantic SecretStr
+        try:
+            v = v.get_secret_value()
+        except Exception:  # noqa: BLE001
+            return "unknown"
+    if not isinstance(v, str):  # round 54: a non-str token raised AttributeError -> "no HTTP app"
+        return "unknown"
+    import unicodedata
+    # round 90: fullwidth "ｃｈａｎｇｅｍｅ..." and a placeholder wrapped in quotes or zero-width
+    # characters ('"changemechangeme"', "change\u200bme...") read "ok": compare on the NFKC form with
+    # invisible format characters dropped
+    t = "".join(c for c in unicodedata.normalize("NFKC", v) if unicodedata.category(c) != "Cf").strip()
+    if not t:
+        # round 54: a whitespace-only token was "unset" only if empty; 16 spaces read "ok"
+        return "unset" if not v else "weak"
+    low = t.lower()
+    # round 54: "changeme123", "CHANGEME" and "secret-secret-secret" all read "ok"
+    if low in _PLACEHOLDERS or any(low.startswith(p) and len(set(low[len(p):])) <= 3 for p in _PLACEHOLDERS):
         return "placeholder"
-    return "weak" if len(v) < 16 else "ok"
+    # round 65: the check above only looked at ONE placeholder prefix, so "secret-secret-secret",
+    # "passwordpassword", "adminadminadmin123" and "tokentokentoken12345" all read "ok". Strip every
+    # placeholder word, digit and separator: nothing left means it is made only of placeholders.
+    rest = low
+    for p in sorted(_PLACEHOLDERS + ("changeme", "letmein", "qwerty", "pass"), key=len, reverse=True):
+        rest = rest.replace(p, "")
+    if not re.sub(r"[0-9\s_.\-:/+=!@#*'\"`~$%^&()\[\]{}<>,;?|\\]", "", rest):
+        return "placeholder"
+    if len(t) < 16:  # round 54: measured on the stripped token ("short" + 12 spaces was "ok")
+        return "weak"
+    # round 65: "aaaaaaaaaaaaaaaaaaaa", "abab...", all-digit and keyboard/alphabet runs read "ok"
+    if len(set(low)) < 8 or t.isdigit() or any(low in seq or seq.startswith(low[:12]) for seq in _SEQUENCES):
+        return "weak"
+    return "ok"
+
+
+_SEQUENCES = ("qwertyuiopasdfghjklzxcvbnm", "abcdefghijklmnopqrstuvwxyz", "01234567890123456789",
+              "1qaz2wsx3edc4rfv5tgb6yhn", "zyxwvutsrqponmlkjihgfedcba")
 
 
 def exposure() -> dict[str, Any]:
     """Who can reach what on this node right now, as a remote (non-loopback) caller with no token."""
-    host = os.getenv("AVRONE_HOST") or "127.0.0.1"
+    from .config import bind_host  # round 81: the same reading server.main binds with
+    host = bind_host()
     from .fusion_loopback import is_access_loopback
     exposed = not is_access_loopback(host)
     a = api_surface()
@@ -167,17 +279,25 @@ def exposure() -> dict[str, Any]:
     risky = [x for x in remote_open if any(k in x for k in ("/api/chat", "/api/runs", "/ws/events", "/api/telemetry"))]
     from . import server
     admin_tok = _token_strength(getattr(server.settings, "admin_token", None))
-    fleet_tok = _token_strength(os.getenv("AVRONE_FLEET_TOKEN"))
+    fleet_tok = _token_strength(_fleet_token() or None)
     issues = []
     if exposed and risky:
         issues.append(f"bound to {host} with {len(risky)} agent/run route(s) open to anyone")
     for name, st in (("admin", admin_tok), ("fleet", fleet_tok)):
         if st in ("weak", "placeholder"):
             issues.append(f"{name} token is {st}")
-    if admin_tok != "unset" and os.getenv("AVRONE_FLEET_TOKEN") and \
-            os.getenv("AVRONE_FLEET_TOKEN") == getattr(server.settings, "admin_token", None):
+    adm = getattr(server.settings, "admin_token", None)
+    if hasattr(adm, "get_secret_value"):
+        try:
+            adm = adm.get_secret_value()
+        except Exception:  # noqa: BLE001
+            adm = None
+    fl = _fleet_token()
+    # round 54: "tok" and "tok\n" (a token pasted with its newline) were not seen as the same secret
+    from .config import clean_secret
+    if admin_tok != "unset" and fl and clean_secret(adm) == fl:
         issues.append("admin and fleet tokens are the same secret")
-    return {"host": host, "exposed": exposed, "policy": policy, "admin_token": admin_tok,
+    return {"host": _escape(host), "exposed": exposed, "policy": policy, "admin_token": admin_tok,
             "fleet_token": fleet_tok if fleet_on else "unset", "remote_open": remote_open, "risky": risky,
             "issues": issues, "verdict": "AT RISK" if issues else ("LOCAL" if not exposed else "GUARDED")}
 

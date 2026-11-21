@@ -1,6 +1,7 @@
 """Ghost Shell: the surface users and admins touch (web UI, REST, WebSocket HUD)."""
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 from typing import Any
 
 import hmac
@@ -116,13 +117,22 @@ def require_blackboard_admin(token: str | None) -> None:
 
     The previous token is a rotation grace for this route only. Other admin
     routes keep require_admin and ignore it. The route stays off when the
-    current token is unset, even if a previous token is set.
+    current token is unset, even if a previous token is set. Either the
+    Settings field or the live environment value matches, so a test can set
+    either one. Empty never matches. The compare does not trim.
     """
     if not settings.admin_token:
         raise HTTPException(403, "Admin access is off. Set AVRONE_ADMIN_TOKEN to enable it.")
-    previous = getattr(settings, "admin_token_previous", "")
-    if not (token_eq(token, settings.admin_token) or token_eq(token, previous)):
-        raise HTTPException(401, "Bad admin token")
+    candidates = []
+    configured = getattr(settings, "admin_token_previous", "")
+    if isinstance(configured, str):
+        candidates.append(configured)
+    live = os.environ.get("AVRONE_ADMIN_TOKEN_PREVIOUS", "")
+    if isinstance(live, str):
+        candidates.append(live)
+    if token_eq(token, settings.admin_token) or any(token_eq(token, item) for item in candidates):
+        return
+    raise HTTPException(401, "Bad admin token")
 
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -135,8 +145,8 @@ def access_policy() -> str:
     admin - the admin token only, even from loopback; all - anyone who can reach the port
     (the pre-v0.27 behaviour; use it only behind a port bound to 127.0.0.1 or an auth proxy).
     Unknown values fall back to loopback, never to all."""
-    import os
-    v = (os.getenv("AVRONE_PUBLIC_ACCESS") or "loopback").strip().lower()
+    from .config import access_policy as _shared  # round 86: quoted "admin" was loopback
+    v = _shared()
     return v if v in ACCESS_POLICIES else "loopback"
 
 
@@ -164,10 +174,8 @@ HARD_MAX_MESSAGE_CHARS = 5_000_000
 
 def _env_cap(name: str, default: int, hard: int) -> int:
     """Positive int from env, clamped to 1..hard; junk or unset -> default."""
-    try:
-        n = int(str(os.environ.get(name, "")).strip() or default)
-    except (TypeError, ValueError):
-        n = default
+    n_raw = _env_num(name)  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else default
     return max(1, min(hard, n))
 
 
@@ -184,13 +192,6 @@ HARD_MAX_BODY_BYTES = 512 * 1024 * 1024
 # Fusion blackboard only. The process-wide cap below stays AVRONE_MAX_BODY_BYTES.
 FUSION_BLACKBOARD_MAX_BODY = 4096
 FUSION_BLACKBOARD_PATH = "/api/blackboard"
-# One id for this process. The fusion relay treats a change as a restart and
-# resends what this process would have forgotten. Stable until import again.
-BOOT_ID = uuid.uuid4().hex
-
-
-def boot_id() -> str:
-    return BOOT_ID
 
 
 def body_too_large_detail(path: str, limit: int) -> str:
@@ -232,7 +233,8 @@ def _content_length_over(headers, limit: int) -> bool:
         if key.lower() != b"content-length":
             continue
         text = value.decode("latin-1").strip()
-        if text.isdigit() and int(text) > limit:
+        # round 45: "\xb2" (superscript two) is latin-1, isdigit() is True and int() raised -> 500
+        if text.isascii() and text.isdigit() and int(text) > limit:
             over = True
     return over
 
@@ -314,6 +316,57 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
+# One id for this process. The fusion relay treats a change as a restart
+# that dropped in-memory dedup, and the same value as the same peer.
+BOOT_ID = uuid.uuid4().hex
+
+
+def boot_id() -> str:
+    return BOOT_ID
+
+
+def _fusion_timeout() -> float:
+    import math
+    v = _env_num("FUSION_TIMEOUT")  # round 86: quotes cleaned, fullwidth refused, finite only
+    value = 5.0 if v is None else v
+    if not math.isfinite(value):
+        return 5.0
+    return min(30.0, max(0.05, value))
+
+
+def _fusion_deadline() -> float | None:
+    """Seconds one watch cycle may spend dialing. ``0`` and non-finite values disable it."""
+    import math
+    from .config import clean_secret  # round 86: quotes cleaned, fullwidth digits refused
+    raw = clean_secret(os.environ.get("FUSION_CYCLE_DEADLINE")).replace("_", "")
+    if not raw:
+        return 10.0
+    if not raw.isascii():
+        return 10.0
+    try:
+        value = float(raw)
+    except ValueError:
+        return 10.0
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return min(120.0, value)
+
+
+def _fusion_breaker() -> tuple[int, float]:
+    """``(threshold, cooldown)``. Threshold 0 disables the breaker. Junk falls back."""
+    import math
+    t = _env_num("FUSION_BREAKER_THRESHOLD")  # round 86: shared reader
+    threshold = 1 if t is None else int(t)
+    if threshold < 0:
+        threshold = 0
+    threshold = min(100, threshold)
+    c = _env_num("FUSION_BREAKER_COOLDOWN")
+    cooldown = 30.0 if c is None else c
+    if not math.isfinite(cooldown) or cooldown < 0:
+        cooldown = 30.0
+    return threshold, min(600.0, cooldown)
+
+
 @app.get("/api/status")
 async def status():
     c = core()
@@ -332,6 +385,47 @@ async def status():
         "codex": c.codex.health() if hasattr(c.codex, "health") else None,
         "boot": BOOT_ID,
     }
+
+
+@app.get("/api/fusion")
+async def fusion_status(x_admin_token: str | None = Header(default=None)):
+    """Last fusion supervision report plus this process's boot id. Does not dial out."""
+    require_admin(x_admin_token)
+    from .fusion_peer import last_watch
+    return {"boot": BOOT_ID, "blackboard": FUSION_BLACKBOARD_PATH, "watch": last_watch()}
+
+
+@app.post("/api/fusion/watch")
+async def fusion_watch(x_admin_token: str | None = Header(default=None)):
+    """One supervision cycle. Dials only when board, events, and health URLs are all set."""
+    require_admin(x_admin_token)
+    from .config import clean_secret  # round 88: a quoted URL was dialed with its quotes
+    board = clean_secret(os.environ.get("FUSION_BOARD_URL"))
+    events = clean_secret(os.environ.get("FUSION_EVENTS_URL"))
+    health = clean_secret(os.environ.get("FUSION_HEALTH_URL"))
+    if not board or not events or not health:
+        return {"watched": False, "reason": "unset"}
+    from .fusion_peer import shared_watch
+    token = (os.environ.get("FUSION_TOKEN") or "").strip()
+    board_token = (os.environ.get("FUSION_BOARD_TOKEN") or token).strip()
+    events_token = (os.environ.get("FUSION_EVENTS_TOKEN") or os.environ.get("CK_FUSION_TOKEN") or token).strip()
+    # Not FUSION_STATE_PATH: that file belongs to the relay (version 2). Writing
+    # it from here would drop the ids the relay has already delivered.
+    state_path = clean_secret(os.environ.get("AVRONE_FUSION_WATCH_PATH")) or None
+    watch = shared_watch(state_path)
+    threshold, cooldown = _fusion_breaker()
+    return await asyncio.to_thread(
+        watch.watch_once,
+        board_url=board,
+        events_url=events,
+        health_url=health,
+        board_token=board_token,
+        events_token=events_token,
+        timeout=_fusion_timeout(),
+        deadline=_fusion_deadline(),
+        breaker_threshold=threshold,
+        breaker_cooldown=cooldown,
+    )
 
 
 def _open_checkpoint(cid_raw: str, task: str, mode: str):
@@ -756,7 +850,9 @@ async def blackboard_write(request: Request, x_admin_token: str | None = Header(
     if len(raw) > FUSION_BLACKBOARD_MAX_BODY:
         raise HTTPException(413, f"request body too large (max {FUSION_BLACKBOARD_MAX_BODY} bytes)")
     require_blackboard_admin(x_admin_token)
-    if not raw:
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    if not raw or not raw.strip():
         raise HTTPException(400, "body must be JSON")
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -809,10 +905,8 @@ def ws_send_timeout() -> float:
     """Seconds one event send may block before the client is dropped (AVRONE_WS_SEND_TIMEOUT)."""
     import math as _m
     import os
-    try:
-        v = float(os.environ.get("AVRONE_WS_SEND_TIMEOUT", "").strip() or 30)
-    except ValueError:
-        v = 30.0
+    v_raw = _env_num("AVRONE_WS_SEND_TIMEOUT")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    v = float(v_raw) if v_raw is not None else 30.0
     if not _m.isfinite(v):
         v = 30.0
     return max(1.0, min(600.0, v))
@@ -880,10 +974,9 @@ async def events(ws: WebSocket):
 
 
 def main() -> None:
-    import os
     import uvicorn
-    uvicorn.run("avrone.server:app", host=os.getenv("AVRONE_HOST", "127.0.0.1"),
-                port=int(os.getenv("AVRONE_PORT", "8710")))
+    from .config import bind_host, bind_port  # round 81: a blank AVRONE_HOST bound every interface
+    uvicorn.run("avrone.server:app", host=bind_host(), port=bind_port())
 
 
 if __name__ == "__main__":

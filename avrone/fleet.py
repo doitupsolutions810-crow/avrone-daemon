@@ -88,6 +88,7 @@ integrity and auth, not confidentiality.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import asyncio
 import contextlib
 import hashlib
@@ -121,13 +122,13 @@ if TYPE_CHECKING:
     from .trinity import AgentContext, TrinityCore
 
 log = logging.getLogger("avrone.fleet")
-ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}\Z")
 WINDOW_S = 60
 # Signed-header shape (checked before the HMAC is computed, so junk never reaches the cache):
 # ts is 1-12 ASCII digits (int() alone also took "+5", " 5", "1_0" and non-ASCII digits like "٥");
 # a nonce is 1-128 chars of [A-Za-z0-9_-] (an unbounded nonce was stored verbatim in the replay cache).
-TS_RE = re.compile(r"^[0-9]{1,12}$")
-NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+TS_RE = re.compile(r"^[0-9]{1,12}\Z")
+NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}\Z")
 # Replay-cache bound: past this many live nonces new requests are refused (fail closed) rather than
 # evicting a live nonce, which would re-open replay of that request.
 NONCE_CACHE_MAX = 100_000
@@ -149,10 +150,8 @@ FLEET_SAVE_DEBOUNCE_S = 5.0
 
 
 def max_nodes() -> int:
-    try:
-        n = int(os.environ.get("AVRONE_FLEET_MAX_NODES", "").strip() or DEFAULT_MAX_NODES)
-    except ValueError:
-        n = DEFAULT_MAX_NODES
+    n_raw = _env_num("AVRONE_FLEET_MAX_NODES")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MAX_NODES
     return max(1, min(HARD_MAX_NODES, n))
 
 # Tests may set this to an httpx transport (e.g. ASGITransport routing to in-process apps).
@@ -206,7 +205,12 @@ def check_node_url(url: Any) -> str:
 
 
 def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+    """Round 86: cleaned like a secret (config.clean_secret), so '"1"' from a compose .env is 1.
+    Before, AVRONE_FLEET_REQUIRE_ALLOW='"1"' read as off (any token holder could join) and
+    AVRONE_FLEET_MAX_HOPS='"3"' raised ValueError in FleetManager(), so bootstrap left the fleet off."""
+    from .config import clean_secret
+    raw = os.getenv(name)
+    return clean_secret(raw) if raw is not None else default.strip()
 
 
 TRUTHY = {"1", "true", "yes", "on"}
@@ -233,11 +237,9 @@ def migrate_enabled() -> bool:
 
 
 def migrate_interval() -> float:
-    try:
-        v = float(_env("AVRONE_AGENT_MIGRATE_INTERVAL") or DEFAULT_MIGRATE_INTERVAL_S)
-    except ValueError:
-        v = DEFAULT_MIGRATE_INTERVAL_S
-    return max(MIN_MIGRATE_INTERVAL_S, v if v == v else DEFAULT_MIGRATE_INTERVAL_S)
+    f = _env_num("AVRONE_AGENT_MIGRATE_INTERVAL")  # round 86: "inf" meant never migrate
+    v = DEFAULT_MIGRATE_INTERVAL_S if f is None else f
+    return max(MIN_MIGRATE_INTERVAL_S, v)
 
 
 # ------------------------------------------------------------ health (edgeroute)
@@ -257,10 +259,8 @@ def offload_mode() -> str:
 
 
 def offload_timeout() -> float:
-    try:
-        t = float(_env("AVRONE_FLEET_OFFLOAD_TIMEOUT", "300") or 300)
-    except ValueError:
-        t = 300.0
+    f = _env_num("AVRONE_FLEET_OFFLOAD_TIMEOUT")  # round 86: "nan" became 5 s via max/min
+    t = 300.0 if f is None else f
     return max(5.0, min(t, 900.0))
 
 
@@ -272,11 +272,19 @@ BRIDGE_MAX_POSTS, BRIDGE_MAX_BYTES = 50, 64 * 1024
 
 
 def _env_int(name: str, default: int, lo: int, hi: int) -> int:
-    try:
-        v = int(_env(name, str(default)) or default)
-    except ValueError:
-        v = default
-    return max(lo, min(v, hi))
+    f = _env_num(name)  # round 86: shared reader (fullwidth digits refused, "1e3" = 1000)
+    if f is None:
+        return max(lo, min(default, hi))
+    return int(max(lo, min(f, hi)))
+
+
+MAX_HOPS_DEFAULT, MAX_HOPS_HARD = 3, 32
+
+
+def max_hops_env() -> int:
+    """AVRONE_FLEET_MAX_HOPS (default 3, clamped 0..32). Round 86: was int(...) inside FleetManager(),
+    so "3x" or '"3"' raised and the node booted with the fleet off; "-5" or 10**9 went through as-is."""
+    return _env_int("AVRONE_FLEET_MAX_HOPS", MAX_HOPS_DEFAULT, 0, MAX_HOPS_HARD)
 
 
 def squad_dispatch(override: str | None = None) -> str:
@@ -388,7 +396,8 @@ def node_load(n: Any) -> int:
 def heartbeat_env() -> float:
     """AVRONE_FLEET_HEARTBEAT in seconds, clamped 1..3600. "abc" used to crash FleetManager at boot,
     and 0 made every peer read as offline forever."""
-    v = _finite(_env("AVRONE_FLEET_HEARTBEAT", "15") or 15, 15.0)
+    f = _env_num("AVRONE_FLEET_HEARTBEAT")  # round 86: fullwidth digits refused, quotes cleaned
+    v = 15.0 if f is None else f
     return 15.0 if v <= 0 else max(1.0, min(3600.0, v))
 
 
@@ -526,6 +535,7 @@ def kind_capabilities(kind: str) -> set[str]:
 
 
 
+FLEET_JSON_READ_TRIES = 3  # round 143: transient read errors at boot
 FLEET_JSON_MAX_BYTES = 64 * 1024 * 1024
 NONCE_SNAPSHOT_MAX_BYTES = 64 * 1024 * 1024
 
@@ -584,7 +594,7 @@ def request_capability(kind: str, payload: dict[str, Any]) -> str:
     return kind
 
 
-SIG_RE = re.compile(r"^[0-9a-f]{64}$")
+SIG_RE = re.compile(r"^[0-9a-f]{64}\Z")
 WEAK_TOKEN_CHARS = 16
 FLEET_PATH_MARK = "/api/fleet/"
 
@@ -604,10 +614,8 @@ def clean_token(raw: Any) -> str:
     """AVRONE_FLEET_TOKEN as both sides should see it: whitespace trimmed and one pair of matching
     surrounding quotes removed. A .env read by docker compose keeps "quotes" that a shell export
     drops, so two nodes with the same line in their .env computed different signatures."""
-    t = str(raw or "").strip()
-    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
-        t = t[1:-1].strip()
-    return t
+    from .config import clean_secret
+    return clean_secret(raw if isinstance(raw, str) else str(raw or ""))
 
 
 def skew_text(ts_i: int, now: float) -> str:
@@ -643,10 +651,10 @@ NONCE_LOCK_WAIT: "_cv.ContextVar[float | None]" = _cv.ContextVar("avrone_nonce_l
 def nonce_lock_wait_s() -> float:
     """AVRONE_FLEET_NONCE_LOCK_S: deadline for the cross-process nonce lock (default 5 s, 0..60).
     It is taken under the manager's thread lock, so it is kept much shorter than AVRONE_LOCK_WAIT_S."""
-    try:
-        v = float(os.environ.get("AVRONE_FLEET_NONCE_LOCK_S", "").strip() or 5)
-    except ValueError:
+    v_raw = _env_num("AVRONE_FLEET_NONCE_LOCK_S")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    if v_raw is None:
         return 5.0
+    v = float(v_raw)
     if v != v or v < 0:
         return 5.0
     return min(v, 60.0)
@@ -675,15 +683,12 @@ class FleetManager:
             log.warning("AVRONE_FLEET_TOKEN is %d chars; use at least %d random chars "
                         "(python -c 'import secrets; print(secrets.token_hex(32))')",
                         len(self.token), WEAK_TOKEN_CHARS)
-        self.max_hops = int(_env("AVRONE_FLEET_MAX_HOPS", "3") or 3)
+        self.max_hops = max_hops_env()
         self.allow = {a.strip() for a in _env("AVRONE_FLEET_ALLOW").split(",") if a.strip()}
         self.require_allow = _env("AVRONE_FLEET_REQUIRE_ALLOW").lower() in TRUTHY
         self.privileged = _env("AVRONE_FLEET_PRIVILEGED").lower() == "allow"  # deny unless exactly "allow"
         self.privileged_nodes = {a.strip() for a in _env("AVRONE_PRIVILEGED_NODES").split(",") if a.strip()}
-        try:
-            ph = int(_env("AVRONE_FLEET_PRIVILEGED_MAX_HOPS", "1") or 1)
-        except ValueError:
-            ph = 1
+        ph = _env_int("AVRONE_FLEET_PRIVILEGED_MAX_HOPS", 1, 1, MAX_HOPS_HARD)
         self.privileged_max_hops = max(1, min(ph, self.max_hops))
         self.parent = _env("AVRONE_FLEET_PARENT").rstrip("/")
         self.public_url = _env("AVRONE_PUBLIC_URL").rstrip("/")
@@ -809,22 +814,45 @@ class FleetManager:
         node from booting: it is moved aside as fleet.json.corrupt-<ts> and the node starts fresh."""
         if not self.path.exists():
             return {}
-        from .safeio import read_capped
-        try:  # round 85: a FIFO here blocked FleetManager() (node boot) forever in read_text()
-            raw = read_capped(self.path, FLEET_JSON_MAX_BYTES)
-            if raw is None:  # a symlink or special file: never read, never renamed
-                log.warning("fleet.json is not a regular file; starting with an empty registry")
-                return {}
-            saved = _jloads(raw.decode("utf-8"))
-        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
-            saved = None
+        from .safeio import FileTooBig, read_capped
+        kind = "corrupt"
+        for attempt in range(FLEET_JSON_READ_TRIES):
+            try:  # round 85: a FIFO here blocked FleetManager() (node boot) forever in read_text()
+                raw = read_capped(self.path, FLEET_JSON_MAX_BYTES)
+                if raw is None:  # a symlink or special file: never read, never renamed
+                    log.warning("fleet.json is not a regular file; starting with an empty registry")
+                    return {}
+                saved = _jloads(raw.decode("utf-8"))
+            except FileTooBig:
+                saved, kind = None, "toobig"
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                saved = None
+            except OSError as e:
+                # Round 143: a transient read error (EMFILE, EIO, EACCES) used to count as corrupt:
+                # the file was moved aside and the node booted with a new random node_id and no
+                # peers. The id is the node's identity (fleet checkpoints are keyed by it), so retry,
+                # then refuse to boot rather than become a different node.
+                if attempt + 1 < FLEET_JSON_READ_TRIES:
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"fleet.json could not be read ({e.strerror or type(e).__name__}); "
+                                   "not starting with a new node identity. Fix the data dir and restart") from None
+            break
         if isinstance(saved, dict):
             return saved
-        aside = self.path.with_name(f"{self.path.name}.corrupt-{int(time.time())}")
+        aside = self.path.with_name(f"{self.path.name}.{kind}-{int(time.time())}")
         try:
             os.replace(self.path, aside)
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError:
+            # round 145: the rename failing used to be ignored, and the first save then overwrote
+            # the unreadable file, so nothing of it was kept. Saves now retry the set-aside first
+            # and refuse to write while it is still in place (_write_registry).
+            self.__dict__["_pending_aside"] = kind
+            log.warning("fleet.json is unreadable and could not be moved aside; it is kept and the "
+                        "registry is not saved until it can be")
+            return {}
         log.warning("fleet.json was unreadable; moved to %s and starting with an empty registry", aside.name)
         return {}
 
@@ -865,6 +893,19 @@ class FleetManager:
 
     def _write_registry(self, text: str) -> None:
         from .safeio import atomic_write
+        kind = self.__dict__.get("_pending_aside")
+        if kind:
+            try:
+                os.replace(self.path, self.path.with_name(f"{self.path.name}.{kind}-{int(time.time())}"))
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # keep the registry in memory only: the node keeps working, the file is kept
+                self.__dict__["save_blocked"] = self.__dict__.get("save_blocked", 0) + 1
+                if self.save_blocked == 1:
+                    log.warning("fleet.json still cannot be set aside; registry kept in memory only")
+                return
+            self.__dict__.pop("_pending_aside", None)
         atomic_write(self.path, text)
 
     def flush(self) -> None:
@@ -2227,20 +2268,87 @@ def _clip1(v: Any, n: int) -> str:
     return _CTRL1.sub(" ", "" if v is None else str(v))[:n]
 
 
+class _ArgError(ValueError):
+    """A bad fleet tool argument, reported as "ERROR: ..." before anything is sent (round 69)."""
+
+
+def _need_text(args: dict[str, Any], key: str) -> str:
+    """A required non-empty text arg. Before: a missing key raised KeyError out of the tool, and
+    a dict/list/number was str()-ed into the task or message sent to a peer."""
+    v = args.get(key)
+    if not isinstance(v, str) or not v.strip():
+        raise _ArgError(f"{key} is required (a non-empty string)")
+    return v
+
+
+def _route_arg(args: dict[str, Any], key: str = "node") -> str:
+    """node: a route or "auto". None, "" and blanks are "auto"; before, {"node": null} became the
+    route ["None"] and asked the fleet for a node literally called None."""
+    v = args.get(key)
+    if v is None:
+        return "auto"
+    if not isinstance(v, str):
+        raise _ArgError(f"{key} must be text (a node id, a route like \"router1/edge7\", or \"auto\")")
+    v = "/".join(p.strip() for p in v.split("/") if p.strip())
+    return v or "auto"
+
+
+def _mode_arg(args: dict[str, Any]) -> str:
+    v = args.get("mode")
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return "squad"
+    if not isinstance(v, str):
+        raise _ArgError("mode must be one of " + ", ".join(SPAWN_MODES))
+    m = v.strip().lower()
+    if m not in SPAWN_MODES:  # unknown modes ran as squad on the remote anyway; say so up front
+        raise _ArgError(f"unknown mode {v.strip()[:40]!r}; use one of " + ", ".join(SPAWN_MODES))
+    return m
+
+
+def _privileged_arg(v: Any) -> str:
+    """remote_spawn privileged: "" (not privileged), "priv:shell" or "priv:admin".
+    Round 69: str(v) turned {"privileged": "false"} into the capability "priv:false" (the spawn was
+    refused instead of running normally) and true into "priv:True"."""
+    from .argnum import _FALSE_WORDS
+    if v is None or v is False:
+        return ""
+    if isinstance(v, str):
+        t = v.strip().lower()
+        if t in _FALSE_WORDS:
+            return ""
+        t = t if t.startswith("priv:") else f"priv:{t}"
+        if t in PRIVILEGED_CAPABILITIES:
+            return t
+    elif isinstance(v, (int, float)) and not isinstance(v, bool) and v == 0:
+        return ""
+    raise _ArgError("privileged must be \"shell\" or \"admin\" (or left out)")
+
+
+def _tool_err(e: BaseException, cap: int = 300) -> str:
+    """A peer's error as one masked line (round 69; same rule as agent_migrate in round 68)."""
+    from .tools import one_line
+    try:
+        from .tools_researchnote import redact_text
+        t = redact_text(one_line(f"{type(e).__name__}: {e}"))
+    except Exception:  # noqa: BLE001 - fail closed
+        return type(e).__name__
+    return t if len(t) <= cap else t[:cap] + "..."
+
+
 async def t_remote_spawn(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = _fleet(ctx)
-    target = str(args.get("node", "auto"))
+    try:
+        task, target, mode = _need_text(args, "task"), _route_arg(args), _mode_arg(args)
+        priv = _privileged_arg(args.get("privileged"))
+    except _ArgError as e:
+        return f"ERROR: {e}"
     route = [p for p in target.split("/") if p] if target != "auto" else []
     hops = getattr(ctx.core, "fleet_hops", 0)
-    priv = str(args.get("privileged") or "")
-    if priv and not priv.startswith("priv:"):
-        priv = f"priv:{priv}"
     kw = {"rounds": r} if (r := clamp_deep_rounds(args.get("rounds"))) is not None else {}
     if args.get("checkpoint_id"):  # squad/deep: a retried spawn with the same id resumes on that node
         kw["checkpoint_id"] = str(args["checkpoint_id"])
     try:
-        res = await f.dispatch(route, str(args.get("mode", "squad")), str(args["task"]), hops, args.get("n"),
-                               ctx.run_id, privileged=priv, **kw)
+        res = await f.dispatch(route, mode, task, hops, args.get("n"), ctx.run_id, privileged=priv, **kw)
     except GatewayRefused as e:
         if not priv:
             raise
@@ -2250,7 +2358,20 @@ async def t_remote_spawn(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 async def t_remote_broadcast(ctx: "AgentContext", args: dict[str, Any]) -> str:
     f = _fleet(ctx)
-    targets = args.get("nodes") or [n["node_id"] for n in f.list_nodes() if n["status"] == "online"]
+    try:
+        task, mode = _need_text(args, "task"), _mode_arg(args)
+    except _ArgError as e:
+        return f"ERROR: {e}"
+    targets = args.get("nodes")
+    if isinstance(targets, str):
+        # round 69: a bare string was iterated character by character, so {"nodes": "router1"}
+        # dispatched the task to up to 8 one-letter nodes "r", "o", "u", ...
+        targets = [targets]
+    elif targets is not None and not isinstance(targets, (list, tuple)):
+        return "ERROR: nodes must be a list of node ids or routes"
+    if targets is not None and not all(isinstance(t, str) for t in targets):
+        return "ERROR: nodes must be a list of node ids or routes (text)"
+    targets = targets or [n["node_id"] for n in f.list_nodes() if n["status"] == "online"]
     # Normalize each route ("good/", "/good", " good " are all "good") before de-duplicating, and
     # drop empty ones: an empty route would silently become an "auto" pick of some other node.
     routes = ("/".join(p.strip() for p in str(t).split("/") if p.strip()) for t in targets)
@@ -2261,11 +2382,11 @@ async def t_remote_broadcast(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
     async def one(t: str) -> str:
         try:
-            r = await f.dispatch([p for p in t.split("/") if p], str(args.get("mode", "squad")), str(args["task"]),
-                                 hops, args.get("n"), ctx.run_id)
+            r = await f.dispatch([p for p in t.split("/") if p], mode, task, hops, args.get("n"), ctx.run_id)
             return f"## {t}\n{r.get('answer', '')}"
         except Exception as e:  # noqa: BLE001
-            return f"## {t}\nERROR: {type(e).__name__}: {e}"
+            # round 69: a peer's raw error body could forge a "## node" section for another node
+            return f"## {t}\nERROR: {_tool_err(e)}"
     return "\n\n".join(await asyncio.gather(*(one(t) for t in targets)))
 
 
@@ -2276,7 +2397,8 @@ async def t_fleet_agents(ctx: "AgentContext", args: dict[str, Any]) -> str:
     q = str(args.get("filter", "") or "").lower()
     if len(q) > 500:
         return "ERROR: filter is longer than 500 chars"
-    live_only = bool(args.get("live_only"))
+    from .argnum import tool_bool
+    live_only = tool_bool(args.get("live_only"), False)  # round 59: "false" read as True
 
     def build() -> str:  # filter + render of a 2,000-row tree cost seconds on the event loop
         rs = rows
@@ -2288,11 +2410,16 @@ async def t_fleet_agents(ctx: "AgentContext", args: dict[str, Any]) -> str:
 
 
 async def t_agent_message(ctx: "AgentContext", args: dict[str, Any]) -> str:
+    from .argnum import tool_bool
     from .presence import directory, find_agent
     f = _fleet(ctx)
-    route, name = find_agent(await directory(ctx.core), str(args["agent"]))
-    res = await f.send_message([p for p in route.split("/") if p], name, str(args["message"]),
-                               f"{f.node_id}/{ctx.name}", getattr(ctx.core, "fleet_hops", 0), bool(args.get("wait")))
+    try:
+        agent, message = _need_text(args, "agent"), _need_text(args, "message")
+    except _ArgError as e:
+        return f"ERROR: {e}"
+    route, name = find_agent(await directory(ctx.core), agent)
+    res = await f.send_message([p for p in route.split("/") if p], name, message,
+                               f"{f.node_id}/{ctx.name}", getattr(ctx.core, "fleet_hops", 0), tool_bool(args.get("wait"), False))
     head = f"[{' -> '.join(res.get('path', []))}] {name}: {res.get('delivered')}"
     return head + (f"\n{res['answer']}" if res.get("answer") else f" ({res.get('note') or res.get('run_id')})")
 
@@ -2321,11 +2448,14 @@ async def t_queue_submit(ctx: "AgentContext", args: dict[str, Any]) -> str:
         return "ERROR: task is required (a non-empty string)"
     if len(task.encode("utf-8", "replace")) > QUEUE_TASK_MAX:
         return f"ERROR: task is over {QUEUE_TASK_MAX} bytes; put the detail in a file and reference it"
-    payload = {"task": task, "node": str(args.get("node", "auto")), "mode": str(args.get("mode", "squad")),
+    try:  # round 69: {"node": null} queued a job for the node "None"
+        node, mode = _route_arg(args), _mode_arg(args)
+    except _ArgError as e:
+        return f"ERROR: {e}"
+    payload = {"task": task, "node": node, "mode": mode,
                "n": args.get("n"), "from": f"{f.node_id}/{ctx.name}"}
     first = payload["node"].split("/", 1)[0]
     try:  # vet at submit time too, so a doomed job never enters the durable queue
-        mode = payload["mode"] if payload["mode"] in SPAWN_MODES else "squad"
         f.check_outbound("run", f"spawn:{mode}", getattr(ctx.core, "fleet_hops", 0), first)
     except PermissionError as e:
         return f"ERROR: refused by fleet gateway: {e}"

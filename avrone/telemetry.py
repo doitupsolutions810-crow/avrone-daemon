@@ -7,6 +7,7 @@ Eternal CodeX event logs. Nothing here probes external networks.
 """
 from __future__ import annotations
 
+from .config import env_num as _env_num  # noqa: E402
 import hashlib
 import json
 import math
@@ -49,10 +50,8 @@ def clamp_window(window_s: Any) -> float:
 def max_file_bytes() -> int:
     """Bytes read from the end of each log (AVRONE_TELEMETRY_MAX_FILE_BYTES, default 8 MiB, clamped
     64 KiB..256 MiB). A runaway multi-GB run log used to be read whole into memory per request."""
-    try:
-        n = int(os.getenv("AVRONE_TELEMETRY_MAX_FILE_BYTES", "").strip() or DEFAULT_MAX_FILE_BYTES)
-    except ValueError:
-        n = DEFAULT_MAX_FILE_BYTES
+    n_raw = _env_num("AVRONE_TELEMETRY_MAX_FILE_BYTES")  # round 85: ASCII-only, quotes/blank handled, junk warned once
+    n = int(n_raw) if n_raw is not None else DEFAULT_MAX_FILE_BYTES
     return max(64 << 10, min(HARD_MAX_FILE_BYTES, n))
 
 

@@ -23,7 +23,19 @@ from . import agentcontainer, agentfs
 from .config import Settings
 
 
-_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+# round 67: the old pattern knew CSI, OSC and a few two-byte escapes only, so tput sgr0's "\x1b(B",
+# DECSC/DECRC "\x1b7"/"\x1b8", keypad "\x1b=", the 8-bit CSI U+009B and a trailing lone ESC
+# reached the transcript (and any terminal that renders it) raw, and a DCS/APC string (sixel,
+# tmux passthrough) lost only its introducer, leaving its payload as junk text. ECMA-48 in full:
+_ANSI_RE = re.compile(
+    r"(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])(?:[^\x1b\x9c]*(?:\x1b\\|\x9c)|[^\x1b\x9c\n]*)"  # DCS/SOS/PM/APC
+    #   string; one never terminated is dropped to its line end only, so it can't eat the error below
+    r"|(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]"                                # CSI (7- and 8-bit)
+    r"|(?:\x1b\]|\x9d)[^\x07\x1b\x9c\n]*(?:\x07|\x1b\\|\x9c)?"            # OSC (to BEL/ST, or line end)
+    r"|\x1b[ -/]+[0-~]"                                                # nF: charset "(B", "#8", "%G"
+    r"|\x1b[0-~]"                                                      # Fp/Fe/Fs: "7", "8", "=", "c"
+    r"|\x1b[ -/]*(?![ -~])"                                             # a lone/cut-off ESC (+ partial nF)
+    r"|[\x80-\x9f]")                                                    # any other C1 control (a lone 8-bit CSI)
 _SIGNALS = {int(v): v.name for v in signal.Signals}
 OUTPUT_HEAD_BYTES = 1024 * 1024   # per stream, kept in memory from the start ...
 OUTPUT_TAIL_BYTES = 256 * 1024    # ... plus the last 256 KB; the middle is counted, not kept
@@ -31,10 +43,10 @@ CMD_ECHO_MAX = 400
 
 
 def _pipe_grace() -> float:
-    try:
-        return max(0.0, min(10.0, float(os.environ.get("AVRONE_SHELL_PIPE_GRACE", "0.5"))))
-    except ValueError:
-        return 0.5
+    # round 85: "nan" was min(10, nan) = 10 s of grace; blank/quoted/fullwidth handled by env_num
+    from .config import env_num
+    v = env_num("AVRONE_SHELL_PIPE_GRACE")
+    return 0.5 if v is None else max(0.0, min(10.0, v))
 
 
 def clean_output(s: str) -> str:
@@ -45,6 +57,8 @@ def clean_output(s: str) -> str:
     s = _ANSI_RE.sub("", s).replace("\r\n", "\n")
     if "\r" in s:
         s = "\n".join(seg.rstrip("\r").rsplit("\r", 1)[-1] for seg in s.split("\n"))
+        # round 67: collapsing a redrawn line can join the halves of an escape ("\x1b\r[m")
+        s = _ANSI_RE.sub("", s)
     return s
 
 
@@ -348,12 +362,13 @@ class DockerRunner(Runner):
         self.workspace.mkdir(parents=True, exist_ok=True)
         try:
             mount = agentfs.bind_args(self.workspace, "/workspace")
-        except agentfs.AgentFSError as e:
+            image = agentcontainer.check_image(self.s.docker_image)  # round 60: "--privileged" was a flag
+        except (agentfs.AgentFSError, ValueError) as e:
             raise RuntimeError(f"Could not start environment container: {e}") from None
         argv = ["docker", "run", "-d", "--rm", "--name", self.container, *mount, "-w", "/workspace"]
         if not self.s.allow_network:
             argv += ["--network", "none"]
-        argv += [self.s.docker_image, "sleep", "infinity"]
+        argv += [image, "sleep", "infinity"]
         res = await self._exec(argv, " ".join(argv), 300)
         if res.exit_code != 0:
             raise RuntimeError(f"Could not start environment container: {res.stderr}")
@@ -384,7 +399,7 @@ class DockerRunner(Runner):
             # same hardening as the persistent agent home (cap_drop ALL, no-new-privileges,
             # mem/cpu/pids limits, --network none unless AVRONE_ALLOW_NETWORK)
             argv += agentcontainer.hardening_args(self.s.allow_network)
-            return argv + [self.s.docker_image, *tail]
+            return argv + [agentcontainer.check_image(self.s.docker_image), *tail]
         inner = agentfs.container_agent_path(self.workspace, agent_cwd)
         argv = ["docker", "exec", "-w", inner]
         for k, v in self.agent_env(agent_cwd, in_container=inner).items():
@@ -404,12 +419,20 @@ class DockerRunner(Runner):
             # long-lived per-agent home container (only the agent dir mounted at /agent), reused
             pool = self._pool()
             name = await pool.ensure(agent_cwd)
-            res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+            pool.begin(name)  # round 60: a busy home is never idle-reaped mid-command
+            try:
+                res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+            finally:
+                pool.end(name)
             if agentcontainer.container_gone(res, name):  # the home died under us: recreate once
                 await pool.forget(name)
                 self.restarts += 1
                 name = await pool.ensure(agent_cwd)
-                res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+                pool.begin(name)
+                try:
+                    res = await self._exec(agentcontainer.exec_argv(name, cmd, t), cmd, t)
+                finally:
+                    pool.end(name)
             return res
         if agent_cwd is not None and agentfs.docker_isolate():
             run_name = f"avrone-run-{uuid.uuid4().hex[:12]}"

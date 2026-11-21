@@ -76,7 +76,7 @@
 </main>
 <script>
 const $ = s => document.querySelector(s);
-const agents = {};
+const agents = Object.create(null);  // round 149: an agent named "__proto__" or "constructor" hit Object.prototype
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function addMsg(text, cls, extra){ const d=document.createElement('div'); d.className='msg '+cls; d.textContent=text; if(extra){ const a=document.createElement('div'); a.className='agents'; a.textContent=extra; d.appendChild(a);} $('#msgs').appendChild(d); $('#msgs').scrollTop=1e9; return d; }
 function renderHud(){ $('#hud').innerHTML = Object.entries(agents).reverse().map(([n,a]) =>

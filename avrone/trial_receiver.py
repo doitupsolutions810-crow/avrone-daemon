@@ -476,14 +476,19 @@ class TrialStore:
                 raise TrialStoreError(
                     "new trial database path cannot be revalidated"
                 ) from exc
-            if (
-                (current.st_dev, current.st_ino) != identity
-                or not stat.S_ISREG(current.st_mode)
-                or current.st_nlink != 1
-                or stat.S_IMODE(current.st_mode) != 0o600
-            ):
+            if stat.S_ISLNK(current.st_mode):
+                raise TrialStoreError("trial database must not be a symlink")
+            if not stat.S_ISREG(current.st_mode):
+                raise TrialStoreError("trial database must be a regular file")
+            if current.st_nlink != 1:
+                raise TrialStoreError("trial database must not be a hard link")
+            if (current.st_dev, current.st_ino) != identity:
                 raise TrialStoreError(
                     "trial database identity changed during exclusive creation"
+                )
+            if stat.S_IMODE(current.st_mode) != 0o600:
+                raise TrialStoreError(
+                    "trial database permissions could not be finalized to 0600"
                 )
             self._assert_private_parent()
             return identity

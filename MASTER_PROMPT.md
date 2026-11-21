@@ -114,15 +114,15 @@ Avrone/
 │   ├── trial_receiver.py        Durable, idempotent receiver for authenticated AVRONE trial envelopes.
 │   ├── trinity.py               Trinity Core: the daemon kernel that orchestrates agents.
 ├── skills/                 # 33 agent skills, one SKILL.md each
-├── tests/                  # 444 test files, offline by default
+├── tests/                  # 446 test files, offline by default
 ├── tools/
 │   ├── make_master_prompt.py
 │   ├── model_bench.py
 ├── plugins/
-│   ├── __pycache__
 │   ├── calculator.py
 │   ├── datetime_tool.py
 │   ├── json_tool.py
+│   ├── platform_bridge.py
 ├── scripts/
 │   ├── AVRONE-HANDOFF.md
 │   ├── avrone-state

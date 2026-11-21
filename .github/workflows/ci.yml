@@ -42,8 +42,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "$BRANCH"
-          git checkout --detach "origin/$BRANCH"
-          cp /tmp/MASTER_PROMPT.generated.md MASTER_PROMPT.md
+          git worktree add --detach /tmp/pr-head "origin/$BRANCH"
+          cp /tmp/MASTER_PROMPT.generated.md /tmp/pr-head/MASTER_PROMPT.md
+          cd /tmp/pr-head
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add MASTER_PROMPT.md
           if ! git diff --cached --quiet; then
             git commit -m "Regenerate MASTER_PROMPT.md from current source"

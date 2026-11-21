@@ -232,10 +232,7 @@ class TrialStore:
                 unsafe_type = (
                     not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
                 )
-                unsafe_mode = (
-                    require_private and stat.S_IMODE(info.st_mode) != 0o600
-                )
-                if unsafe_type or unsafe_mode:
+                if unsafe_type:
                     # Distinguish a stable hostile file from a sidecar that
                     # SQLite replaced/unlinked between our observations.
                     try:
@@ -248,19 +245,31 @@ class TrialStore:
                         or current.st_nlink != info.st_nlink
                     ):
                         continue
-                    if unsafe_type:
-                        raise TrialStoreError(
-                            "trial database sidecar " + suffix
-                            + " must be a regular single-link file "
-                            + f"(type={stat.S_IFMT(info.st_mode):#o}, "
-                            + f"nlink={info.st_nlink})"
-                        )
+                    raise TrialStoreError(
+                        "trial database sidecar " + suffix
+                        + " must be a regular single-link file "
+                        + f"(type={stat.S_IFMT(info.st_mode):#o}, "
+                        + f"nlink={info.st_nlink})"
+                    )
+
+                # Preserve the security-check order: ownership must be
+                # established before reporting mode drift.
+                self._assert_file_owner(info, "trial database sidecar")
+                if require_private and stat.S_IMODE(info.st_mode) != 0o600:
+                    try:
+                        current = sidecar.lstat()
+                    except FileNotFoundError:
+                        continue
+                    if (
+                        (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino)
+                        or current.st_mode != info.st_mode
+                        or current.st_nlink != info.st_nlink
+                    ):
+                        continue
                     raise TrialStoreError(
                         "trial database sidecar permissions changed after initialization "
                         "(expected 0600): " + suffix
                     )
-
-                self._assert_file_owner(info, "trial database sidecar")
                 try:
                     current = sidecar.lstat()
                 except FileNotFoundError:

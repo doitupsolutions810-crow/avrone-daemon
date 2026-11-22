@@ -40,10 +40,10 @@ def tree() -> str:
             # Runtime cache directories are host artifacts, not repository structure.
             # Including __pycache__ made MASTER_PROMPT.md depend on which tests had
             # already imported modules in the checkout.
-            entries = [
+            entries = sorted(
                 entry for entry in d.iterdir()
                 if entry.name not in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
-            ]
+            )
             for f in entries[:12]:
                 out.append(f"│   ├── {f.name}")
     for f in ("pyproject.toml", "Dockerfile", "docker-compose.yml", "README.md", "SYSTEM_ACCESS.md"):

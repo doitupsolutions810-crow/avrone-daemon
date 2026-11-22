@@ -54,3 +54,15 @@ def test_prompt_names_only_real_things():
     assert f"v{__version__}" in text and "Hard safety lines" in text
     for f in ("tools/model_bench.py", "avrone/server.py", "avrone/mcp_server.py"):
         assert (ROOT / f).exists()
+
+def test_tree_omits_runtime_cache_directories(tmp_path, monkeypatch):
+    for top in ("tools", "plugins", "scripts", "deploy", "examples"):
+        directory = tmp_path / top
+        directory.mkdir()
+        (directory / "__pycache__").mkdir()
+        (directory / "keep.txt").write_text("tracked structure", encoding="utf-8")
+
+    monkeypatch.setitem(MOD["tree"].__globals__, "ROOT", tmp_path)
+    rendered = MOD["tree"]()
+    assert "__pycache__" not in rendered
+    assert rendered.count("keep.txt") == 5

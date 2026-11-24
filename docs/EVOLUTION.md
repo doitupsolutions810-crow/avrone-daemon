@@ -329,7 +329,6 @@ Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on re
 
 **Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
 
-
 ## CI Status Check 2026-11-24T22:06Z (head eb0a2d1b)
 
 Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/45488258254 (run 1978, SHA eb0a2d1bcffe9579e6d808c50b68a43bae6ada83) completed with conclusion **success**.
@@ -338,6 +337,25 @@ Jobs completed with real runners assigned:
 - test (3.11): runner_id 1000013550, runner_name "GitHub Actions 1000013550"
 - test (3.12): runner_id 1000013551, runner_name "GitHub Actions 1000013551"
 - docker-verify: runner_id 1000013552, runner_name "GitHub Actions 1000013552"
+
+No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
+
+Verify.sh exists at repo root. docker-verify job is present in .github/workflows/ci.yml (runs-on ubuntu-24.04, builds image and runs Verify.sh).
+
+On main, recent runs: model-bench success (45110378239), CI failures (e.g. 44963746315 failure).
+
+Note: companion workflow `.github/workflows/squad-round-notify.yml` failed on recent pushes (conclusion failure), but this is not the CI workflow under examination.
+
+**Status: CI green on descent/xcv-trust-gates with real runners.** Report success and recommend pausing this automation. No force-push. Do not delete branches.
+
+## CI Status Check 2026-11-24T23:10Z (head 5ad18fae)
+
+Most recent CI workflow run on branch `descent/xcv-trust-gates`: https://github.com/doitupsolutions810-crow/avrone-daemon/actions/runs/45497973048 (run 1980, SHA 5ad18fae4e90f5c045d6291b4398007627fb6569) completed with conclusion **success**.
+
+Jobs completed with real runners assigned:
+- docker-verify: runner_id 1000013556, runner_name "GitHub Actions 1000013556"
+- test (3.12): runner_id 1000013557, runner_name "GitHub Actions 1000013557"
+- test (3.11): runner_id 1000013558, runner_name "GitHub Actions 1000013558"
 
 No runner ID zero, blank name, or logs 404 observed. Checkout and all steps succeeded.
 

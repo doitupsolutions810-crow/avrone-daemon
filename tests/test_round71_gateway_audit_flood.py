@@ -149,6 +149,7 @@ def test_big_bodies_verified_off_loop(monkeypatch, tmp_path):
         method = "POST"
         url = SimpleNamespace(path=PATH)
         headers = {}
+        scope = {"headers": []}
 
         def __init__(self, body):
             self._b = body

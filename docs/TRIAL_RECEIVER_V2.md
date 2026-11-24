@@ -15,7 +15,7 @@ The envelope schema is avrone.trial/v2. Its ID is a SHA-256 digest of canonical 
 - Envelope schema: avrone.trial/v2
 - Capability: evidence:trial:ingest
 
-Both endpoints pass through FleetManager.dispatch_gateway before an adapter is invoked. The request body is HMAC-SHA256 signed over method, canonical fleet path, timestamp, nonce, and body hash. Replay nonces, timestamp bounds, hop bounds, capability checks, and the explicit non-empty sender allowlist are enforced. The route also reparses the original bytes with duplicate-key and non-finite-number rejection before storage.
+Both endpoints pass through FleetManager.dispatch_gateway before an adapter is invoked. The request body is HMAC-SHA256 signed over method, canonical fleet path, timestamp, nonce, and body hash. Replay nonces, timestamp bounds, hop bounds, capability checks, and the explicit non-empty sender allowlist are enforced. The route also reparses the original bytes with duplicate-key and non-finite-number rejection before storage. Duplicate raw x-avrone-ts, x-avrone-nonce, or x-avrone-sig headers are rejected before nonce verification, so ambiguous header normalization cannot consume a valid nonce.
 
 Trial-ingest bodies are hard-capped at 256 KiB; batches contain 1..10 envelopes; each envelope is capped at 24 KiB; configuration is capped at 16 KiB, depth 32, and 4,096 JSON values. Identity fields are NFC-normalized and bounded. Configuration keys and string values are NFC-normalized; key collisions after normalization are rejected.
 

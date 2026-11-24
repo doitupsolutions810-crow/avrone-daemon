@@ -85,6 +85,26 @@ def test_bridge_endpoint_requires_versioned_bridge_wrapper(client):
     assert response.json()["results"][0]["status"] == "accepted"
 
 
+
+@pytest.mark.parametrize("header_name", ["x-avrone-ts", "x-avrone-nonce", "x-avrone-sig"])
+def test_trial_endpoint_rejects_duplicate_auth_headers_before_nonce_consumption(client, header_name):
+    path = "/api/fleet/trials"
+    body = payload(FLEET_TRIAL_SCHEMA, envelope())
+    raw = json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    signed = sign(TOKEN, "POST", path, raw)
+    headers = [("content-type", "application/json"), *signed.items(), (header_name, signed[header_name])]
+
+    duplicate = client.post(path, content=raw, headers=headers)
+    assert duplicate.status_code == 400
+
+    # The same signed nonce remains usable: duplicate headers were rejected before verify().
+    retry = client.post(path, content=raw, headers={"content-type": "application/json", **signed})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["results"][0]["status"] == "accepted"
+
+
 def test_trial_endpoint_has_a_hard_body_cap():
     from avrone.server import max_body_bytes
 

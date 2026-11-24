@@ -587,10 +587,28 @@ def _fleet():
     return f
 
 
+FLEET_AUTH_HEADER_NAMES = frozenset({b"x-avrone-ts", b"x-avrone-nonce", b"x-avrone-sig"})
+
+
+def _reject_duplicate_fleet_auth_headers(request: Request) -> None:
+    """Reject repeated raw auth headers before gateway verification consumes a nonce."""
+    seen: set[bytes] = set()
+    for name, _value in request.scope.get("headers", ()):
+        if not isinstance(name, bytes):
+            continue
+        normalized = name.lower()
+        if normalized not in FLEET_AUTH_HEADER_NAMES:
+            continue
+        if normalized in seen:
+            raise HTTPException(400, "duplicate fleet authentication header")
+        seen.add(normalized)
+
+
 async def _gateway(request: Request, kind: str) -> dict:
     """Inbound remote spawn/message: the single vetted path (fleet.dispatch_gateway)."""
     from .fleet import GatewayRefused
     f = _fleet()
+    _reject_duplicate_fleet_auth_headers(request)
     body = await request.body()
     args = (kind, request.method, request.url.path, body, {k.lower(): v for k, v in request.headers.items()})
     try:

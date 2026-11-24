@@ -142,6 +142,7 @@ class _Req:
 
     def __init__(self, body, headers):
         self._b, self.headers = body, headers
+        self.scope = {"headers": [(key.lower().encode("latin-1"), value.encode("latin-1")) for key, value in headers.items()]}
         self.url = SimpleNamespace(path=PATH)
 
     async def body(self):

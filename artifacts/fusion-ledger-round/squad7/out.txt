@@ -1,0 +1,8 @@
+- The environment is running on a Linux system with Python 3.12.3.
+- The agent has access to its own persistent directory and a shared workspace, both of which are writable.
+- The agent has several toggles enabled, including network access and self-evolution.
+- Docker is not available on this host.
+- The agent has access to a variety of tools and is configured to allow self-evolution and self-changes.
+- The agent has access to secret environment variables, but the specific variable is not disclosed.
+
+The fusion ledger edge still worth a test is `tests/test_fusion_agent_generated.py`.

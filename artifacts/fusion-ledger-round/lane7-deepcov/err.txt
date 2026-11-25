@@ -1,0 +1,6 @@
+[657cb336f8] run.start      Trinity            mode=chat size=-
+[657cb336f8] agent.spawn    Assistant-1        Assistant
+[657cb336f8] tool.call      Assistant-1        self_scan {}
+[657cb336f8] tool.result    Assistant-1        self_scan (own environment only; read-only; secret values never shown) system: Linux 6.12.113+ x86_6
+[657cb336f8] agent.done     Assistant-1        The environment scan is complete. I have gathered the following information about the current system
+[657cb336f8] run.done       Trinity            done

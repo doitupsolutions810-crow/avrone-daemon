@@ -1,0 +1,17 @@
+The environment scan is complete. I have gathered the following information about the current system and its configuration:
+
+- **Operating System**: Linux 6.12.113+ x86_64
+- **Python Version**: 3.12.3
+- **Hostname**: cursor
+- **Process ID**: 15816
+- **Current Working Directory**: /agent/repos/avrone-daemon (writable)
+- **Workspace**: /agent/repos/avrone-daemon (writable) with 239.2/253.3 GiB free space
+- **Runner**: local (configured=local)
+- **Docker Availability**: False
+- **Toggles**: AVRONE_RECON=allow, AVRONE_RECON_ALLOWLIST=default-deny, AVRONE_ALLOW_NETWORK=True, AVRONE_AGENTS_CAN_SHELL=True, AVRONE_SELF_EVOLVE=allow, AVRONE_SELF_CHANGES=allow
+- **Admin Token**: off
+- **Tools Registered**: 101
+- **Network Interfaces**: 127.0.0.1, 172.30.0.2
+- **Secret Environment Variables**: GIT_CONFIG_KEY_0 is set, while all other secret variables are unset.
+
+This information is useful for understanding the current state of the environment and for planning further tasks.

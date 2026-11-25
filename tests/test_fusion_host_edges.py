@@ -21,7 +21,6 @@ from avrone.safeio import atomic_write
 
 PY = sys.executable
 REPO = Path(__file__).resolve().parents[1]
-SITE = Path.home() / ".local/lib/python3.12/site-packages"
 
 
 def _event(eid: str) -> dict:
@@ -118,14 +117,57 @@ def test_many_watches_forward_together():
             server.shutdown()
 
 
+def _python_paths() -> list[Path]:
+    import site
+    import sysconfig
+    found: list[Path] = []
+    for raw in [sysconfig.get_path("purelib"), *site.getsitepackages(), site.getusersitepackages()]:
+        if not raw:
+            continue
+        path = Path(raw)
+        if path.is_dir() and path not in found:
+            found.append(path)
+    return found
+
+
+def _open_traverse(start: Path, opened: list[tuple[Path, int]]) -> None:
+    node = start.resolve()
+    while True:
+        try:
+            mode = node.stat().st_mode
+        except OSError:
+            break
+        if mode & 0o001 == 0 and all(prev != node for prev, _mode in opened):
+            subprocess.run(["sudo", "chmod", "o+x", str(node)], check=True)
+            opened.append((node, mode))
+        if node == node.parent:
+            break
+        node = node.parent
+
+
+def _let_others_import(repo: Path) -> tuple[list[tuple[Path, int]], str]:
+    """Other users must be able to walk to the package and its installed deps.
+
+    GitHub's checkout is mode 750 under /home/runner, so fusionro cannot
+    import it. Only directories that lacked other-execute are changed, and
+    they are restored. No home directory is named.
+    """
+    opened: list[tuple[Path, int]] = []
+    _open_traverse(repo, opened)
+    subprocess.run(["sudo", "chmod", "-R", "o+rX", str(repo / "avrone")], check=True)
+    libs = _python_paths()
+    for lib in libs:
+        _open_traverse(lib, opened)
+    py_path = os.pathsep.join([str(repo), *(str(lib) for lib in libs)])
+    return opened, py_path
+
+
 def test_unprivileged_read_only_dir(tmp_path):
     if subprocess.call(["sudo", "-n", "true"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) != 0:
         pytest.skip("needs sudo")
     subprocess.run(["sudo", "useradd", "-M", "-N", "-s", "/usr/sbin/nologin", "fusionro"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    home = Path("/home/ubuntu")
-    mode = home.stat().st_mode
-    subprocess.run(["sudo", "chmod", "o+x", str(home)], check=True)
+    opened, py_path = _let_others_import(REPO)
     parent = Path("/tmp/fusion-ro-ledger")
     subprocess.run(["sudo", "rm", "-rf", str(parent)], check=True)
     subprocess.run(["sudo", "mkdir", "-p", str(parent)], check=True)
@@ -156,12 +198,13 @@ finally:
 """
     try:
         proc = subprocess.run(
-            ["sudo", "-u", "fusionro", "env", f"PYTHONPATH={REPO}:{SITE}", PY, "-c", script, str(parent)],
-            cwd=str(REPO), capture_output=True, text=True, timeout=30,
+            ["sudo", "-u", "fusionro", "env", f"PYTHONPATH={py_path}", PY, "-c", script, str(parent)],
+            cwd="/tmp", capture_output=True, text=True, timeout=30,
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
     finally:
-        os.chmod(home, mode)
+        for path, mode in opened:
+            subprocess.run(["sudo", "chmod", format(mode & 0o777, "o"), str(path)], check=False)
         subprocess.run(["sudo", "rm", "-rf", str(parent)], check=False)
 
 

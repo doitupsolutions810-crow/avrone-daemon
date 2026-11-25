@@ -1,0 +1,2 @@
+{"ts": "2026-11-25T18:26:19.926798+00:00", "seconds": 600.444, "offered": 17040, "delivered": 17040, "pending": 0, "failed": 0, "lost": 0, "identity": true, "posts": 17040, "rss_kib_start": 28724, "rss_kib_end": 62384, "file_bytes": 1866524}
+SOAK_EXIT:0

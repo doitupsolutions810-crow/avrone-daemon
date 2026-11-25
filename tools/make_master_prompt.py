@@ -37,8 +37,9 @@ def tree() -> str:
             out.append(f"├── tests/                  # {len(list(d.glob('test_*.py')))} test files, offline by default")
         else:
             out.append(f"├── {top}/")
-            for f in sorted(d.iterdir())[:12]:
-                out.append(f"│   ├── {f.name}")
+            names = sorted(p.name for p in d.iterdir() if p.name != "__pycache__" and not p.name.endswith(".pyc"))
+            for name in names[:12]:
+                out.append(f"│   ├── {name}")
     for f in ("pyproject.toml", "Dockerfile", "docker-compose.yml", "README.md", "SYSTEM_ACCESS.md"):
         if (ROOT / f).exists():
             out.append(f"├── {f}")

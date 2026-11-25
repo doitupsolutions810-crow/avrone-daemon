@@ -40,6 +40,11 @@ def test_unclosed_think_block_still_parses_as_last_resort():
     assert parse_action('<think>{"tool":"only"}') == {"tool": "only"}
 
 
+def test_qwen_name_arguments_is_an_action():
+    assert parse_action('{"name":"shell","arguments":{"cmd":"ls"}}')["name"] == "shell"
+    assert parse_action('<tool_call>{"name":"shell","arguments":{"cmd":"ls"}}</tool_call>')["name"] == "shell"
+
+
 def test_harmony_tokens_leaked_by_the_server():
     t = ('<|start|>assistant<|channel|>analysis<|message|>maybe {"tool":"bad"}<|end|>'
          '<|start|>assistant<|channel|>final<|message|>{"tool":"good"}<|return|>')

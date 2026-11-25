@@ -295,8 +295,19 @@ _MAX_DECODE_TRIES = 4000  # bounds the scan of a pathological reply (thousands o
 _MAX_DECODE_SECONDS = 0.3
 
 
+def _named_call(obj: dict[str, Any]) -> bool:
+    """Qwen and OpenAI content calls that never use the ``tool`` key."""
+    fn = obj.get("function")
+    if isinstance(fn, dict) and isinstance(fn.get("name"), str) and fn["name"].strip():
+        return True
+    name = obj.get("name")
+    return isinstance(name, str) and bool(name.strip()) and any(
+        k in obj for k in ("arguments", "parameters", "args"))
+
+
 def _is_action(obj: Any) -> bool:
-    return isinstance(obj, dict) and ("tool" in obj or "final" in obj or "tools" in obj)
+    return isinstance(obj, dict) and (
+        "tool" in obj or "final" in obj or "tools" in obj or _named_call(obj))
 
 
 def _first_action(text: str) -> dict[str, Any] | None:
@@ -391,6 +402,19 @@ def normalize_call(registry: Any, call: Any) -> Any:
     if not isinstance(call, dict):
         return call
     out = dict(call)
+    tool_name = out.get("tool")
+    if not isinstance(tool_name, str) or not tool_name.strip():
+        fn = out.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("name"), str) and fn["name"].strip():
+            out["tool"] = fn["name"].strip()
+            if out.get("args") is None:
+                for k in ("arguments", "parameters", "params"):
+                    if k in fn:
+                        out["args"] = fn[k]
+                        break
+        elif isinstance(out.get("name"), str) and out["name"].strip() and any(
+                k in out for k in ("arguments", "parameters", "args")):
+            out["tool"] = out["name"].strip()
     tool = out.get("tool")
     if isinstance(tool, str):
         name = tool.strip()
@@ -887,8 +911,11 @@ class TrinityCore:
                 # key) but didn't parse is a malformed action, not a final answer. Accepting it
                 # as the result silently throws the whole run away, so nudge once and retry
                 # instead (bounded, so a model that keeps failing still terminates).
-                looks_like_action = ('"tool"' in reply or '"final"' in reply
-                                     or re.search(r"```(?:json)?\s*\{", reply))
+                looks_like_action = (
+                    '"tool"' in reply or '"final"' in reply
+                    or ('"name"' in reply and '"arguments"' in reply)
+                    or "<tool_call" in reply.lower()
+                    or re.search(r"```(?:json)?\s*\{", reply))
                 if looks_like_action and nudges < 2:
                     nudges += 1
                     self.codex.emit(run_id, "action.malformed", name, step=step)

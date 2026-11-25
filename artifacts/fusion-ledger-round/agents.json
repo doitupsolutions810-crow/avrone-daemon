@@ -1,0 +1,14 @@
+{
+  "model": "qwen2.5-coder:7b",
+  "why_not_smaller": "7b loaded. RSS about 4774 MiB, load 7.64 s, a 29-token JSON tool call evaluated in 5.52 s on 4 CPUs. 3b and 1.5b were not required.",
+  "probe": "The model returned a fenced {\"tool\":\"list_files\",\"args\":{\"path\":\"tests\"}}.",
+  "lanes": {
+    "robust": ["self_scan", "think", "think", "think"],
+    "tools": ["self_scan"],
+    "deepcov": ["self_scan"],
+    "newmods": ["self_scan", "shell", "env", "env_install", "python", "research_note"]
+  },
+  "squad": ["self_scan x4"],
+  "tests_written": [],
+  "note": "Every live run called tools. None called write_file or pytest, so no agent-generated test was kept."
+}

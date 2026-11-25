@@ -509,7 +509,9 @@ def test_no_brew_needed_when_everything_installed(env):
 def test_no_brew_and_no_ollama(env, tmp_path):
     (env.bin / "brew").unlink(); (env.bin / "ollama").unlink()
     path = ":".join(p for p in os.environ["PATH"].split(":") if not (Path(p) / "ollama").exists() and not (Path(p) / "brew").exists())
-    r = env.run(PATH=f"{env.bin}:{path}")
+    # The script puts /usr/local/bin back on PATH for Homebrew. A missing
+    # prefix keeps a host-installed ollama from satisfying `command -v ollama`.
+    r = env.run(PATH=f"{env.bin}:{path}", AUTOPILOT_BREW_PREFIXES="/no/such/avrone-brew")
     assert r.returncode == 1 and "Homebrew is required" in out(r)
 
 

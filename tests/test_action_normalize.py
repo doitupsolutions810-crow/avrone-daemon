@@ -102,6 +102,9 @@ def _core(tmp_path, replies):
     '{"tool": "shell", "args": {"cmd": "echo hi-avrone"}, "final": null}',
     '{"tool": "functions.shell", "arguments": "{\\"cmd\\": \\"echo hi-avrone\\"}"}',
     '{"tool": "shell", "parameters": {"cmd": "echo hi-avrone"}}',
+    '{"name": "shell", "arguments": {"cmd": "echo hi-avrone"}}',
+    '{"function": {"name": "shell", "arguments": {"cmd": "echo hi-avrone"}}}',
+    '<tool_call>\n{"name": "shell", "arguments": {"cmd": "echo hi-avrone"}}\n</tool_call>',
 ])
 def test_loop_runs_the_tool(tmp_path, first):
     core, llm = _core(tmp_path, [first, '{"final": "ok"}'])
